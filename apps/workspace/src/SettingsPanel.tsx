@@ -12,12 +12,14 @@ export function SettingsPanel({
   state,
   onApply,
   onTouchDraws,
+  onRotateWithFingers,
   onClose,
 }: {
   settings: WorkspaceSettings;
   state: SessionState | null;
   onApply: (patch: Partial<WorkspaceSettings>) => void;
   onTouchDraws: (on: boolean) => void;
+  onRotateWithFingers: (on: boolean) => void;
   onClose: () => void;
 }) {
   const [board, setBoard] = useState(settings.board);
@@ -109,12 +111,27 @@ export function SettingsPanel({
           <small>Выключено — пальцем двигаете холст, рисуете пером или мышью.</small>
         </span>
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.rotateWithFingers}
+          onChange={(e) => onRotateWithFingers(e.target.checked)}
+        />
+        <span>
+          Поворачивать холст двумя пальцами
+          <small>
+            Начинается после заметного поворота пальцев; у прямого угла холст выравнивается сам.
+          </small>
+        </span>
+      </label>
       <hr />
       <dl className="keys">
         <dt>Сдвиг</dt>
         <dd>два пальца, колесо, пробел + мышь</dd>
         <dt>Масштаб</dt>
         <dd>щипок, Ctrl/⌘ + колесо</dd>
+        <dt>Поворот</dt>
+        <dd>холст — двумя пальцами, Shift [ и ]; элемент — круглая ручка над рамкой</dd>
         <dt>Инструменты</dt>
         <dd>V выделение · P перо · E ластик · N стикер · T текст · H рука</dd>
         <dt>Фигуры</dt>

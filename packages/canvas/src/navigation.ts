@@ -9,7 +9,7 @@
  *   Касания во время рисования пером и касания размером с ладонь игнорируются.
  */
 
-import { panBy, zoomAt, type Camera } from './camera';
+import { normalizeAngle, panBy, rotateAt, setRotationAt, zoomAt, type Camera } from './camera';
 
 export interface NavigationOptions {
   getCamera(): Camera;
@@ -33,6 +33,10 @@ const ZOOM_SPEED = 0.01;
 const TAP_MAX_MS = 350;
 /** …и ни один палец не сдвинулся дальше этого (CSS-пиксели). */
 const TAP_SLOP = 16;
+/** Поворот вида начинается, только когда пальцы повернули больше этого: щипок не крутит холст случайно. */
+const ROTATE_START = (12 * Math.PI) / 180;
+/** У прямого угла вид «прилипает» к нему, если отпустить ближе этого. */
+const ROTATE_SNAP = (6 * Math.PI) / 180;
 
 interface TouchPoint {
   x: number;
@@ -41,6 +45,7 @@ interface TouchPoint {
 
 interface WebKitGestureEvent extends UIEvent {
   scale: number;
+  rotation?: number;
   clientX: number;
   clientY: number;
 }
@@ -52,11 +57,17 @@ export class Navigation {
   handTool = false;
   /** Один палец двигает холст (иначе — рисует). */
   touchPans = true;
+  /** Поворачивать вид двумя пальцами (и жестом трекпада в Safari). */
+  rotateView = true;
+  /** Накопленный за жест поворот пальцев и идёт ли уже поворот вида. */
+  private twist = 0;
+  private rotating = false;
 
   private readonly touches = new Map<number, TouchPoint>();
-  private pinch: { cx: number; cy: number; d: number } | null = null;
+  private pinch: { cx: number; cy: number; d: number; a: number } | null = null;
   private pan: { id: number; x: number; y: number; touch: boolean } | null = null;
   private gestureScale = 1;
+  private gestureRotation = 0;
   private rect: DOMRect;
   /** Текущий жест пальцами — кандидат в тап (двумя — отмена, тремя — повтор). */
   private tap: {
@@ -79,7 +90,7 @@ export class Navigation {
     window.addEventListener('pointercancel', this.onUp, true);
     el.addEventListener('gesturestart', this.onGestureStart as EventListener);
     el.addEventListener('gesturechange', this.onGestureChange as EventListener);
-    el.addEventListener('gestureend', preventDefault);
+    el.addEventListener('gestureend', this.onGestureEnd);
   }
 
   /**
@@ -119,7 +130,7 @@ export class Navigation {
     window.removeEventListener('pointercancel', this.onUp, true);
     el.removeEventListener('gesturestart', this.onGestureStart as EventListener);
     el.removeEventListener('gesturechange', this.onGestureChange as EventListener);
-    el.removeEventListener('gestureend', preventDefault);
+    el.removeEventListener('gestureend', this.onGestureEnd);
   }
 
   private local(e: { clientX: number; clientY: number }): TouchPoint {
@@ -162,6 +173,15 @@ export class Navigation {
     e.preventDefault();
     this.rect = this.el.getBoundingClientRect();
     this.gestureScale = 1;
+    this.gestureRotation = 0;
+    this.twist = 0;
+    this.rotating = false;
+  };
+
+  private onGestureEnd = (e: Event): void => {
+    e.preventDefault();
+    const r = this.el.getBoundingClientRect();
+    this.snapRotation(r.width / 2, r.height / 2);
   };
 
   private onGestureChange = (e: WebKitGestureEvent): void => {
@@ -170,8 +190,34 @@ export class Navigation {
     const p = this.local(e);
     const factor = e.scale / this.gestureScale;
     this.gestureScale = e.scale;
-    this.opts.setCamera(zoomAt(this.opts.getCamera(), p.x, p.y, factor));
+    let cam = zoomAt(this.opts.getCamera(), p.x, p.y, factor);
+    const rot = ((e.rotation ?? 0) * Math.PI) / 180;
+    cam = this.applyTwist(cam, p.x, p.y, rot - this.gestureRotation);
+    this.gestureRotation = rot;
+    this.opts.setCamera(cam);
   };
+
+  /** Добавить поворот пальцев к виду (с порогом начала). */
+  private applyTwist(cam: Camera, cx: number, cy: number, da: number): Camera {
+    if (!this.rotateView || !Number.isFinite(da)) return cam;
+    this.twist += da;
+    if (!this.rotating && Math.abs(this.twist) < ROTATE_START) return cam;
+    this.rotating = true;
+    return rotateAt(cam, cx, cy, da);
+  }
+
+  /** Конец жеста: почти прямой угол — ровно прямой. */
+  private snapRotation(cx: number, cy: number): void {
+    if (!this.rotating) return;
+    this.rotating = false;
+    this.twist = 0;
+    const cam = this.opts.getCamera();
+    const r = cam.rotation ?? 0;
+    const right = Math.round(r / (Math.PI / 2)) * (Math.PI / 2);
+    if (Math.abs(r - right) < ROTATE_SNAP) {
+      this.opts.setCamera(setRotationAt(cam, cx, cy, normalizeAngle(right)));
+    }
+  }
 
   private onDown = (e: PointerEvent): void => {
     if (e.pointerType === 'touch') {
@@ -201,6 +247,8 @@ export class Navigation {
         const was = this.isPanning;
         this.pan = null;
         this.pinch = this.pinchState();
+        this.twist = 0;
+        this.rotating = false;
         if (!was) this.opts.onPanChange?.(true);
       } else if (claimed) {
         this.capture(e);
@@ -233,6 +281,7 @@ export class Navigation {
         let cam = panBy(this.opts.getCamera(), next.cx - this.pinch.cx, next.cy - this.pinch.cy);
         if (this.pinch.d > 0 && next.d > 0)
           cam = zoomAt(cam, next.cx, next.cy, next.d / this.pinch.d);
+        cam = this.applyTwist(cam, next.cx, next.cy, normalizeAngle(next.a - this.pinch.a));
         this.pinch = next;
         this.opts.setCamera(cam);
         return;
@@ -264,7 +313,9 @@ export class Navigation {
         if (this.touches.size >= 2) {
           this.pinch = this.pinchState();
         } else {
+          const last = this.pinch;
           this.pinch = null;
+          this.snapRotation(last.cx, last.cy);
           // Оставшийся палец продолжает сдвиг, если пальцем двигают холст.
           const [id, p] = [...this.touches.entries()][0] ?? [];
           if (id !== undefined && p && this.touchPans)
@@ -276,12 +327,17 @@ export class Navigation {
     if (this.pan && this.pan.id === e.pointerId) this.setPan(null);
   };
 
-  private pinchState(): { cx: number; cy: number; d: number } | null {
+  private pinchState(): { cx: number; cy: number; d: number; a: number } | null {
     const it = this.touches.values();
     const a = it.next().value;
     const b = it.next().value;
     if (!a || !b) return null;
-    return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(b.x - a.x, b.y - a.y) };
+    return {
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      d: Math.hypot(b.x - a.x, b.y - a.y),
+      a: Math.atan2(b.y - a.y, b.x - a.x),
+    };
   }
 
   private capture(e: PointerEvent): void {
@@ -292,5 +348,3 @@ export class Navigation {
     }
   }
 }
-
-const preventDefault = (e: Event): void => e.preventDefault();

@@ -660,3 +660,36 @@ hr {
 .board-list .create {
   color: var(--accent);
 }
+
+.zoom .compass span {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+.drop-hint {
+  position: absolute;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--gutter-b) + 64px);
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  color: var(--bad);
+  font-size: 13px;
+}

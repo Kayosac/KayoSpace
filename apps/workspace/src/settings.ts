@@ -12,6 +12,8 @@ export interface WorkspaceSettings {
   syncOn: boolean;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws: boolean;
+  /** Поворачивать холст двумя пальцами. */
+  rotateWithFingers: boolean;
   tool: Tool;
   /** null — цвет чернил темы. */
   color: string | null;
@@ -46,6 +48,7 @@ export const defaultSettings: WorkspaceSettings = {
   board: 'main',
   syncOn: false,
   touchDraws: false,
+  rotateWithFingers: true,
   tool: 'pen',
   color: null,
   size: 3,

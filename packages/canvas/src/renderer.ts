@@ -14,11 +14,10 @@ import {
   type Bounds,
   type Sample,
 } from '@kayospace/ink';
-import { STICKY_FONT_SIZE, fontSizeOf, type Transform } from '@kayospace/board';
+import { STICKY_FONT_SIZE, applyTransform, fontSizeOf, type Transform } from '@kayospace/board';
 import type { ArrowElement, CanvasElement, ShapeElement } from '@kayospace/model';
 import { DEFAULT_LINE, arrowEnds, arrowHead } from './shapes';
-import type { Camera } from './camera';
-import { transformBounds } from './selection';
+import { screenToWorld, worldToScreen, type Camera } from './camera';
 import type { Scene, SceneItem } from './scene';
 
 export interface Rect {
@@ -41,6 +40,24 @@ export interface ActiveStroke {
   tail: readonly Sample[];
   color: string | null;
 }
+
+/** Источник картинок: decoded-изображение нужного размера или null (тогда — заглушка и загрузка). */
+export interface ImageSource {
+  get(assetId: string, pixels: number): CanvasImageSource | null;
+}
+
+export interface StickyFit {
+  size: number;
+  lines: string[];
+  pad: number;
+}
+
+/** Внутренний отступ стикера: 16 при ширине 200. */
+export const stickyPad = (w: number): number => w * 0.08;
+
+const scaled = (measure: (s: string) => number, size: number) => ({
+  measureText: (str: string) => ({ width: (measure(str) * size) / 100 }),
+});
 
 export interface SelectionOverlay {
   /** Рамка выделения (мировые координаты, до преобразования жеста). */
@@ -70,6 +87,21 @@ export interface PaintOverlay {
 /** Отступ рамки выделения от элементов и размер ручек, CSS-пиксели. */
 export const SELECTION_PAD = 6;
 export const HANDLE_SIZE = 10;
+/** Насколько ручка поворота выше рамки, CSS-пиксели. */
+export const ROTATE_HANDLE_OFFSET = 26;
+
+/** Середина верхней стороны рамки выделения и ручка поворота над ней (мировые координаты). */
+export function rotateHandleWorld(
+  b: Bounds,
+  zoom: number,
+): [{ x: number; y: number }, { x: number; y: number }] {
+  const x = (b.minX + b.maxX) / 2;
+  const top = b.minY - SELECTION_PAD / zoom;
+  return [
+    { x, y: top },
+    { x, y: top - ROTATE_HANDLE_OFFSET / zoom },
+  ];
+}
 
 /** Шаг сетки в мировых единицах при зуме 1. */
 export const GRID_STEP = 24;
@@ -161,6 +193,9 @@ export class Renderer {
 
   private pending: Rect | null = null;
   private editing: string | null = null;
+  private readonly widths: Record<number, Map<string, number>> = {};
+  /** Откуда брать картинки (готовые к отрисовке); null — показываем заглушки. */
+  images: ImageSource | null = null;
   private full = true;
 
   constructor(host: HTMLElement) {
@@ -212,15 +247,61 @@ export class Renderer {
     if (r) this.pending = unionRect(this.pending, r);
   }
 
+  /** Матрица мир → пиксели устройства [a, b, c, d, e, f] (как у setTransform). */
+  worldMatrix(cam: Camera): [number, number, number, number, number, number] {
+    const k = this.dpr * cam.zoom;
+    const r = cam.rotation ?? 0;
+    const a = k * Math.cos(r);
+    const b = k * Math.sin(r);
+    return [a, b, -b, a, -(a * cam.x - b * cam.y), -(b * cam.x + a * cam.y)];
+  }
+
   /** Мировая рамка → прямоугольник в пикселях устройства с запасом на сглаживание. */
   worldRect(cam: Camera, b: Bounds | null, pad = 2): Rect | null {
     if (!b) return null;
     const k = this.dpr * cam.zoom;
+    if (!cam.rotation) {
+      return {
+        x0: Math.floor((b.minX - cam.x) * k) - pad,
+        y0: Math.floor((b.minY - cam.y) * k) - pad,
+        x1: Math.ceil((b.maxX - cam.x) * k) + pad,
+        y1: Math.ceil((b.maxY - cam.y) * k) + pad,
+      };
+    }
+    const [ma, mb, mc, md, me, mf] = this.worldMatrix(cam);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [wx, wy] of [
+      [b.minX, b.minY],
+      [b.maxX, b.minY],
+      [b.maxX, b.maxY],
+      [b.minX, b.maxY],
+    ] as const) {
+      xs.push(ma * wx + mc * wy + me);
+      ys.push(mb * wx + md * wy + mf);
+    }
     return {
-      x0: Math.floor((b.minX - cam.x) * k) - pad,
-      y0: Math.floor((b.minY - cam.y) * k) - pad,
-      x1: Math.ceil((b.maxX - cam.x) * k) + pad,
-      y1: Math.ceil((b.maxY - cam.y) * k) + pad,
+      x0: Math.floor(Math.min(...xs)) - pad,
+      y0: Math.floor(Math.min(...ys)) - pad,
+      x1: Math.ceil(Math.max(...xs)) + pad,
+      y1: Math.ceil(Math.max(...ys)) + pad,
+    };
+  }
+
+  /** Участок в пикселях устройства → рамка видимого мира. */
+  private deviceToWorldBounds(cam: Camera, x: number, y: number, w: number, h: number): Bounds {
+    const c = { ...cam, zoom: cam.zoom * this.dpr };
+    const pts = [
+      screenToWorld(c, x, y),
+      screenToWorld(c, x + w, y),
+      screenToWorld(c, x + w, y + h),
+      screenToWorld(c, x, y + h),
+    ];
+    return {
+      minX: Math.min(...pts.map((p) => p.x)),
+      minY: Math.min(...pts.map((p) => p.y)),
+      maxX: Math.max(...pts.map((p) => p.x)),
+      maxY: Math.max(...pts.map((p) => p.y)),
     };
   }
 
@@ -250,14 +331,9 @@ export class Renderer {
     this.pending = null;
     if (w <= 0 || h <= 0) return 0;
 
-    const k = this.dpr * cam.zoom;
     // Участок в мировых координатах — для выбора элементов, которые его задевают.
-    const view: Bounds = {
-      minX: x / k + cam.x,
-      minY: y / k + cam.y,
-      maxX: (x + w) / k + cam.x,
-      maxY: (y + h) / k + cam.y,
-    };
+    const view = this.deviceToWorldBounds(cam, x, y, w, h);
+    const m = this.worldMatrix(cam);
     const ctx = this.ctx;
     ctx.save();
     try {
@@ -271,7 +347,7 @@ export class Renderer {
       ctx.fillRect(x, y, w, h);
       this.drawGrid(cam, x, y, w, h);
 
-      ctx.setTransform(k, 0, 0, k, -cam.x * k, -cam.y * k);
+      ctx.setTransform(...m);
       let fill = '';
       const setFill = (color: string | null): void => {
         const c = color ?? this.colors.ink;
@@ -286,7 +362,9 @@ export class Renderer {
       if (preview) {
         // Перетаскиваемые элементы — поверх остальных, с преобразованием жеста.
         const t = preview.t;
-        ctx.transform(t.s, 0, 0, t.s, t.tx, t.ty);
+        const pc = Math.cos(t.r ?? 0) * t.s;
+        const ps = Math.sin(t.r ?? 0) * t.s;
+        ctx.transform(pc, ps, -ps, pc, t.tx, t.ty);
         for (const id of preview.ids) {
           const item = scene.items.get(id);
           if (!item) continue;
@@ -294,7 +372,7 @@ export class Renderer {
           this.drawItem(item, cam.zoom * t.s);
           if (item.element.type !== 'stroke') fill = '';
         }
-        ctx.setTransform(k, 0, 0, k, -cam.x * k, -cam.y * k);
+        ctx.setTransform(...m);
       }
       if (active) {
         setFill(active.color);
@@ -321,11 +399,13 @@ export class Renderer {
       }
       // Рамки выделения, лассо — в экранных координатах: толщина линий не зависит от зума.
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-      const toScreen = (wx: number, wy: number): [number, number] => [
-        (wx - cam.x) * cam.zoom,
-        (wy - cam.y) * cam.zoom,
-      ];
-      if (selection) this.drawSelection(selection, scene, toScreen, preview?.t ?? null);
+      const toScreen = (wx: number, wy: number): [number, number] => {
+        const p = worldToScreen(cam, wx, wy);
+        return [p.x, p.y];
+      };
+      if (selection) {
+        this.drawSelection(selection, scene, toScreen, preview?.t ?? null, cam.zoom);
+      }
       if (overlay.lasso && overlay.lasso.length > 1) {
         ctx.beginPath();
         overlay.lasso.forEach((p, i) => {
@@ -340,16 +420,28 @@ export class Renderer {
         ctx.setLineDash([]);
       }
       if (overlay.marquee) {
-        const m = overlay.marquee;
-        const [x0, y0] = toScreen(m.minX, m.minY);
-        const [x1, y1] = toScreen(m.maxX, m.maxY);
+        const mq = overlay.marquee;
+        ctx.beginPath();
+        (
+          [
+            [mq.minX, mq.minY],
+            [mq.maxX, mq.minY],
+            [mq.maxX, mq.maxY],
+            [mq.minX, mq.maxY],
+          ] as const
+        ).forEach(([wx, wy], i) => {
+          const [sx, sy] = toScreen(wx, wy);
+          if (i === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        });
+        ctx.closePath();
         ctx.globalAlpha = 0.08;
         ctx.fillStyle = this.colors.accent;
-        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.fill();
         ctx.globalAlpha = 1;
         ctx.lineWidth = 1;
         ctx.strokeStyle = this.colors.accent;
-        ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0, y1 - y0);
+        ctx.stroke();
       }
     } finally {
       ctx.restore();
@@ -360,13 +452,27 @@ export class Renderer {
   private drawItem(item: SceneItem, zoom: number): void {
     const b = item.bounds;
     const ctx = this.ctx;
-    const type = item.element.type;
-    if (type === 'sticky' || type === 'text') {
-      this.drawNote(item, zoom);
+    const el = item.element;
+    const type = el.type;
+    if (type === 'sticky' || type === 'text' || type === 'image' || type === 'shape') {
+      // Элементы-рамки: рисуем в своей системе координат, повёрнутой вокруг центра.
+      const r = el.rotation ?? 0;
+      if (r) {
+        const cx = el.x + el.w / 2;
+        const cy = el.y + el.h / 2;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(r);
+        ctx.translate(-cx, -cy);
+      }
+      if (type === 'sticky' || type === 'text') this.drawNote(item, zoom);
+      else if (type === 'image') this.drawImage(item, zoom);
+      else this.drawShape(el as ShapeElement, item.color);
+      if (r) ctx.restore();
       return;
     }
-    if (type === 'shape' || type === 'arrow') {
-      this.drawShape(item.element as ShapeElement | ArrowElement, item.color, item.ends);
+    if (type === 'arrow') {
+      this.drawShape(el as ArrowElement, item.color, item.ends);
       return;
     }
     // Совсем мелкий на экране элемент — точкой: контур из сотен кругов там всё равно не виден.
@@ -379,14 +485,47 @@ export class Renderer {
     ctx.fill(item.path, 'nonzero');
   }
 
+  private drawImage(item: SceneItem, zoom: number): void {
+    const el = item.element;
+    if (el.type !== 'image') return;
+    const ctx = this.ctx;
+    const src = this.images?.get(el.props.assetId, Math.max(el.w, el.h) * zoom * this.dpr) ?? null;
+    if (src) {
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(src, el.x, el.y, el.w, el.h);
+      return;
+    }
+    // Картинка ещё грузится (или её нет на этом устройстве) — серая заглушка.
+    ctx.fillStyle = this.colors.dot;
+    ctx.fillRect(el.x, el.y, el.w, el.h);
+  }
+
   private drawSelection(
     sel: SelectionOverlay,
     scene: Scene,
     toScreen: (x: number, y: number) => [number, number],
     t: Transform | null,
+    zoom: number,
   ): void {
     const ctx = this.ctx;
-    const map = (b: Bounds): Bounds => (t ? transformBounds(b, t) : b);
+    // Углы рамки в мире → (преобразование жеста) → экран: при повороте рамка тоже повёрнута.
+    const quad = (b: Bounds, pad: number): [number, number][] =>
+      (
+        [
+          [b.minX - pad, b.minY - pad],
+          [b.maxX + pad, b.minY - pad],
+          [b.maxX + pad, b.maxY + pad],
+          [b.minX - pad, b.maxY + pad],
+        ] as const
+      ).map(([x, y]) => {
+        const q = t ? applyTransform(t, x, y) : { x, y };
+        return toScreen(q.x, q.y);
+      });
+    const poly = (pts: [number, number][]): void => {
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+    };
     ctx.strokeStyle = this.colors.accent;
     // Рамки отдельных элементов — видно, что именно попало в выделение.
     if (sel.ids.size > 1 && sel.ids.size <= 200) {
@@ -395,34 +534,39 @@ export class Renderer {
       for (const id of sel.ids) {
         const item = scene.items.get(id);
         if (!item) continue;
-        const b = map(item.bounds);
-        const [x0, y0] = toScreen(b.minX, b.minY);
-        const [x1, y1] = toScreen(b.maxX, b.maxY);
-        ctx.strokeRect(x0 - 2.5, y0 - 2.5, x1 - x0 + 5, y1 - y0 + 5);
+        poly(quad(item.bounds, 2.5 / zoom));
+        ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
-    const b = map(sel.bounds);
-    const [x0, y0] = toScreen(b.minX, b.minY);
-    const [x1, y1] = toScreen(b.maxX, b.maxY);
-    const p = SELECTION_PAD;
+    const corners = quad(sel.bounds, SELECTION_PAD / zoom);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([5, 4]);
-    ctx.strokeRect(x0 - p, y0 - p, x1 - x0 + 2 * p, y1 - y0 + 2 * p);
+    poly(corners);
+    ctx.stroke();
     ctx.setLineDash([]);
     if (!sel.handles) return;
     const hs = HANDLE_SIZE;
-    for (const [hx, hy] of [
-      [x0 - p, y0 - p],
-      [x1 + p, y0 - p],
-      [x1 + p, y1 + p],
-      [x0 - p, y1 + p],
-    ] as const) {
+    ctx.lineWidth = 1.5;
+    for (const [hx, hy] of corners) {
       ctx.fillStyle = this.colors.paper;
       ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
-      ctx.lineWidth = 1.5;
       ctx.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
     }
+    // Ручка поворота — над серединой верхней стороны.
+    const [top, rot] = rotateHandleWorld(sel.bounds, zoom).map((p) => {
+      const q = t ? applyTransform(t, p.x, p.y) : p;
+      return toScreen(q.x, q.y);
+    }) as [[number, number], [number, number]];
+    ctx.beginPath();
+    ctx.moveTo(top[0], top[1]);
+    ctx.lineTo(rot[0], rot[1]);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(rot[0], rot[1], HANDLE_SIZE * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = this.colors.paper;
+    ctx.fill();
+    ctx.stroke();
   }
 
   /** Прямоугольник, эллипс, линия или стрелка. */
@@ -478,52 +622,140 @@ export class Renderer {
 
   /** Строки и высота текста стикера или заметки при данной ширине (для подгонки рамки). */
   measureNote(el: CanvasElement, content: string): { lines: string[]; height: number } {
-    const sticky = el.type === 'sticky';
+    if (el.type === 'sticky') {
+      const fit = this.fitSticky(content, el.w, el.h);
+      return { lines: fit.lines, height: el.h };
+    }
     const size = fontSizeOf(el);
-    const pad = sticky ? size * (16 / STICKY_FONT_SIZE) : 0;
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;
-    const lines = wrapText(ctx, content, el.w - pad * 2);
-    ctx.restore();
-    return { lines, height: lines.length * size * LINE_HEIGHT + pad * 2 };
+    const measure = this.measurer(400);
+    const lines = wrapText(scaled(measure, size), content, el.w);
+    return { lines, height: lines.length * size * LINE_HEIGHT };
+  }
+
+  /**
+   * Текст стикера — самым крупным шрифтом, при котором он целиком помещается (слова не рвутся).
+   * Если даже мелкий шрифт не помогает — мелкий шрифт с переносом внутри слов.
+   */
+  fitSticky(content: string, w: number, h: number): StickyFit {
+    const pad = stickyPad(w);
+    const iw = w - pad * 2;
+    const ih = h - pad * 2;
+    const measure = this.measurer(500);
+    const max = Math.max(1, Math.min(iw, ih) * 0.42);
+    const min = Math.max(0.5, w * 0.035);
+    const text = content.trim() ? content : '';
+    if (!text) return { size: Math.min(max, w * (STICKY_FONT_SIZE / 200)), lines: [], pad };
+    const words = text.split(/\s+/).filter(Boolean);
+    const widest = Math.max(...words.map((wd) => measure(wd)));
+    const fits = (size: number): string[] | null => {
+      if ((widest * size) / 100 > iw) return null;
+      const lines = wrapText(scaled(measure, size), text, iw);
+      return lines.length * size * LINE_HEIGHT <= ih ? lines : null;
+    };
+    let lo = min;
+    let hi = max;
+    let best = fits(lo);
+    if (!best) {
+      return { size: min, lines: wrapText(scaled(measure, min), text, iw), pad };
+    }
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2;
+      const lines = fits(mid);
+      if (lines) {
+        lo = mid;
+        best = lines;
+      } else {
+        hi = mid;
+      }
+    }
+    return { size: lo, lines: best, pad };
+  }
+
+  /** Ширина строки шрифтом 100 px (кэш): ширина при другом размере — пропорциональна. */
+  private measurer(weight: number): (s: string) => number {
+    const cache = this.widths[weight] ?? (this.widths[weight] = new Map());
+    return (str: string) => {
+      let wd = cache.get(str);
+      if (wd === undefined) {
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.font = `${weight} 100px ${NOTE_FONT}`;
+        wd = ctx.measureText(str).width;
+        ctx.restore();
+        if (cache.size > 20_000) cache.clear();
+        cache.set(str, wd);
+      }
+      return wd;
+    };
   }
 
   /** Стикер или текст. */
   private drawNote(item: SceneItem, zoom: number): void {
     const ctx = this.ctx;
-    const b = item.bounds;
-    const sticky = item.element.type === 'sticky';
-    const size = fontSizeOf(item.element);
-    const pad = sticky ? size * (16 / STICKY_FONT_SIZE) : 0;
+    const el = item.element;
+    if (el.type !== 'sticky' && el.type !== 'text') return;
+    const sticky = el.type === 'sticky';
     if (sticky) {
       ctx.fillStyle = item.color ?? STICKY_COLOR;
       ctx.beginPath();
-      ctx.roundRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY, 6);
+      ctx.roundRect(el.x, el.y, el.w, el.h, Math.min(6, el.w * 0.03));
       ctx.fill();
     }
-    if (size * zoom < 3 || item.id === this.editing) return; // текст неразличим или его правят
-    const content =
-      item.element.type === 'sticky' || item.element.type === 'text'
-        ? item.element.props.content
-        : '';
+    if (item.id === this.editing) return; // текст рисует поле ввода
+    let size: number;
+    let pad: number;
+    let lines: string[];
+    if (sticky) {
+      const key = `${el.w}|${el.h}|${el.props.content}`;
+      if (item.fit?.key !== key)
+        item.fit = { key, ...this.fitSticky(el.props.content, el.w, el.h) };
+      ({ size, pad, lines } = item.fit);
+    } else {
+      size = fontSizeOf(el);
+      pad = 0;
+      item.lines ??= wrapText(scaled(this.measurer(400), size), el.props.content, el.w);
+      lines = item.lines;
+    }
+    if (size * zoom < 3 || lines.length === 0) return; // текст неразличим — не тратим время
     ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;
     // Середина строки — как в поле ввода (CSS делит межстрочный интервал поровну сверху и снизу).
     ctx.textBaseline = 'middle';
-    item.lines ??= wrapText(ctx, content, b.maxX - b.minX - pad * 2);
     ctx.fillStyle = sticky ? STICKY_INK : (item.color ?? this.colors.ink);
     const lh = size * LINE_HEIGHT;
-    const maxLines = Math.max(1, Math.floor((b.maxY - b.minY - pad * 2) / lh));
-    const lines = sticky ? item.lines.slice(0, maxLines) : item.lines;
-    lines.forEach((line, i) => ctx.fillText(line, b.minX + pad, b.minY + pad + (i + 0.5) * lh));
+    // Стикер: блок текста — по центру по вертикали.
+    const top = sticky ? el.y + (el.h - lines.length * lh) / 2 : el.y;
+    lines.forEach((line, i) => ctx.fillText(line, el.x + pad, top + (i + 0.5) * lh));
   }
 
   /** Точки сетки в участке (x, y, w, h — пиксели устройства); квадратики по пиксельной сетке — чётче. */
   private drawGrid(cam: Camera, x: number, y: number, w: number, h: number): void {
     const step = gridStepFor(cam.zoom);
     const k = this.dpr * cam.zoom;
-    const px = step * k; // шаг в пикселях устройства
     const size = Math.max(2, Math.round(this.dpr * 1.5));
+    const ctx = this.ctx;
+    ctx.fillStyle = this.colors.dot;
+    if (cam.rotation) {
+      // Повёрнутый вид: точки — в мире, под общей матрицей (немного мягче, зато верно повёрнуты).
+      const v = this.deviceToWorldBounds(cam, x, y, w, h);
+      const i0 = Math.floor(v.minX / step - 0.5);
+      const i1 = Math.ceil(v.maxX / step - 0.5);
+      const j0 = Math.floor(v.minY / step - 0.5);
+      const j1 = Math.ceil(v.maxY / step - 0.5);
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 20_000) return;
+      const ws = size / k;
+      ctx.save();
+      ctx.setTransform(...this.worldMatrix(cam));
+      ctx.beginPath();
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          ctx.rect((i + 0.5) * step - ws / 2, (j + 0.5) * step - ws / 2, ws, ws);
+        }
+      }
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+    const px = step * k; // шаг в пикселях устройства
     const half = size / 2;
     // Мировые координаты точек: (i + 0.5) * step.
     const i0 = Math.floor((x / k + cam.x) / step - 0.5);
@@ -531,8 +763,6 @@ export class Renderer {
     const j0 = Math.floor((y / k + cam.y) / step - 0.5);
     const j1 = Math.ceil(((y + h) / k + cam.y) / step - 0.5);
     if ((i1 - i0 + 1) * (j1 - j0 + 1) > 20_000) return; // защита от вырожденных случаев
-    const ctx = this.ctx;
-    ctx.fillStyle = this.colors.dot;
     ctx.beginPath();
     for (let j = j0; j <= j1; j++) {
       const sy = Math.round((j + 0.5) * px - cam.y * k - half);

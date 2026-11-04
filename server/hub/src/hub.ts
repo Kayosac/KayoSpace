@@ -17,6 +17,8 @@ import {
 } from '@modelcontextprotocol/node';
 import { bearerToken, hostAllowed, originAllowed, requestToken, tokenMatches } from './auth';
 import { createMcp } from './mcp';
+import { join } from 'node:path';
+import { AssetStore, handleAsset } from './assets';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
@@ -44,6 +46,8 @@ export interface Hub {
 export async function startHub(opts: HubOptions): Promise<Hub> {
   const store = new BoardStore(opts.dataDir, opts.saveDelayMs);
   await store.init();
+  const assets = new AssetStore(join(opts.dataDir, 'assets'));
+  await assets.init();
 
   const mcp = createMcp(store);
   const mcpNode = toNodeHandler(mcp);
@@ -77,7 +81,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
-        'Access-Control-Allow-Methods': 'GET',
+        'Access-Control-Allow-Methods': 'GET, PUT',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
       });
       res.end();
@@ -90,6 +94,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     if (url.pathname === '/api/boards' && req.method === 'GET') {
       return json(res, 200, await store.list());
     }
+    const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
+    if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
   }
 

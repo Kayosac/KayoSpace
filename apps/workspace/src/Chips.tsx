@@ -1,6 +1,6 @@
 import type { CanvasEngine } from '@kayospace/canvas';
 import type { SessionState } from './session';
-import { FitIcon, MinusIcon, PlusIcon } from './icons';
+import { CompassIcon, FitIcon, MinusIcon, PlusIcon } from './icons';
 
 export const SYNC_TEXT: Record<string, string> = {
   off: 'Только на этом устройстве',
@@ -57,9 +57,31 @@ export function SyncChip({
   );
 }
 
-export function ZoomControls({ engine, zoom }: { engine: CanvasEngine; zoom: number }) {
+export function ZoomControls({
+  engine,
+  zoom,
+  rotation,
+}: {
+  engine: CanvasEngine;
+  zoom: number;
+  rotation: number;
+}) {
+  const deg = Math.round((rotation * 180) / Math.PI);
   return (
     <div className="chip zoom" role="group" aria-label="Масштаб">
+      {deg !== 0 && (
+        <button
+          className="compass"
+          aria-label="Вернуть поворот холста"
+          title={`Холст повёрнут на ${deg}° — нажмите, чтобы выровнять`}
+          data-testid="compass"
+          onClick={() => engine.resetRotation()}
+        >
+          <span style={{ transform: `rotate(${rotation}rad)` }}>
+            <CompassIcon />
+          </span>
+        </button>
+      )}
       <button aria-label="Отдалить" title="Отдалить (Ctrl −)" onClick={() => engine.zoomBy(0.8)}>
         <MinusIcon />
       </button>

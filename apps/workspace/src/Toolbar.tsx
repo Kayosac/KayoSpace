@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import { useRef, type ComponentType } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
 import { STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
 import {
@@ -6,6 +6,7 @@ import {
   EllipseIcon,
   EraserIcon,
   HandIcon,
+  ImageIcon,
   LineIcon,
   PasteIcon,
   PenIcon,
@@ -69,11 +70,14 @@ export function Toolbar({
   engine,
   state,
   onSettings,
+  onImages,
 }: {
   engine: CanvasEngine;
   state: EngineState;
   onSettings: () => void;
+  onImages: (files: File[]) => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
   const tool = state.tool;
   const eraser = tool === 'eraser';
   // Палитра стикеров — для инструмента «Стикер» и когда выделены только стикеры.
@@ -99,6 +103,27 @@ export function Toolbar({
             <Icon />
           </button>
         ))}
+        <button
+          className="tool"
+          aria-label="Картинка"
+          title="Картинка (или вставьте из буфера, перетащите файл)"
+          onClick={() => fileRef.current?.click()}
+        >
+          <ImageIcon />
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          hidden
+          data-testid="image-input"
+          onChange={(e) => {
+            const files = Array.from(e.currentTarget.files ?? []);
+            e.currentTarget.value = '';
+            if (files.length) onImages(files);
+          }}
+        />
       </div>
       {tool === 'shape' && (
         <>

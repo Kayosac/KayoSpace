@@ -20,7 +20,14 @@ import {
   type StrokeStyle,
 } from '@kayospace/ink';
 import { GridIndex } from './grid-index';
-import { arrowEnds, outlineDistance, shapeBounds, type ResolveBounds } from './shapes';
+import {
+  arrowEnds,
+  boxBounds,
+  insideBox,
+  outlineDistance,
+  shapeBounds,
+  type ResolveBounds,
+} from './shapes';
 
 /** Параметры линии, общие для всех устройств: штрих пересчитывается из точек одинаково везде. */
 export const STROKE_THINNING = 0.6;
@@ -38,6 +45,8 @@ export interface SceneItem {
   path?: Path2D;
   /** Стикер или текст: строки после переноса (заполняет отрисовка). */
   lines?: string[];
+  /** Стикер: подобранный шрифт и строки (заполняет отрисовка). */
+  fit?: { key: string; size: number; lines: string[]; pad: number };
   /** Стрелка: концы с учётом привязки к элементам. */
   ends?: [{ x: number; y: number }, { x: number; y: number }];
 }
@@ -58,6 +67,9 @@ export class Scene {
   readonly index = new GridIndex();
   private readonly listeners = new Set<(dirty: Bounds[]) => void>();
   private readonly stopObserving: () => void;
+  /** Рисунки на стикерах: id стикера → id штрихов, и обратно. */
+  private readonly children = new Map<string, Set<string>>();
+  private readonly parentOf = new Map<string, string>();
   /** Стрелки, привязанные к элементу: id элемента → id стрелок. */
   private readonly dependents = new Map<string, Set<string>>();
   readonly resolve: ResolveBounds = (id) => this.items.get(id)?.bounds;
@@ -128,17 +140,17 @@ export class Scene {
       const item = items[i]!;
       if (item.element.type === 'arrow') {
         const reach = r + (item.element.style.size ?? 2) / 2;
-        if (outlineDistance(item.element, x, y, this.resolve) <= reach) return item.id;
+        if (outlineDistance(item.element, x, y, this.resolve) <= reach)
+          return this.ownerOf(item.id);
         continue;
       }
       if (item.element.type !== 'stroke') {
-        const b = item.bounds;
-        if (x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY) return item.id;
+        if (insideBox(item.element, x, y)) return this.ownerOf(item.id);
         continue;
       }
       for (const s of item.samples) {
         const reach = r + s.r;
-        if ((s.x - x) ** 2 + (s.y - y) ** 2 <= reach * reach) return item.id;
+        if ((s.x - x) ** 2 + (s.y - y) ** 2 <= reach * reach) return this.ownerOf(item.id);
       }
     }
     return null;
@@ -200,8 +212,14 @@ export class Scene {
   }
 
   private upsert(el: CanvasElement): SceneItem | null {
-    if (el.type === 'sticky' || el.type === 'text') {
-      const bounds = { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h };
+    const item = this.build(el);
+    this.trackParent(el.id, item ? el.parentId : undefined);
+    return item;
+  }
+
+  private build(el: CanvasElement): SceneItem | null {
+    if (el.type === 'sticky' || el.type === 'text' || el.type === 'image') {
+      const bounds = boxBounds(el);
       const item: SceneItem = {
         id: el.id,
         z: el.z,
@@ -254,7 +272,37 @@ export class Scene {
     return item;
   }
 
+  /** Владелец элемента: рисунок поверх стикера принадлежит стикеру (parentId). */
+  ownerOf(id: string): string {
+    const parent = this.items.get(id)?.element.parentId;
+    return parent && this.items.has(parent) ? parent : id;
+  }
+
+  /** Элементы, принадлежащие элементу (рисунки на стикере). */
+  childrenOf(id: string): string[] {
+    return [...(this.children.get(id) ?? [])].filter((c) => this.items.has(c));
+  }
+
+  private trackParent(id: string, parent: string | undefined): void {
+    const prev = this.parentOf.get(id);
+    if (prev === parent) return;
+    if (prev) {
+      const set = this.children.get(prev);
+      set?.delete(id);
+      if (set?.size === 0) this.children.delete(prev);
+    }
+    if (parent) {
+      this.parentOf.set(id, parent);
+      let set = this.children.get(parent);
+      if (!set) this.children.set(parent, (set = new Set()));
+      set.add(id);
+    } else {
+      this.parentOf.delete(id);
+    }
+  }
+
   private remove(id: string): void {
+    this.trackParent(id, undefined);
     const item = this.items.get(id);
     if (item?.element.type === 'arrow') this.untrack(id);
     this.items.delete(id);

@@ -5,6 +5,7 @@ import {
   strokeBounds,
   type Actor,
   type ArrowElement,
+  type ImageElement,
   type ShapeElement,
   type StickyElement,
   type StrokeElement,
@@ -167,4 +168,25 @@ export function estimateNoteHeight(
   for (const para of text.split('\n')) lines += Math.max(1, Math.ceil(para.length / perLine));
   const h = lines * font * 1.3 + pad * 2;
   return opts.sticky ? Math.max(w, h) : h;
+}
+
+/** Картинка: рамка в мировых координатах, содержимое — по id (SHA-256 файла). */
+export function makeImage(
+  assetId: string,
+  box: { x: number; y: number; w: number; h: number },
+  opts: { naturalW: number; naturalH: number; alt?: string; actor: Actor; now?: number },
+): ImageElement {
+  const now = opts.now ?? Date.now();
+  return {
+    ...base(opts.actor, now),
+    type: 'image',
+    ...box,
+    style: {},
+    props: {
+      assetId,
+      naturalW: opts.naturalW,
+      naturalH: opts.naturalH,
+      ...(opts.alt ? { alt: opts.alt } : {}),
+    },
+  };
 }

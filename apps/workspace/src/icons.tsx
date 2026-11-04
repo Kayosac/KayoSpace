@@ -180,3 +180,19 @@ export const SearchIcon = () => (
     <path d="M16 16l4 4" />
   </Svg>
 );
+
+export const CompassIcon = () => (
+  <Svg>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 5.5l2.2 6.5h-4.4z" fill="currentColor" stroke="none" />
+    <path d="M12 18.5l-2.2-6.5h4.4z" />
+  </Svg>
+);
+
+export const ImageIcon = () => (
+  <Svg>
+    <rect x="3.5" y="5" width="17" height="14" rx="2" />
+    <circle cx="9" cy="10" r="1.6" />
+    <path d="M4 17l5-5 4 4 2.5-2.5L20 18" />
+  </Svg>
+);
