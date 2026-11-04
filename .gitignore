@@ -17,3 +17,6 @@ apps/app/src-tauri/gen/schemas/
 .gradle/
 local.properties
 apps/pen-lab/dist-single/
+
+# Данные хаба
+server/hub/data/

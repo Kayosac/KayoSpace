@@ -9,21 +9,25 @@
 - UI: Vite + чистый TS (React появится вместе с основным холстом в фазе 1).
 - Холст: **свой движок** (решение 0001). Внешние движки холста (tldraw, Excalidraw) не подключаем.
 - Штрихи: свой алгоритм в `packages/ink/src/render.ts` (решение 0002).
-- Данные: Yjs (CRDT), локально SQLite/IndexedDB, хаб на Node + Hocuspocus (фаза 2).
+- Данные: Yjs (CRDT); синхронизация — свой протокол поверх WebSocket (`packages/sync`, решение 0004).
 - Оболочка: Tauri 2 (`apps/app`).
-- Агенты: MCP TypeScript SDK, stdio + Streamable HTTP (фаза 3).
+- Агенты: MCP TypeScript SDK v2 (`@modelcontextprotocol/server`), Streamable HTTP на `/mcp` хаба.
 
 ## Структура
 
 - `packages/model` — типы элементов и форматы данных. Без зависимостей от DOM.
 - `packages/ink` — ввод пера, отрисовка штрихов, метрики. Зависит только от `model`.
-- `apps/pen-lab` — стенд замера пера.
+- `packages/board` — доска на Yjs: элементы, изменения, экспорт для агентов.
+- `packages/sync` — протокол синхронизации и клиент (браузер и Node).
+- `server/hub` — хаб: WebSocket-синк, хранение досок на диске, REST, MCP.
+- `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/pen-lab/dist` (позже — из основного приложения).
 
 ## Команды
 
 - `pnpm install`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm format`
 - `pnpm dev` — Pen Lab на http://localhost:5173
+- `pnpm hub` — хаб на http://localhost:4000 (MCP: `/mcp`, синк: `/sync/<доска>`)
 - `pnpm app:dev`, `pnpm app:android:dev` — приложение
 
 ## Соглашения

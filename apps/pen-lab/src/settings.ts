@@ -13,6 +13,11 @@ export interface Settings {
   size: number;
   thinning: number;
   streamline: number;
+  /** Адрес хаба, например 192.168.1.10:4000. */
+  hubUrl: string;
+  board: string;
+  /** Подключаться к хабу при запуске. */
+  syncOn: boolean;
 }
 
 export const defaultSettings: Settings = {
@@ -26,6 +31,9 @@ export const defaultSettings: Settings = {
   size: 4,
   thinning: 0.6,
   streamline: 0.25,
+  hubUrl: '',
+  board: 'pen-lab',
+  syncOn: false,
 };
 
 const KEY = 'kayospace.penlab.v1';

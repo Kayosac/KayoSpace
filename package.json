@@ -21,7 +21,9 @@
     "app:build": "pnpm --filter @kayospace/app tauri build",
     "app:android:init": "pnpm --filter @kayospace/app tauri android init",
     "app:android:dev": "pnpm --filter @kayospace/app tauri android dev",
-    "app:android:build": "pnpm --filter @kayospace/app tauri android build --apk"
+    "app:android:build": "pnpm --filter @kayospace/app tauri android build --apk",
+    "hub": "pnpm --filter @kayospace/hub dev",
+    "hub:start": "pnpm --filter @kayospace/hub start"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
