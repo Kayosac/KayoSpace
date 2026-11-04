@@ -73,7 +73,16 @@ jobs:
         run: shellcheck deploy/setup.sh
 
       - name: Compose-файл
-        run: HUB_DOMAIN=example.sslip.io HUB_TOKEN=x docker compose -f deploy/docker-compose.yml config -q
+        run: |
+          HUB_DOMAIN=example.sslip.io HUB_TOKEN=x docker compose -f deploy/docker-compose.yml config -q
+          HUB_DOMAIN=example.sslip.io HUB_TOKEN=x HTTPS_PORT=8443 docker compose -f deploy/docker-compose.yml config | grep -q 'published: "8443"'
+
+      - name: Caddyfile
+        run: |
+          for port in 443 8443; do
+            docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+              -e HUB_DOMAIN=example.sslip.io -e HTTPS_PORT=$port caddy:2 caddy validate --config /etc/caddy/Caddyfile
+          done
 
       - name: Сборка образа
         run: docker build -f deploy/hub.Dockerfile -t kayospace-hub .

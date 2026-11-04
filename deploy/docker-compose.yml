@@ -18,11 +18,13 @@ services:
     image: caddy:2
     restart: unless-stopped
     ports:
+      # 80 — выдача сертификата; HTTPS — 443 или другой порт, если 443 занят (HTTPS_PORT в .env)
       - '80:80'
-      - '443:443'
-      - '443:443/udp'
+      - '${HTTPS_PORT:-443}:${HTTPS_PORT:-443}'
+      - '${HTTPS_PORT:-443}:${HTTPS_PORT:-443}/udp'
     environment:
       HUB_DOMAIN: ${HUB_DOMAIN}
+      HTTPS_PORT: ${HTTPS_PORT:-443}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
