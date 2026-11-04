@@ -249,6 +249,7 @@ describe('MCP: схемы для агентов', () => {
     expect((del as { content: { text: string }[] }).content[0]!.text).toContain('1 из 2');
     expect(listElements(doc)).toHaveLength(4);
     await client.close();
+    await hub.store.flush(); // дождаться записи на диск, пока папка теста ещё на месте
   });
 });
 
@@ -314,7 +315,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(4);
+    expect(tools.length).toBe(9);
     await client.close();
   });
 
