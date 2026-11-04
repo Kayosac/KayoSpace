@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Базовые права главного окна",
+  "description": "Базовые права главного окна: события, ссылки kayospace://, секреты устройства",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:event:default", "deep-link:default", "secure-store:default"]
 }

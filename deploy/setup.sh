@@ -111,15 +111,12 @@ cat <<EOF
 Готово. Хаб работает: $HUB_URL
 
   Адрес хаба:  $HUB_ADDR
-  Токен:       $HUB_TOKEN
-
-Pen Lab / приложение → Настройки → Синхронизация:
-  Хаб:   $HUB_ADDR
-  Токен: (строка выше)
+  Ключ администратора (HUB_TOKEN): $HUB_TOKEN
+  На устройствах ключ не нужен — он для коннектора Claude, Claude Code и восстановления доступа.
 
 Коннектор в приложении Claude (claude.ai, телефон, компьютер):
   Настройки → Коннекторы → Добавить свой коннектор → URL: $HUB_URL/mcp
-  → «Подключить» → на странице хаба вставьте токен → «Разрешить»
+  → «Подключить» → на странице хаба вставьте ключ → «Разрешить»
 
 Claude Code на своём компьютере:
   claude mcp add --transport http kayospace $HUB_URL/mcp --header "Authorization: Bearer $HUB_TOKEN"
@@ -131,8 +128,15 @@ Claude Code на своём компьютере:
        CLAUDE_CODE_OAUTH_TOKEN=<токен из шага 1>
   3) cd $DIR/deploy && docker compose up -d --build
 
+Ещё устройство:    в приложении Настройки → Устройства → «+ Добавить»
+                   или здесь: cd $DIR/deploy && docker compose exec hub pnpm pair
 Обновить хаб:      повторите команду установки
 Логи:              cd $DIR/deploy && docker compose logs -f hub   (ИИ: … logs -f ai-worker)
 Резервная копия:   docker run --rm -v kayospace_hub-data:/data -v "\$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .
-Показать токен:    cat $DIR/deploy/.env
+Показать ключ:     cat $DIR/deploy/.env
 EOF
+
+say "Подключите первое устройство"
+# Код живёт 5 минут; не успели — `docker compose exec hub pnpm pair` выдаст новый.
+docker compose exec -T hub pnpm pair ||
+  echo "Не получилось выдать код. Позже: cd $DIR/deploy && docker compose exec hub pnpm pair"

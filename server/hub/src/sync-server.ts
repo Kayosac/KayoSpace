@@ -8,21 +8,27 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import type * as Y from 'yjs';
 import { handleMessage, isValidBoardId, step1Message, updateMessage } from '@kayospace/sync';
-import { CLOSE_UNAUTHORIZED, requestToken, tokenMatches } from './auth';
+import { CLOSE_UNAUTHORIZED, requestToken } from './auth';
 import type { BoardStore } from './store';
 
 export interface SyncServer {
   /** Сколько клиентов подключено к доске. */
   clients(id: string): number;
+  /** Закрыть все соединения устройства (его отключили). */
+  dropDevice(deviceId: string): void;
   close(): Promise<void>;
 }
 
 export function attachSync(
   server: Server,
   store: BoardStore,
-  opts: { token?: string } = {},
+  opts: {
+    /** Проверка токена: null — отказ, иначе — какое устройство подключилось (null — не устройство). */
+    authorize?: (token: string | undefined) => { device: string | null } | null;
+  } = {},
 ): SyncServer {
   const wss = new WebSocketServer({ noServer: true });
+  const byDevice = new Map<WebSocket, string>();
   const rooms = new Map<string, Set<WebSocket>>();
   const watched = new WeakSet<Y.Doc>();
 
@@ -37,8 +43,9 @@ export function attachSync(
     });
   };
 
-  const onConnection = (ws: WebSocket, id: string): void => {
+  const onConnection = (ws: WebSocket, id: string, device: string | null): void => {
     ws.binaryType = 'arraybuffer';
+    if (device) byDevice.set(ws, device);
     const room = rooms.get(id) ?? new Set<WebSocket>();
     rooms.set(id, room);
     room.add(ws);
@@ -60,6 +67,7 @@ export function attachSync(
       else queue.push(bytes);
     });
     ws.on('close', () => {
+      byDevice.delete(ws);
       room.delete(ws);
       if (room.size === 0) rooms.delete(id);
     });
@@ -87,18 +95,23 @@ export function attachSync(
       socket.destroy();
       return;
     }
-    const allowed = !opts.token || tokenMatches(requestToken(req, url), opts.token);
+    const allowed = opts.authorize ? opts.authorize(requestToken(req, url)) : { device: null };
     wss.handleUpgrade(req, socket, head, (ws) => {
       // Неверный токен: принимаем соединение и сразу закрываем с кодом 4401 —
       // браузер не показывает HTTP-статус отказа, а код закрытия клиент увидит.
       if (!allowed) ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
-      else onConnection(ws, id);
+      else onConnection(ws, id, allowed.device);
     });
   };
   server.on('upgrade', onUpgrade);
 
   return {
     clients: (id) => rooms.get(id)?.size ?? 0,
+    dropDevice: (deviceId) => {
+      for (const [ws, d] of byDevice) {
+        if (d === deviceId) ws.close(CLOSE_UNAUTHORIZED, 'device revoked');
+      }
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.off('upgrade', onUpgrade);

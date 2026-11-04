@@ -6,6 +6,10 @@
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { META, createBoardDoc, getBoardName, setBoardName } from '@kayospace/board';
 import { SyncClient, hubSyncUrl, type SyncError, type SyncStatus } from '@kayospace/sync';
+import { STORAGE_NS } from './config';
+
+/** Доски разработки (`pnpm dev`) хранятся отдельно от настоящих. */
+const DB_PREFIX = STORAGE_NS === 'kayospace' ? 'kayospace' : 'kayospace-dev';
 
 export type SessionSync = SyncStatus | 'off' | 'bad-address';
 
@@ -32,7 +36,7 @@ export class BoardSession {
     let sync: SessionSync = 'off';
     let persistence: IndexeddbPersistence | null = null;
     try {
-      persistence = new IndexeddbPersistence(`kayospace:${board}`, this.doc);
+      persistence = new IndexeddbPersistence(`${DB_PREFIX}:${board}`, this.doc);
     } catch (err) {
       console.warn('[kayospace] IndexedDB недоступен, доска не сохранится локально', err);
     }

@@ -9,7 +9,7 @@ export const SYNC_TEXT: Record<string, string> = {
   connected: 'Подключено',
   synced: 'Синхронизировано',
   offline: 'Нет связи с хабом',
-  unauthorized: 'Хаб не принял токен',
+  unauthorized: 'Устройство не подключено к хабу',
   stopped: 'Отключено',
 };
 
@@ -17,7 +17,7 @@ const ERROR_TEXT: Record<string, string> = {
   timeout: 'хаб не отвечает',
   closed: 'соединение закрыто',
   'invalid-url': 'адрес не подходит',
-  unauthorized: 'неверный токен',
+  unauthorized: 'устройство отключено',
 };
 
 /** Тон индикатора: ok — синхронизировано, wait — в процессе, bad — проблема, idle — без хаба. */

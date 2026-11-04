@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { hubSyncUrl, isValidBoardId } from '@kayospace/sync';
+import { isValidBoardId } from '@kayospace/sync';
+import type { ConnectionState } from './connection';
+import { DevicesSection } from './DevicesSection';
 import type { SessionState } from './session';
 import type { WorkspaceSettings } from './settings';
 import { CloseIcon } from './icons';
@@ -10,36 +12,39 @@ declare const __APP_VERSION__: string;
 export function SettingsPanel({
   settings,
   state,
+  connection,
   onApply,
+  onConnect,
+  onSelfRevoked,
   onTouchDraws,
   onRotateWithFingers,
   onClose,
 }: {
   settings: WorkspaceSettings;
   state: SessionState | null;
+  connection: ConnectionState;
   onApply: (patch: Partial<WorkspaceSettings>) => void;
+  /** Открыть экран подключения к хабу. */
+  onConnect: () => void;
+  /** Это устройство отключили из списка устройств. */
+  onSelfRevoked: () => void;
   onTouchDraws: (on: boolean) => void;
   onRotateWithFingers: (on: boolean) => void;
   onClose: () => void;
 }) {
   const [board, setBoard] = useState(settings.board);
-  const [hubUrl, setHubUrl] = useState(settings.hubUrl);
-  const [hubToken, setHubToken] = useState(settings.hubToken);
-  const [syncOn, setSyncOn] = useState(settings.syncOn);
 
   const boardOk = isValidBoardId(board.trim());
-  const urlOk = !syncOn || hubSyncUrl(hubUrl, boardOk ? board.trim() : 'x') !== null;
-  const changed =
-    board.trim() !== settings.board ||
-    hubUrl.trim() !== settings.hubUrl ||
-    hubToken.trim() !== settings.hubToken ||
-    syncOn !== settings.syncOn;
+  const changed = board.trim() !== settings.board;
 
   const submit = (e: FormEvent): void => {
     e.preventDefault();
-    if (!boardOk || !urlOk) return;
-    onApply({ board: board.trim(), hubUrl: hubUrl.trim(), hubToken: hubToken.trim(), syncOn });
+    if (!boardOk) return;
+    onApply({ board: board.trim() });
   };
+
+  const hub = connection.hub;
+  const status = state ? (SYNC_TEXT[state.sync] ?? state.sync) : '';
 
   return (
     <aside className="panel" aria-label="Настройки">
@@ -62,43 +67,41 @@ export function SettingsPanel({
           />
           {!boardOk && <small className="bad">Латиница, цифры, «-» и «_», до 64 символов.</small>}
         </label>
-        <label className="check">
-          <input type="checkbox" checked={syncOn} onChange={(e) => setSyncOn(e.target.checked)} />
-          <span>Синхронизировать через хаб</span>
-        </label>
-        <label className="field">
-          <span>Адрес хаба</span>
-          <input
-            value={hubUrl}
-            onChange={(e) => setHubUrl(e.target.value)}
-            placeholder="например, 1-2-3-4.sslip.io:8443"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            inputMode="url"
-            disabled={!syncOn}
-          />
-          {!urlOk && <small className="bad">Адрес не похож на адрес хаба.</small>}
-        </label>
-        <label className="field">
-          <span>Токен</span>
-          <input
-            type="password"
-            value={hubToken}
-            onChange={(e) => setHubToken(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            disabled={!syncOn}
-          />
-          <small>Хранится только на этом устройстве.</small>
-        </label>
-        <div className="row">
-          <button type="submit" className="primary" disabled={!changed || !boardOk || !urlOk}>
-            Применить
-          </button>
-          {state && <span className="muted">{SYNC_TEXT[state.sync] ?? state.sync}</span>}
-        </div>
+        {changed && (
+          <div className="row">
+            <button type="submit" className="primary" disabled={!boardOk}>
+              Открыть
+            </button>
+          </div>
+        )}
       </form>
+      <hr />
+      <div className="hub-info" data-testid="hub-info">
+        {connection.dev ? (
+          <>
+            <span className="muted">Локальный хаб разработки</span>
+            <b className="mono">{hub?.url}</b>
+            <span className="muted">{status}</span>
+          </>
+        ) : hub ? (
+          <>
+            <span className="muted">Хаб</span>
+            <b className="mono">{hub.url}</b>
+            <span className="muted">{status}</span>
+            <button className="link-btn" onClick={onConnect}>
+              Подключить к другому хабу
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="muted">Доски хранятся только на этом устройстве.</span>
+            <button className="primary" onClick={onConnect} data-testid="open-connect">
+              Подключить к хабу
+            </button>
+          </>
+        )}
+      </div>
+      {hub && !connection.dev && <DevicesSection hub={hub} onSelfRevoked={onSelfRevoked} />}
       <hr />
       <label className="check">
         <input

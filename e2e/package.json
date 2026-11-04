@@ -6,7 +6,8 @@
   "description": "Проверки в настоящем браузере: Pen Lab и приложение вместе с хабом",
   "scripts": {
     "e2e": "playwright test",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "e2e:dev": "playwright test -c playwright.dev.config.ts"
   },
   "devDependencies": {
     "@kayospace/hub": "workspace:*",

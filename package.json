@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @kayospace/workspace dev",
+    "dev": "node scripts/dev.mjs",
     "dev:lan": "pnpm --filter @kayospace/workspace dev --host",
     "pen-lab": "pnpm --filter @kayospace/pen-lab dev",
     "pen-lab:lan": "pnpm --filter @kayospace/pen-lab dev --host",
@@ -27,7 +27,9 @@
     "app:android:build": "pnpm --filter @kayospace/app tauri android build --apk",
     "hub": "pnpm --filter @kayospace/hub dev",
     "hub:start": "pnpm --filter @kayospace/hub start",
-    "ai-worker": "pnpm --filter @kayospace/hub ai-worker"
+    "ai-worker": "pnpm --filter @kayospace/hub ai-worker",
+    "pair": "pnpm --filter @kayospace/hub pair",
+    "e2e:dev": "pnpm --filter @kayospace/e2e e2e:dev"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",

@@ -99,6 +99,9 @@ jobs:
           SCREENSHOTS_DIR: ${{ github.workspace }}/e2e/screens
         run: pnpm --filter @kayospace/e2e e2e
 
+      - name: Режим разработки (pnpm dev с локальным хабом)
+        run: pnpm --filter @kayospace/e2e e2e:dev
+
       - name: Отчёт о проверке
         if: always()
         uses: actions/upload-artifact@v4
@@ -183,7 +186,13 @@ jobs:
           curl -fsS -H 'Host: example.sslip.io' http://127.0.0.1:4000/.well-known/oauth-protected-resource | grep -q '/mcp'
           curl -fsS -H 'Host: example.sslip.io' http://127.0.0.1:4000/.well-known/oauth-authorization-server | grep -q 'registration_endpoint'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-token' http://127.0.0.1:4000/api/ai/status)" = 200
-          echo "Образ работает, доступ по токену проверен"
+          # Первое устройство: pnpm pair внутри контейнера печатает код, хаб обменивает его на токен.
+          docker exec hub pnpm pair | tee pair.txt
+          CODE="$(grep -oE 'Код: +[0-9]{3} [0-9]{3}' pair.txt | grep -oE '[0-9]{3} [0-9]{3}' | tr -d ' ')"
+          test -n "$CODE"
+          DEVICE_TOKEN="$(curl -fsS -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\",\"name\":\"CI\"}" http://127.0.0.1:4000/api/devices/claim | grep -oE 'kd_[0-9a-f]{16}_[A-Za-z0-9_-]{43}')"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $DEVICE_TOKEN" http://127.0.0.1:4000/api/boards)" = 200
+          echo "Образ работает, доступ по токену и подключение устройства проверены"
 
       - name: Образ исполнителя ИИ
         run: |

@@ -2,7 +2,15 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { HUB_ADDRESS, HUB_TOKEN, WORKSPACE_URL, drawWave, hubElements, shot } from './env';
+import {
+  HUB_ADDRESS,
+  HUB_TOKEN,
+  WORKSPACE_URL,
+  drawWave,
+  hubElements,
+  pairCode,
+  shot,
+} from './env';
 
 const SETTINGS_KEY = 'kayospace.workspace.v1';
 
@@ -125,21 +133,25 @@ test('офлайн: доска сохраняется на устройстве 
   await expect.poll(() => elements(page)).toBe(2);
   expect(await hubElements(request, board)).toBe(0);
 
-  // Включаем синхронизацию через панель настроек (шестерёнка на панели инструментов).
+  // Подключаем устройство к хабу по коду через панель настроек (шестерёнка на панели инструментов).
   await page.getByRole('button', { name: 'Настройки' }).click();
-  await page.getByLabel('Синхронизировать через хаб').check();
-  await page.getByLabel('Адрес хаба').fill(HUB_ADDRESS);
-  await page.getByLabel('Токен').fill(HUB_TOKEN);
-  await page.getByRole('button', { name: 'Применить' }).click();
+  await page.getByTestId('open-connect').click();
+  await page.getByTestId('connect-hub').fill(HUB_ADDRESS);
+  await page.getByTestId('connect-code').fill(await pairCode(request));
+  await page.getByTestId('connect-submit').click();
+  await expect(page.getByTestId('connect-screen')).toHaveCount(0);
   await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
   await expect.poll(() => hubElements(request, board)).toBe(2);
   await page.screenshot({ path: shot('workspace-settings.png') });
 });
 
-test('неверный токен: понятное сообщение, доска продолжает работать', async ({ browser }) => {
+test('старый неверный токен: экран подключения с причиной, доска продолжает работать', async ({
+  browser,
+}) => {
   const page = await openDevice(browser, { ...synced, hubToken: 'wrong', board: 'e2e-bad-token' });
-  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'unauthorized');
-  await expect(page.getByTestId('sync')).toContainText('токен');
+  await expect(page.getByTestId('connect-screen')).toContainText('отключили');
+  await page.getByRole('button', { name: 'Пока без хаба' }).click();
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'off');
   await drawWave(page, 300, 300);
   await expect.poll(() => elements(page)).toBe(1);
 });
@@ -728,4 +740,62 @@ test.describe('ИИ в доске', () => {
     await expect(bar).toBeHidden();
     expect((await boardElements(page)).length).toBe(0);
   });
+});
+
+test('устройства: подключение по коду из «Добавить», отключение, повторный код', async ({
+  browser,
+}) => {
+  const board = 'e2e-pairing';
+  // A — уже подключённое устройство (старые настройки сами меняются на токен устройства).
+  const a = await openDevice(browser, { ...synced, board });
+  await expect(a.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await a.getByRole('button', { name: 'Настройки' }).click();
+  // Другие проверки тоже подключали устройства к этому хабу — ищем отмеченное «это устройство».
+  await expect(a.locator('[data-testid="device"][data-current]')).toContainText('это устройство');
+  await a.getByTestId('add-device').click();
+  const codeEl = a.getByTestId('pair-code');
+  await expect(codeEl).toHaveAttribute('data-code', /^\d{6}$/);
+  const code = (await codeEl.getAttribute('data-code'))!;
+  await expect(a.getByTestId('pair')).toContainText(`${HUB_ADDRESS}`);
+  await a.screenshot({ path: shot('devices-pair.png') });
+
+  // B — новое устройство: вводит адрес хаба и код, без токенов.
+  const b = await openDevice(browser, { board }, { colorScheme: 'dark' });
+  await b.getByRole('button', { name: 'Настройки' }).click();
+  await b.getByTestId('open-connect').click();
+  await b.getByTestId('connect-hub').fill(HUB_ADDRESS);
+  await b.getByTestId('connect-code').fill(code.slice(0, 3) + ' ' + code.slice(3));
+  await b.getByTestId('connect-name').fill('Планшет');
+  await b.screenshot({ path: shot('devices-connect.png') });
+  await b.getByTestId('connect-submit').click();
+  await expect(b.getByTestId('connect-screen')).toHaveCount(0);
+  await expect(b.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  // Токен не попал в настройки (localStorage) — он в хранилище секретов.
+  const stored = await b.evaluate(() => localStorage.getItem('kayospace.workspace.v1') ?? '');
+  expect(stored).not.toContain('kd_');
+
+  // A видит новое устройство сразу, в открытом окне «Добавить».
+  await expect(a.getByTestId('pair-done')).toContainText('Планшет');
+  await drawWave(b, 300, 300);
+  await expect.poll(() => elements(a)).toBe(1);
+
+  // A отключает B: у B — экран подключения с причиной, синхронизация остановлена.
+  await a.getByRole('button', { name: 'Готово' }).click();
+  const tablet = a.getByTestId('device').filter({ hasText: 'Планшет' });
+  await tablet.getByRole('button', { name: 'Отключить' }).click();
+  await tablet.getByRole('button', { name: 'Точно отключить?' }).click();
+  await expect(a.getByTestId('device').filter({ hasText: 'Планшет' })).toHaveCount(0);
+  await expect(b.getByTestId('connect-screen')).toContainText('отключили');
+  await expect(b.getByTestId('sync')).not.toHaveAttribute('data-sync', 'synced');
+
+  // Тот же код второй раз не подходит.
+  await b.getByTestId('connect-hub').fill(HUB_ADDRESS);
+  await b.getByTestId('connect-code').fill(code);
+  await b.getByTestId('connect-submit').click();
+  await expect(b.getByTestId('connect-error')).toContainText('не подошёл');
+  await b.screenshot({ path: shot('devices-revoked.png') });
+
+  // A работает дальше (рисуем правее открытой панели настроек).
+  await drawWave(a, 700, 450);
+  await expect.poll(() => elements(a)).toBe(2);
 });

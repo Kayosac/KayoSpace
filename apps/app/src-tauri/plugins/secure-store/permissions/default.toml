@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Чтение, запись и удаление секретов этого приложения в хранилище ОС."
+permissions = ["allow-get", "allow-set", "allow-remove"]

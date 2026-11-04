@@ -2,7 +2,8 @@
  * Доступ к хабу.
  *
  * Без токена хаб рассчитан на один компьютер или домашнюю сеть: MCP принимает запросы только с localhost.
- * С токеном (HUB_TOKEN) хаб можно выставлять в интернет за HTTPS:
+ * С токеном (HUB_TOKEN) хаб можно выставлять в интернет за HTTPS. Принимается HUB_TOKEN (ключ администратора)
+ * или токен подключённого устройства (devices.ts):
  *   - синхронизация: ws(s)://…/sync/<доска>?token=… (браузерный WebSocket не умеет заголовки);
  *   - REST и MCP: заголовок Authorization: Bearer <токен>;
  *   - MCP дополнительно проверяет Host и Origin (защита от DNS rebinding).
@@ -68,4 +69,21 @@ export function originAllowed(req: IncomingMessage, publicHost?: string): boolea
   } catch {
     return false;
   }
+}
+
+const PRIVATE_V4 = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+
+/**
+ * Адрес клиента для ограничения попыток. За Caddy (в docker-сети) настоящий адрес — в X-Forwarded-For:
+ * Caddy не доверяет пришедшему заголовку и дописывает адрес клиента последним, его и берём.
+ */
+export function clientIp(req: IncomingMessage): string {
+  const remote = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '');
+  const behindProxy = PRIVATE_V4.test(remote) || remote === '::1' || /^f[cd]/i.test(remote);
+  const xff = req.headers['x-forwarded-for'];
+  if (behindProxy && typeof xff === 'string' && xff.trim()) {
+    const last = xff.split(',').pop()!.trim();
+    if (last) return last;
+  }
+  return remote;
 }

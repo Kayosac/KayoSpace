@@ -18,10 +18,12 @@ apps/app/src-tauri/gen/schemas/
 local.properties
 apps/pen-lab/dist-single/
 
-# Данные хаба
+# Данные хаба (и локального хаба разработки `pnpm dev`)
 server/hub/data/
+.dev-hub/
 
 # Проверки в браузере
 e2e/report/
 e2e/test-results/
+e2e/test-results-dev/
 e2e/screens/

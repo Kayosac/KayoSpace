@@ -1,6 +1,6 @@
 [package]
 name = "kayospace"
-version = "0.2.0"
+version = "0.3.0"
 description = "Kayospace — личный воркспейс с бесконечным холстом"
 authors = ["kayos"]
 edition = "2021"
@@ -17,6 +17,18 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Ссылки kayospace://connect?hub=…&code=… (QR подключения устройства).
+tauri-plugin-deep-link = "2"
+# Токен устройства в хранилище ОС: Keychain, Credential Manager, Android Keystore.
+tauri-plugin-secure-store = { path = "plugins/secure-store" }
+
+# Второй запуск по ссылке kayospace:// передаёт её уже открытому окну, а не открывает новое.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+# Сканер QR в приложении — только на телефонах и планшетах.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
 
 [profile.release]
 codegen-units = 1

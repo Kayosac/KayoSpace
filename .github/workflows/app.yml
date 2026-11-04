@@ -22,6 +22,9 @@ concurrency:
 env:
   PLATFORMS: ${{ github.event.inputs.platforms || 'android,macos,windows' }}
   NDK_VERSION: '27.2.12479018'
+  # Адрес хаба по умолчанию на экране подключения: Settings → Secrets and variables → Actions →
+  # Variables → KAYOSPACE_DEFAULT_HUB (например, 1-2-3-4.sslip.io:8443). Не задан — поле пустое.
+  VITE_DEFAULT_HUB: ${{ vars.KAYOSPACE_DEFAULT_HUB }}
 
 jobs:
   android:
