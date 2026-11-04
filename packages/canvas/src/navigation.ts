@@ -1,0 +1,254 @@
+/**
+ * Навигация по холсту: сдвиг и масштаб.
+ *
+ * - Трекпад: два пальца — сдвиг, щипок — масштаб (в Chrome/Edge приходит как wheel с ctrlKey,
+ *   в Safari/WKWebView на macOS — как gesturestart/gesturechange).
+ * - Мышь: колесо — сдвиг (Shift — по горизонтали), Ctrl/Cmd + колесо — масштаб;
+ *   средняя кнопка, зажатый пробел или инструмент «рука» — перетаскивание.
+ * - Сенсорный экран: один палец — сдвиг (если пальцем не рисуют), два — сдвиг и масштаб.
+ *   Касания во время рисования пером и касания размером с ладонь игнорируются.
+ */
+
+import { panBy, zoomAt, type Camera } from './camera';
+
+export interface NavigationOptions {
+  getCamera(): Camera;
+  setCamera(c: Camera): void;
+  /** Тип указателя, которым сейчас рисуют ('' — не рисуют). */
+  drawingWith(): string;
+  /** Начался жест двумя пальцами: штрих пальцем нужно отменить. */
+  onMultiTouch?(): void;
+  /** Начало и конец перетаскивания — для курсора. */
+  onPanChange?(panning: boolean): void;
+}
+
+/** Касание шире этого (CSS-пиксели) — скорее ладонь, чем палец. */
+const PALM_SIZE = 30;
+/** Ограничение шага колеса при масштабе: у мыши один щелчок = 100 и больше. */
+const MAX_ZOOM_DELTA = 30;
+const ZOOM_SPEED = 0.01;
+
+interface TouchPoint {
+  x: number;
+  y: number;
+}
+
+interface WebKitGestureEvent extends UIEvent {
+  scale: number;
+  clientX: number;
+  clientY: number;
+}
+
+export class Navigation {
+  /** Зажат пробел. */
+  spaceDown = false;
+  /** Выбран инструмент «рука». */
+  handTool = false;
+  /** Один палец двигает холст (иначе — рисует). */
+  touchPans = true;
+
+  private readonly touches = new Map<number, TouchPoint>();
+  private pinch: { cx: number; cy: number; d: number } | null = null;
+  private pan: { id: number; x: number; y: number; touch: boolean } | null = null;
+  private gestureScale = 1;
+  private rect: DOMRect;
+
+  constructor(
+    private readonly el: HTMLElement,
+    private readonly opts: NavigationOptions,
+  ) {
+    this.rect = el.getBoundingClientRect();
+    el.addEventListener('wheel', this.onWheel, { passive: false });
+    el.addEventListener('pointerdown', this.onDown);
+    el.addEventListener('pointermove', this.onMove);
+    window.addEventListener('pointerup', this.onUp, true);
+    window.addEventListener('pointercancel', this.onUp, true);
+    el.addEventListener('gesturestart', this.onGestureStart as EventListener);
+    el.addEventListener('gesturechange', this.onGestureChange as EventListener);
+    el.addEventListener('gestureend', preventDefault);
+  }
+
+  /**
+   * Заберёт ли навигация это нажатие. Перо спрашивает об этом до начала штриха.
+   * Не зависит от порядка обработчиков: само касание e в учёт не идёт.
+   */
+  claims(e: PointerEvent): boolean {
+    if (e.pointerType === 'mouse' && e.button === 1) return true;
+    if (this.spaceDown || this.handTool) return true;
+    if (e.pointerType === 'touch') {
+      if (this.touchPans) return true;
+      for (const id of this.touches.keys()) if (id !== e.pointerId) return true;
+    }
+    return false;
+  }
+
+  get isPanning(): boolean {
+    return this.pan !== null || this.pinch !== null;
+  }
+
+  /** Сбросить жесты пальцами (например, коснулось перо — значит, это была ладонь). */
+  cancelTouches(): void {
+    const had = this.isPanning;
+    this.touches.clear();
+    this.pinch = null;
+    if (this.pan?.touch) this.pan = null;
+    if (had && !this.isPanning) this.opts.onPanChange?.(false);
+  }
+
+  destroy(): void {
+    const el = this.el;
+    el.removeEventListener('wheel', this.onWheel);
+    el.removeEventListener('pointerdown', this.onDown);
+    el.removeEventListener('pointermove', this.onMove);
+    window.removeEventListener('pointerup', this.onUp, true);
+    window.removeEventListener('pointercancel', this.onUp, true);
+    el.removeEventListener('gesturestart', this.onGestureStart as EventListener);
+    el.removeEventListener('gesturechange', this.onGestureChange as EventListener);
+    el.removeEventListener('gestureend', preventDefault);
+  }
+
+  private local(e: { clientX: number; clientY: number }): TouchPoint {
+    return { x: e.clientX - this.rect.left, y: e.clientY - this.rect.top };
+  }
+
+  private setPan(p: { id: number; x: number; y: number; touch: boolean } | null): void {
+    const was = this.isPanning;
+    this.pan = p;
+    if (was !== this.isPanning) this.opts.onPanChange?.(this.isPanning);
+  }
+
+  private onWheel = (e: WheelEvent): void => {
+    e.preventDefault();
+    this.rect = this.el.getBoundingClientRect();
+    let dx = e.deltaX;
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) {
+      dx *= 16;
+      dy *= 16;
+    } else if (e.deltaMode === 2) {
+      dx *= this.rect.width;
+      dy *= this.rect.height;
+    }
+    const cam = this.opts.getCamera();
+    if (e.ctrlKey || e.metaKey) {
+      const p = this.local(e);
+      const d = Math.max(-MAX_ZOOM_DELTA, Math.min(MAX_ZOOM_DELTA, dy));
+      this.opts.setCamera(zoomAt(cam, p.x, p.y, Math.exp(-d * ZOOM_SPEED)));
+      return;
+    }
+    if (e.shiftKey && dx === 0) {
+      dx = dy;
+      dy = 0;
+    }
+    this.opts.setCamera(panBy(cam, -dx, -dy));
+  };
+
+  private onGestureStart = (e: WebKitGestureEvent): void => {
+    e.preventDefault();
+    this.rect = this.el.getBoundingClientRect();
+    this.gestureScale = 1;
+  };
+
+  private onGestureChange = (e: WebKitGestureEvent): void => {
+    e.preventDefault();
+    if (!(e.scale > 0)) return;
+    const p = this.local(e);
+    const factor = e.scale / this.gestureScale;
+    this.gestureScale = e.scale;
+    this.opts.setCamera(zoomAt(this.opts.getCamera(), p.x, p.y, factor));
+  };
+
+  private onDown = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      // Пока рисуют пером, пальцы на экране — это ладонь.
+      if (this.opts.drawingWith() === 'pen') return;
+      if (e.width >= PALM_SIZE || e.height >= PALM_SIZE) return;
+      const claimed = this.claims(e);
+      this.rect = this.el.getBoundingClientRect();
+      this.touches.set(e.pointerId, this.local(e));
+      if (this.touches.size >= 2) {
+        if (this.opts.drawingWith() === 'touch') this.opts.onMultiTouch?.();
+        this.capture(e);
+        const was = this.isPanning;
+        this.pan = null;
+        this.pinch = this.pinchState();
+        if (!was) this.opts.onPanChange?.(true);
+      } else if (claimed) {
+        this.capture(e);
+        const p = this.local(e);
+        this.setPan({ id: e.pointerId, x: p.x, y: p.y, touch: true });
+      }
+      return;
+    }
+    if (!this.claims(e)) {
+      // Перо коснулось экрана — касания пальцами были ладонью.
+      if (e.pointerType === 'pen') this.cancelTouches();
+      return;
+    }
+    e.preventDefault();
+    this.rect = this.el.getBoundingClientRect();
+    this.capture(e);
+    const p = this.local(e);
+    this.setPan({ id: e.pointerId, x: p.x, y: p.y, touch: false });
+  };
+
+  private onMove = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
+      this.touches.set(e.pointerId, this.local(e));
+      if (this.pinch) {
+        const next = this.pinchState();
+        if (!next) return;
+        let cam = panBy(this.opts.getCamera(), next.cx - this.pinch.cx, next.cy - this.pinch.cy);
+        if (this.pinch.d > 0 && next.d > 0)
+          cam = zoomAt(cam, next.cx, next.cy, next.d / this.pinch.d);
+        this.pinch = next;
+        this.opts.setCamera(cam);
+        return;
+      }
+    }
+    if (this.pan && this.pan.id === e.pointerId) {
+      const p = this.local(e);
+      const dx = p.x - this.pan.x;
+      const dy = p.y - this.pan.y;
+      this.pan.x = p.x;
+      this.pan.y = p.y;
+      if (dx !== 0 || dy !== 0) this.opts.setCamera(panBy(this.opts.getCamera(), dx, dy));
+    }
+  };
+
+  private onUp = (e: PointerEvent): void => {
+    if (this.touches.delete(e.pointerId)) {
+      if (this.pinch) {
+        if (this.touches.size >= 2) {
+          this.pinch = this.pinchState();
+        } else {
+          this.pinch = null;
+          // Оставшийся палец продолжает сдвиг, если пальцем двигают холст.
+          const [id, p] = [...this.touches.entries()][0] ?? [];
+          if (id !== undefined && p && this.touchPans)
+            this.pan = { id, x: p.x, y: p.y, touch: true };
+          if (!this.isPanning) this.opts.onPanChange?.(false);
+        }
+      }
+    }
+    if (this.pan && this.pan.id === e.pointerId) this.setPan(null);
+  };
+
+  private pinchState(): { cx: number; cy: number; d: number } | null {
+    const it = this.touches.values();
+    const a = it.next().value;
+    const b = it.next().value;
+    if (!a || !b) return null;
+    return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(b.x - a.x, b.y - a.y) };
+  }
+
+  private capture(e: PointerEvent): void {
+    try {
+      this.el.setPointerCapture(e.pointerId);
+    } catch {
+      /* синтетические события */
+    }
+  }
+}
+
+const preventDefault = (e: Event): void => e.preventDefault();

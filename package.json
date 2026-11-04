@@ -9,8 +9,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @kayospace/pen-lab dev",
-    "dev:lan": "pnpm --filter @kayospace/pen-lab dev --host",
+    "dev": "pnpm --filter @kayospace/workspace dev",
+    "dev:lan": "pnpm --filter @kayospace/workspace dev --host",
+    "pen-lab": "pnpm --filter @kayospace/pen-lab dev",
+    "pen-lab:lan": "pnpm --filter @kayospace/pen-lab dev --host",
+    "e2e": "pnpm --filter @kayospace/pen-lab build && pnpm --filter @kayospace/workspace build && pnpm --filter @kayospace/e2e e2e",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",

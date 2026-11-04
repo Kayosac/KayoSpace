@@ -3,21 +3,24 @@
 Личный воркспейс: бесконечный холст, стилус, проекты и доступ для агентов (Claude Code, ChatGPT) через MCP.
 Платформы: macOS, Windows, Android.
 
-Сейчас идёт **фаза 0**: фундамент, перо, синхронизация и MCP. Полный план — [docs/PLAN.md](docs/PLAN.md).
+Сейчас идёт **фаза 1**: основной холст. Полный план — [docs/PLAN.md](docs/PLAN.md).
 
 ## Что внутри
 
 ```
 apps/
-  pen-lab/      стенд замера пера (веб, Vite) — первый спайк
-  app/          оболочка Tauri 2 для macOS, Windows, Android (пока показывает Pen Lab)
+  workspace/    основное приложение: бесконечный холст (React + свой движок)
+  pen-lab/      стенд замера пера (веб, Vite)
+  app/          оболочка Tauri 2 для macOS, Windows, Android (показывает workspace)
 packages/
   model/        типы элементов холста, бинарный формат штрихов
   ink/          ввод пера (Pointer Events), отрисовка штрихов, статистика задержки
   board/        доска на Yjs: элементы, изменения, экспорт в Markdown/JSON для агентов
   sync/         протокол синхронизации и клиент (браузер и Node)
+  canvas/       движок холста: камера, сцена, отрисовка, навигация, инструменты
 server/
   hub/          хаб: синхронизация досок, хранение на диске, MCP для агентов
+e2e/            проверки в настоящем браузере (Playwright) вместе с хабом
 docs/           план, решения (ADR), инструкции
 ```
 
@@ -34,13 +37,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # в папке проекта
 pnpm install
 pnpm test                       # тесты пакетов
-pnpm dev                        # Pen Lab в браузере: http://localhost:5173
+pnpm dev                        # приложение в браузере: http://localhost:5180
+pnpm pen-lab                    # Pen Lab: http://localhost:5173
 ```
 
 ### Pen Lab на планшете без сборки приложения
 
 ```bash
-pnpm dev:lan                    # дев-сервер доступен в локальной сети
+pnpm pen-lab:lan                # дев-сервер Pen Lab доступен в локальной сети
 ```
 
 Откройте на планшете `http://<IP-мака>:5173`. По HTTP без TLS браузер не даёт «сырые события» (pointerrawupdate) —
@@ -135,8 +139,10 @@ lock-файл — CI сам перейдёт на `--frozen-lockfile`.
 
 | Команда                                           | Что делает                                              |
 | ------------------------------------------------- | ------------------------------------------------------- |
-| `pnpm dev`                                        | Pen Lab в браузере                                      |
+| `pnpm dev`                                        | Приложение в браузере (http://localhost:5180)           |
 | `pnpm dev:lan`                                    | То же, доступно в локальной сети                        |
+| `pnpm pen-lab`                                    | Pen Lab в браузере (http://localhost:5173)              |
+| `pnpm e2e`                                        | Проверки в браузере вместе с хабом (Playwright)         |
 | `pnpm test`                                       | Тесты всех пакетов (Vitest)                             |
 | `pnpm typecheck`                                  | Проверка типов                                          |
 | `pnpm lint` / `pnpm format`                       | ESLint / Prettier                                       |

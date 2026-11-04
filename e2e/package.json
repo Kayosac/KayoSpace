@@ -1,0 +1,19 @@
+{
+  "name": "@kayospace/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Проверки в настоящем браузере: Pen Lab и приложение вместе с хабом",
+  "scripts": {
+    "e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@kayospace/hub": "workspace:*",
+    "@kayospace/pen-lab": "workspace:*",
+    "@kayospace/workspace": "workspace:*",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

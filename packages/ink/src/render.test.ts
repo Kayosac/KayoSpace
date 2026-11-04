@@ -81,6 +81,28 @@ describe('StrokeBuilder', () => {
     const first = tail[0]!;
     expect(Math.hypot(first.x - lastStable.x, first.y - lastStable.y)).toBeLessThanOrEqual(2);
   });
+
+  it('при любом зуме штрих — тот же, только в другом масштабе (unit)', () => {
+    for (const u of [0.025, 0.5, 4]) {
+      const scaled = wave.map((p) => ({ ...p, x: p.x * u, y: p.y * u }));
+      for (const simulatePressure of [false, true]) {
+        const base = strokeSamples(wave, { ...style, simulatePressure });
+        const got = strokeSamples(scaled, {
+          ...style,
+          simulatePressure,
+          size: style.size * u,
+          unit: u,
+        });
+        expect(got).toHaveLength(base.length);
+        got.forEach((s, i) => {
+          const b = base[i]!;
+          expect(s.x / u).toBeCloseTo(b.x, 6);
+          expect(s.y / u).toBeCloseTo(b.y, 6);
+          expect(s.r / u).toBeCloseTo(b.r, 6);
+        });
+      }
+    }
+  });
 });
 
 describe('samplesBounds', () => {

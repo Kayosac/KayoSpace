@@ -1,0 +1,87 @@
+/** Иконки интерфейса: простые линии 24×24, цвет — currentColor. */
+
+import type { ReactNode } from 'react';
+
+const Svg = ({ children }: { children: ReactNode }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width="20"
+    height="20"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {children}
+  </svg>
+);
+
+export const PenIcon = () => (
+  <Svg>
+    <path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8 4 20z" />
+    <path d="M13.8 6.8l3.4 3.4" />
+  </Svg>
+);
+
+export const EraserIcon = () => (
+  <Svg>
+    <path d="M8.5 19.5l-4-4a1.8 1.8 0 0 1 0-2.6l8.4-8.4a1.8 1.8 0 0 1 2.6 0l4 4a1.8 1.8 0 0 1 0 2.6l-7.4 7.4" />
+    <path d="M8.5 19.5h11M7 11l6 6" />
+  </Svg>
+);
+
+export const HandIcon = () => (
+  <Svg>
+    <path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V10" />
+    <path d="M11 9.5V4.5a1.5 1.5 0 0 1 3 0V10" />
+    <path d="M14 10V6a1.5 1.5 0 0 1 3 0v6.5" />
+    <path d="M8 11a1.5 1.5 0 0 0-3 0v2.5a7 7 0 0 0 7 7h.5a5.5 5.5 0 0 0 5.5-5.5V12a1.5 1.5 0 0 0-3 0" />
+  </Svg>
+);
+
+export const UndoIcon = () => (
+  <Svg>
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+  </Svg>
+);
+
+export const RedoIcon = () => (
+  <Svg>
+    <path d="M15 14l5-5-5-5" />
+    <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+  </Svg>
+);
+
+export const MinusIcon = () => (
+  <Svg>
+    <path d="M6 12h12" />
+  </Svg>
+);
+
+export const PlusIcon = () => (
+  <Svg>
+    <path d="M12 6v12M6 12h12" />
+  </Svg>
+);
+
+export const FitIcon = () => (
+  <Svg>
+    <path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" />
+  </Svg>
+);
+
+export const SettingsIcon = () => (
+  <Svg>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </Svg>
+);
+
+export const CloseIcon = () => (
+  <Svg>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </Svg>
+);

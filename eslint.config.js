@@ -4,7 +4,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/src-tauri/target/**', '**/src-tauri/gen/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      'e2e/report/**',
+      'e2e/test-results/**',
+      '**/src-tauri/target/**',
+      '**/src-tauri/gen/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

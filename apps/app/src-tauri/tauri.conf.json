@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kayospace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "app.kayospace.workspace",
   "build": {
-    "beforeDevCommand": "pnpm --filter @kayospace/pen-lab dev",
-    "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --filter @kayospace/pen-lab build",
-    "frontendDist": "../../pen-lab/dist"
+    "beforeDevCommand": "pnpm --filter @kayospace/workspace dev",
+    "devUrl": "http://localhost:5180",
+    "beforeBuildCommand": "pnpm --filter @kayospace/workspace build",
+    "frontendDist": "../../workspace/dist"
   },
   "app": {
     "windows": [

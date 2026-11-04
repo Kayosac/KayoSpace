@@ -30,6 +30,12 @@ export interface StrokeStyle {
   streamline: number;
   /** Имитировать давление по скорости (для мыши и пальца). */
   simulatePressure: boolean;
+  /**
+   * Сколько единиц координат приходится на один экранный пиксель в момент рисования
+   * (на холсте с зумом — 1 / zoom). Шаг сэмплов, минимальная толщина и скорость пера считаются
+   * в экранных пикселях, поэтому штрих выглядит одинаково при любом зуме. По умолчанию 1.
+   */
+  unit?: number;
 }
 
 export const defaultStrokeStyle: StrokeStyle = {
@@ -56,8 +62,13 @@ export class StrokeBuilder {
   private smoothed: Sample[] = [];
   private lastRaw: PressurePoint | null = null;
   private pressure = 0.5;
+  private readonly unit: number;
+  private readonly step: number;
 
-  constructor(private readonly style: StrokeStyle) {}
+  constructor(private readonly style: StrokeStyle) {
+    this.unit = style.unit && style.unit > 0 ? style.unit : 1;
+    this.step = SAMPLE_STEP * this.unit;
+  }
 
   get pointCount(): number {
     return this.smoothed.length;
@@ -68,7 +79,7 @@ export class StrokeBuilder {
     const k = 1 - clamp(this.style.streamline, 0, 0.95);
     const x = prev ? prev.x + (pt.x - prev.x) * k : pt.x;
     const y = prev ? prev.y + (pt.y - prev.y) * k : pt.y;
-    if (prev && Math.hypot(x - prev.x, y - prev.y) < 0.05) {
+    if (prev && Math.hypot(x - prev.x, y - prev.y) < 0.05 * this.unit) {
       this.lastRaw = pt;
       return; // точка на месте — пропускаем
     }
@@ -88,17 +99,17 @@ export class StrokeBuilder {
     const last = this.smoothed[n - 1]!;
     const start = n >= 2 ? mid(this.smoothed[n - 2]!, last) : last;
     const out: Sample[] = [];
-    pushLine(out, start, last);
+    pushLine(out, start, last, this.step);
     let anchor = last;
     // Когда штрих закончен, доводим линию до настоящего положения пера.
     if (complete && this.lastRaw) {
       const end: Sample = { x: this.lastRaw.x, y: this.lastRaw.y, r: last.r };
-      pushLine(out, anchor, end);
+      pushLine(out, anchor, end, this.step);
       anchor = end;
     }
     for (const p of predicted) {
       const s: Sample = { x: p.x, y: p.y, r: anchor.r };
-      pushLine(out, anchor, s);
+      pushLine(out, anchor, s, this.step);
       anchor = s;
     }
     return out;
@@ -118,14 +129,14 @@ export class StrokeBuilder {
     }
     if (n === 2) {
       // Первый кусок: от начала до первой середины, по прямой.
-      pushLine(this.samples, s[0]!, mid(s[0]!, s[1]!), true);
+      pushLine(this.samples, s[0]!, mid(s[0]!, s[1]!), this.step, true);
       return;
     }
     // Кусок i: от середины (i-2,i-1) до середины (i-1,i) с контрольной точкой i-1.
     const a = mid(s[n - 3]!, s[n - 2]!);
     const c = s[n - 2]!;
     const b = mid(s[n - 2]!, s[n - 1]!);
-    pushQuad(this.samples, a, c, b);
+    pushQuad(this.samples, a, c, b, this.step);
   }
 
   private radiusFor(pt: PressurePoint): number {
@@ -134,7 +145,7 @@ export class StrokeBuilder {
       const prev = this.lastRaw;
       const dt =
         prev && pt.t !== undefined && prev.t !== undefined ? Math.max(1, pt.t - prev.t) : 8;
-      const v = prev ? Math.hypot(pt.x - prev.x, pt.y - prev.y) / dt : 0; // px/мс
+      const v = prev ? Math.hypot(pt.x - prev.x, pt.y - prev.y) / dt / this.unit : 0; // экр. px/мс
       target = 0.75 - Math.min(v / 2.5, 1) * 0.5;
       this.pressure += (target - this.pressure) * 0.35;
     } else {
@@ -142,7 +153,7 @@ export class StrokeBuilder {
       this.pressure += (target - this.pressure) * 0.6;
     }
     const f = 1 + clamp(this.style.thinning, 0, 1) * (2 * this.pressure - 1);
-    return Math.max(MIN_RADIUS, (this.style.size / 2) * f);
+    return Math.max(MIN_RADIUS * this.unit, (this.style.size / 2) * f);
   }
 }
 
@@ -313,10 +324,10 @@ const mid = (a: Sample, b: Sample): Sample => ({
 });
 
 /** Отрезок a→b разбитый на сэмплы (без точки a, если includeStart = false). */
-function pushLine(out: Sample[], a: Sample, b: Sample, includeStart = false): void {
+function pushLine(out: Sample[], a: Sample, b: Sample, step: number, includeStart = false): void {
   const len = Math.hypot(b.x - a.x, b.y - a.y);
-  if (len < 1e-6 && !includeStart) return; // нулевой отрезок не добавляет сэмплов
-  const steps = Math.max(1, Math.ceil(len / SAMPLE_STEP));
+  if (len < 1e-9 && !includeStart) return; // нулевой отрезок не добавляет сэмплов
+  const steps = Math.max(1, Math.ceil(len / step));
   for (let i = includeStart ? 0 : 1; i <= steps; i++) {
     const t = i / steps;
     out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, r: a.r + (b.r - a.r) * t });
@@ -324,9 +335,9 @@ function pushLine(out: Sample[], a: Sample, b: Sample, includeStart = false): vo
 }
 
 /** Квадратичная кривая a→b с контрольной точкой c, без точки a. */
-function pushQuad(out: Sample[], a: Sample, c: Sample, b: Sample): void {
+function pushQuad(out: Sample[], a: Sample, c: Sample, b: Sample, step: number): void {
   const len = Math.hypot(c.x - a.x, c.y - a.y) + Math.hypot(b.x - c.x, b.y - c.y);
-  const steps = Math.max(1, Math.ceil(len / SAMPLE_STEP));
+  const steps = Math.max(1, Math.ceil(len / step));
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const u = 1 - t;
