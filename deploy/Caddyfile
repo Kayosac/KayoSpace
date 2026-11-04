@@ -1,5 +1,11 @@
 # Caddy сам получает и продлевает сертификат Let's Encrypt для HUB_DOMAIN.
+# Сертификат выдаётся через порт 80 (HTTP-01), поэтому HTTPS может жить на любом порту:
+# если 443 занят (например, VPN), setup.sh выбирает HTTPS_PORT=8443.
 # WebSocket (/sync/...) проксируется без дополнительных настроек.
+{
+	https_port {$HTTPS_PORT:443}
+}
+
 {$HUB_DOMAIN} {
 	encode zstd gzip
 	header -Server

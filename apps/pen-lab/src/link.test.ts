@@ -13,6 +13,11 @@ describe('адрес хаба', () => {
     expect(hubSyncUrl('https://hub.example.com', 'b')).toBe('wss://hub.example.com/sync/b');
     expect(hubSyncUrl('1-2-3-4.sslip.io', 'b')).toBe('wss://1-2-3-4.sslip.io/sync/b');
     expect(hubSyncUrl('localhost:4000', 'b')).toBe('ws://localhost:4000/sync/b');
+    expect(hubSyncUrl('1-2-3-4.sslip.io:8443', 'b')).toBe('wss://1-2-3-4.sslip.io:8443/sync/b');
+    expect(hubSyncUrl('https://1-2-3-4.sslip.io:8443', 'b')).toBe(
+      'wss://1-2-3-4.sslip.io:8443/sync/b',
+    );
+    expect(hubSyncUrl('mac.local', 'b')).toBe('ws://mac.local:4000/sync/b');
   });
 
   it('добавляет токен', () => {
