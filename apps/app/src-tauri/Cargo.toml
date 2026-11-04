@@ -1,6 +1,6 @@
 [package]
 name = "kayospace"
-version = "0.3.0"
+version = "0.10.0"
 description = "Kayospace — личный воркспейс с бесконечным холстом"
 authors = ["kayos"]
 edition = "2021"
@@ -26,10 +26,15 @@ tauri-plugin-share-target = { path = "plugins/share-target" }
 # Экспорт доски: диалог «Сохранить как» и запись выбранного файла.
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+# Открыть ссылку в браузере системы (на Android — скачать новую версию APK).
+tauri-plugin-opener = "2"
 
 # Второй запуск по ссылке kayospace:// передаёт её уже открытому окну, а не открывает новое.
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# Автообновление (решение 0011): подписанные сборки из релизов GitHub, перезапуск после установки.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Сканер QR в приложении — только на телефонах и планшетах.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]

@@ -1143,3 +1143,56 @@ test('«Поделиться» (Android): текст и картинка лож�
   await page.screenshot({ path: shot('share-inbox.png') });
   await context.close();
 });
+
+test('обновление на компьютере: «Проверить обновления» → «Установить» → перезапуск', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ board: 'e2e-update', connectSkipped: true }),
+  ] as const);
+  // Оболочка Tauri: модуль обновлений нашёл 0.99.0; записываем, какие команды пришли.
+  await context.addInitScript(() => {
+    const calls: string[] = [];
+    let cb = 0;
+    (window as unknown as Record<string, unknown>).__updateCalls = calls;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      transformCallback: () => ++cb,
+      unregisterCallback: () => {},
+      invoke: async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === 'plugin:updater|check') {
+          return {
+            rid: 1,
+            currentVersion: '0.10.0',
+            version: '0.99.0',
+            date: null,
+            body: 'Что нового',
+            rawJson: {},
+          };
+        }
+        if (cmd === 'plugin:share-target|take') return { files: [] };
+        return null;
+      },
+    };
+  });
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await page.getByRole('button', { name: 'Настройки' }).click();
+  await page.getByTestId('update-check').click();
+  await expect(page.getByTestId('update-status')).toHaveText('Доступна версия 0.99.0.');
+  const banner = page.getByTestId('update-banner');
+  await expect(banner).toContainText('Доступна версия 0.99.0');
+  await page.screenshot({ path: shot('update.png') });
+  await banner.getByTestId('update-install').click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __updateCalls: string[] }).__updateCalls),
+    )
+    .toEqual(
+      expect.arrayContaining(['plugin:updater|download_and_install', 'plugin:process|restart']),
+    );
+  await context.close();
+});

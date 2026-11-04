@@ -514,10 +514,6 @@ hr {
   margin: 0;
 }
 
-.version {
-  margin: 16px 0 0;
-}
-
 .loading {
   position: absolute;
   top: 50%;
@@ -1299,6 +1295,35 @@ p.bad {
   border-radius: 9px;
   background: var(--accent-soft);
   font-size: 13px;
+}
+
+.update-banner {
+  position: absolute;
+  top: calc(var(--gutter-t) + 48px);
+  left: 50%;
+  transform: translate(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  padding: 6px 6px 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  z-index: 6;
+}
+
+.update-banner .link-btn {
+  padding: 0 8px;
+}
+
+.version {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  margin: 16px 0 0;
 }
 
 /* Сенсорный экран: цели для пальца не меньше 40 пикселей, подсказки про клавиши не нужны. */

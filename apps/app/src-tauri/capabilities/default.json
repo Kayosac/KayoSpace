@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Базовые права главного окна: события, ссылки kayospace://, секреты устройства, сохранение экспорта",
+  "description": "Базовые права главного окна: события, ссылки kayospace://, секреты устройства, сохранение экспорта, ссылки на релизы",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,6 +10,14 @@
     "secure-store:default",
     "share-target:default",
     "dialog:allow-save",
-    "fs:allow-write-file"
+    "fs:allow-write-file",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/Kayosac/KayoSpace/*"
+        }
+      ]
+    }
   ]
 }

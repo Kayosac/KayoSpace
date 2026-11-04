@@ -28,3 +28,7 @@ e2e/test-results/
 e2e/test-results-dev/
 e2e/test-results-bench/
 e2e/screens/
+
+# Ключи подписи обновлений — никогда в репозиторий (закрытый ключ — только в секретах GitHub)
+*.key
+*.key.pub
