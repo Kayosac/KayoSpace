@@ -153,6 +153,77 @@ export function strokeSamples(points: readonly PressurePoint[], style: StrokeSty
   return b.finish();
 }
 
+/** Рамка в тех же координатах, что и сэмплы. */
+export interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Рамка сэмплов с учётом радиуса. null — если сэмплов нет. */
+export function samplesBounds(samples: readonly Sample[], from = 0): Bounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = Math.max(0, from); i < samples.length; i++) {
+    const s = samples[i]!;
+    if (s.x - s.r < minX) minX = s.x - s.r;
+    if (s.y - s.r < minY) minY = s.y - s.r;
+    if (s.x + s.r > maxX) maxX = s.x + s.r;
+    if (s.y + s.r > maxY) maxY = s.y + s.r;
+  }
+  return Number.isFinite(minX + minY + maxX + maxY) ? { minX, minY, maxX, maxY } : null;
+}
+
+export function boundsIntersect(a: Bounds, b: Bounds): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+function circleHits(s: Sample, b: Bounds): boolean {
+  return s.x + s.r >= b.minX && s.x - s.r <= b.maxX && s.y + s.r >= b.minY && s.y - s.r <= b.maxY;
+}
+
+/**
+ * Контур сэмплов (объединение капсул). Его можно закешировать: для законченного штриха он не меняется.
+ * from > 0 — продолжение: трапеция к samples[from - 1] тоже добавляется.
+ */
+export function samplesPath(samples: readonly Sample[], from = 0): Path2D {
+  const path = new Path2D();
+  const start = Math.max(0, from);
+  for (let i = start; i < samples.length; i++) {
+    const s = samples[i]!;
+    path.moveTo(s.x + s.r, s.y);
+    path.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    if (i > 0 && (i > start || from > 0)) addHull(path, samples[i - 1]!, s);
+  }
+  return path;
+}
+
+/**
+ * Контур только той части сэмплов, что задевает прямоугольник: для перерисовки небольшого
+ * участка не нужно растрировать весь штрих. null — если в прямоугольник ничего не попало.
+ */
+export function samplesPathInRect(samples: readonly Sample[], rect: Bounds): Path2D | null {
+  let path: Path2D | null = null;
+  let prevHit = false;
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i]!;
+    const hit = circleHits(s, rect);
+    if (hit || prevHit) {
+      path ??= new Path2D();
+      if (hit) {
+        path.moveTo(s.x + s.r, s.y);
+        path.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      }
+      if (i > 0) addHull(path, samples[i - 1]!, s);
+    }
+    prevHit = hit;
+  }
+  return path;
+}
+
 /** Залить последовательность сэмплов как объединение капсул. */
 export function fillSamples(
   ctx: CanvasRenderingContext2D,
@@ -162,19 +233,8 @@ export function fillSamples(
   from = 0,
 ): void {
   if (samples.length === 0 || from >= samples.length) return;
-  const path = new Path2D();
-  const start = Math.max(0, from);
-  for (let i = start; i < samples.length; i++) {
-    const s = samples[i]!;
-    path.moveTo(s.x + s.r, s.y);
-    path.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    if (i > start || (i > 0 && from > 0)) {
-      const a = samples[i - 1]!;
-      addHull(path, a, s);
-    }
-  }
   ctx.fillStyle = color;
-  ctx.fill(path, 'nonzero');
+  ctx.fill(samplesPath(samples, from), 'nonzero');
 }
 
 /** Нарисовать законченный штрих целиком. */

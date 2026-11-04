@@ -61,11 +61,14 @@ export const supportsRawUpdate = (): boolean =>
 
 /** Касание пальцем без событий дольше этого времени считаем потерянным. */
 const STALE_TOUCH_MS = 300;
+/** Сколько движений подряд без нажатия нужно, чтобы считать касание законченным. */
+const HOVER_MOVES_TO_END = 3;
 
 export class PenInput {
   private active: number | null = null;
   private activeType = '';
   private lastActivity = 0;
+  private hoverMoves = 0;
   private penSeen = false;
   private rect: DOMRect;
   private moveEvent: 'pointermove' | 'pointerrawupdate' = 'pointermove';
@@ -168,6 +171,7 @@ export class PenInput {
     this.active = e.pointerId;
     this.activeType = e.pointerType;
     this.lastActivity = e.timeStamp;
+    this.hoverMoves = 0;
     try {
       this.el.setPointerCapture(e.pointerId);
     } catch {
@@ -185,14 +189,18 @@ export class PenInput {
   private onMove = (e: PointerEvent): void => {
     if (e.pointerId !== this.active) return;
     // Перо без нажатия и без давления (наведение) или мышь без кнопок — касания уже нет.
+    // Ждём несколько таких движений подряд, чтобы одиночный сбойный сэмпл не обрывал линию.
     const released =
       e.buttons === 0 &&
       (e.pointerType === 'mouse' || (e.pointerType === 'pen' && !(e.pressure > 0)));
     if (released) {
-      this.handlers.onRecover?.('hover');
-      this.finish(e, false);
+      if (++this.hoverMoves >= HOVER_MOVES_TO_END) {
+        this.handlers.onRecover?.('hover');
+        this.finish(e, false);
+      }
       return;
     }
+    this.hoverMoves = 0;
     this.lastActivity = e.timeStamp;
     const coalesced = e.getCoalescedEvents?.() ?? [];
     const events = coalesced.length > 0 ? coalesced : [e];

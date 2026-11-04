@@ -3,11 +3,17 @@ import {
   InkStats,
   PenInput,
   RateMeter,
+  RollingSamples,
   StrokeBuilder,
+  boundsIntersect,
   drawPolyline,
-  drawStroke,
   fillSamples,
+  samplesBounds,
+  samplesPath,
+  samplesPathInRect,
+  strokeSamples,
   supportsRawUpdate,
+  type Bounds,
   type InkPoint,
   type RecoveryReason,
   type Sample,
@@ -15,12 +21,15 @@ import {
 } from '@kayospace/ink';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from './settings';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 interface Stroke {
   points: InkPoint[];
   style: StrokeStyle;
   example?: boolean;
+  /** Готовый контур (CSS-пиксели) — строится один раз, перерисовка участка просто заливает его с обрезкой. */
+  path: Path2D;
+  bounds: Bounds;
 }
 
 interface ActiveStroke {
@@ -28,8 +37,8 @@ interface ActiveStroke {
   predicted: InkPoint[];
   style: StrokeStyle;
   builder: StrokeBuilder;
-  /** Сколько стабильных сэмплов уже нарисовано на слое активного штриха. */
-  drawnUpTo: number;
+  /** Сколько стабильных сэмплов уже попало в перерисованный участок. */
+  paintedUpTo: number;
   /** Время последнего события, которое ещё не было отрисовано (для замера задержки). */
   pendingEventTime: number | null;
 }
@@ -63,6 +72,18 @@ const recoveries: Record<RecoveryReason, number> = {
   blur: 0,
 };
 const errors: string[] = [];
+/** Площадь частичной перерисовки, доля канвы. */
+const regionShare = new RollingSamples(240);
+
+// Журнал событий пера: последние события и переходы состояния — чтобы по отчёту понять, что случилось.
+const LOG_SIZE = 300;
+const eventLog: string[] = [];
+const logStart = performance.now();
+function logEvent(text: string): void {
+  eventLog.push(`${(performance.now() - logStart).toFixed(0)} ${text}`);
+  if (eventLog.length > LOG_SIZE) eventLog.shift();
+}
+let lastEventLabel = '—';
 
 const env = {
   tauri: typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window,
@@ -90,7 +111,7 @@ app.innerHTML = `
     <div class="readout"><dt>Ввод</dt><dd id="r-type">—</dd></div>
     <div class="readout"><dt>Давление</dt><dd id="r-pressure">—</dd><div class="pressure-meter"><i id="r-pressure-bar"></i></div></div>
     <div class="readout"><dt>Макс. давл.</dt><dd id="r-maxp">—</dd></div>
-    <div class="readout"><dt>Наклон X / Y</dt><dd id="r-tilt">—</dd></div>
+    <div class="readout"><dt>Состояние</dt><dd id="r-state">—</dd></div>
     <div class="readout"><dt>События пера</dt><dd id="r-hz">—</dd></div>
     <div class="readout"><dt>Склейка</dt><dd id="r-coal">—</dd></div>
     <div class="readout key"><dt>Задержка ср.</dt><dd id="r-lat">—</dd></div>
@@ -190,20 +211,18 @@ function readColors(): void {
   colors.dot = v('--dot', colors.dot);
   colors.accent = v('--accent', colors.accent);
   colors.flash = v('--flash', colors.flash);
-  gridPattern = null;
 }
 
-// ---------- Канвы ----------
+// ---------- Канва ----------
+//
+// Одна видимая канва и никаких промежуточных слоёв: копирование между канвами на Android
+// оказалось очень дорогим (низколатентная канва рисуется программно, а слои — на видеокарте).
+// Изменившийся участок перерисовывается из векторных данных: фон, точки сетки, штрихи, хвост.
 
 let canvas!: HTMLCanvasElement;
 let ctx!: CanvasRenderingContext2D;
-const committed = document.createElement('canvas');
-const cctx = committed.getContext('2d')!;
-/** Слой активного штриха: стабильная часть дорисовывается сюда по кускам. */
-const activeLayer = document.createElement('canvas');
-const actx = activeLayer.getContext('2d')!;
 let dpr = 1;
-let gridPattern: CanvasPattern | null = null;
+const GRID_STEP = 24;
 
 function createCanvas(): void {
   const c = document.createElement('canvas');
@@ -223,7 +242,6 @@ function createCanvas(): void {
       }
     ).getContextAttributes?.().desynchronized,
   );
-  gridPattern = null;
   resize();
   renderEnv();
 }
@@ -237,13 +255,6 @@ function resize(): void {
     canvas.width = w;
     canvas.height = h;
   }
-  committed.width = w;
-  committed.height = h;
-  activeLayer.width = w;
-  activeLayer.height = h;
-  if (active) active.drawnUpTo = 0; // слой очищен — дорисуем активный штрих заново
-  gridPattern = null;
-  rebuildCommitted();
   repaintAll();
 }
 
@@ -257,31 +268,15 @@ function strokeStyleFromSettings(simulatePressure: boolean): StrokeStyle {
   };
 }
 
-function rebuildCommitted(): void {
-  cctx.setTransform(1, 0, 0, 1, 0, 0);
-  cctx.clearRect(0, 0, committed.width, committed.height);
-  cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  for (const s of strokes) drawStroke(cctx, s.points, { ...s.style, color: colors.ink });
-}
-
-function clearActiveLayer(): void {
-  actx.setTransform(1, 0, 0, 1, 0, 0);
-  actx.clearRect(0, 0, activeLayer.width, activeLayer.height);
-}
-
-function getGrid(): CanvasPattern | null {
-  if (gridPattern) return gridPattern;
-  const step = Math.round(24 * dpr);
-  const tile = document.createElement('canvas');
-  tile.width = step;
-  tile.height = step;
-  const t = tile.getContext('2d')!;
-  t.fillStyle = colors.dot;
-  t.beginPath();
-  t.arc(step / 2, step / 2, Math.max(1, dpr), 0, Math.PI * 2);
-  t.fill();
-  gridPattern = ctx.createPattern(tile, 'repeat');
-  return gridPattern;
+function makeStroke(
+  points: InkPoint[],
+  style: StrokeStyle,
+  samples: Sample[] = strokeSamples(points, style),
+  example = false,
+): Stroke | null {
+  const bounds = samplesBounds(samples);
+  if (!bounds) return null;
+  return { points, style, example, path: samplesPath(samples), bounds };
 }
 
 // ---------- Области перерисовки ----------
@@ -336,32 +331,33 @@ function repaintAll(): void {
 
 function paint(): void {
   const t0 = performance.now();
+  let area = 0;
   try {
-    paintFrame();
+    area = paintFrame();
   } catch (err) {
     recordError('paint', err);
     fullRepaint = true; // следующий кадр — с чистого листа
   } finally {
     dirty = false;
-    stats.paintTook(performance.now() - t0);
+    const took = performance.now() - t0;
+    stats.paintTook(took);
+    if (took > 16)
+      logEvent(`медленный кадр ${took.toFixed(1)} мс, площадь ${(area * 100).toFixed(1)}%`);
   }
 }
 
-function paintFrame(): void {
+/** Рисует кадр, возвращает долю перерисованной площади. */
+function paintFrame(): number {
   let tail: Sample[] = [];
   let highlight: InkPoint[] = [];
   if (active) {
     const b = active.builder;
-    // 1. Новые стабильные сэмплы — на слой активного штриха (рисуются один раз).
-    if (b.samples.length > active.drawnUpTo) {
-      const from = active.drawnUpTo;
-      if (from === 0) clearActiveLayer();
-      actx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      fillSamples(actx, b.samples, colors.ink, from);
-      invalidate(samplesRect(b.samples, Math.max(0, from - 1)));
-      active.drawnUpTo = b.samples.length;
+    // Новые стабильные сэмплы: между кадрами их может прийти много (склеенные события),
+    // и они не обязаны попадать в прошлый хвост — добавляем их участок явно.
+    if (b.samples.length > active.paintedUpTo) {
+      invalidate(samplesRect(b.samples, Math.max(0, active.paintedUpTo - 1)));
+      active.paintedUpTo = b.samples.length;
     }
-    // 2. Хвост (последний кусок + предсказание) рисуется заново каждый кадр.
     const lastStable = b.samples[b.samples.length - 1];
     const fresh = b.tail(active.predicted);
     tail = lastStable ? [lastStable, ...fresh] : fresh;
@@ -385,9 +381,8 @@ function paintFrame(): void {
   }
 
   const region = fullRepaint ? null : pendingRegion;
-  if (!fullRepaint && !region) return;
+  if (!fullRepaint && !region) return 0;
 
-  // Обрезаем область по канве.
   let x = 0;
   let y = 0;
   let w = canvas.width;
@@ -400,7 +395,12 @@ function paintFrame(): void {
   }
   fullRepaint = false;
   pendingRegion = null;
-  if (w <= 0 || h <= 0) return;
+  if (w <= 0 || h <= 0) return 0;
+  const share = (w * h) / (canvas.width * canvas.height);
+  if (region) regionShare.push(share);
+
+  // Участок в CSS-пикселях — для выбора штрихов, которые его задевают.
+  const view: Bounds = { minX: x / dpr, minY: y / dpr, maxX: (x + w) / dpr, maxY: (y + h) / dpr };
 
   ctx.save();
   try {
@@ -413,17 +413,19 @@ function paintFrame(): void {
     const flashing = settings.flash && pressing;
     ctx.fillStyle = flashing ? colors.flash : colors.paper;
     ctx.fillRect(x, y, w, h);
-    if (!flashing) {
-      const grid = getGrid();
-      if (grid) {
-        ctx.fillStyle = grid;
-        ctx.fillRect(x, y, w, h);
-      }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!flashing) drawGrid(view);
+
+    ctx.fillStyle = colors.ink;
+    for (const s of strokes) {
+      if (boundsIntersect(s.bounds, view)) ctx.fill(s.path, 'nonzero');
     }
-    ctx.drawImage(committed, x, y, w, h, x, y, w, h);
     if (active) {
-      ctx.drawImage(activeLayer, x, y, w, h, x, y, w, h);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const stable = region
+        ? samplesPathInRect(active.builder.samples, view)
+        : samplesPath(active.builder.samples);
+      if (stable) ctx.fill(stable, 'nonzero');
       fillSamples(ctx, tail, colors.ink);
       if (highlight.length > 1) drawPolyline(ctx, highlight, colors.accent, 2);
       if (active.pendingEventTime !== null) {
@@ -434,6 +436,28 @@ function paintFrame(): void {
   } finally {
     ctx.restore();
   }
+  return share;
+}
+
+/** Точки сетки в видимом участке (CSS-пиксели). */
+function drawGrid(view: Bounds): void {
+  const half = GRID_STEP / 2;
+  const r = Math.max(1, dpr) / dpr;
+  const ix0 = Math.floor((view.minX - half) / GRID_STEP);
+  const ix1 = Math.ceil((view.maxX - half) / GRID_STEP);
+  const iy0 = Math.floor((view.minY - half) / GRID_STEP);
+  const iy1 = Math.ceil((view.maxY - half) / GRID_STEP);
+  const dots = new Path2D();
+  for (let iy = iy0; iy <= iy1; iy++) {
+    for (let ix = ix0; ix <= ix1; ix++) {
+      const cx = ix * GRID_STEP + half;
+      const cy = iy * GRID_STEP + half;
+      dots.moveTo(cx + r, cy);
+      dots.arc(cx, cy, r, 0, Math.PI * 2);
+    }
+  }
+  ctx.fillStyle = colors.dot;
+  ctx.fill(dots);
 }
 
 function schedule(): void {
@@ -460,11 +484,9 @@ function addExampleStroke(): void {
       t: i * 4,
     });
   }
-  strokes.push({
-    points: pts,
-    style: { ...strokeStyleFromSettings(false), size: 6 },
-    example: true,
-  });
+  const style = { ...strokeStyleFromSettings(false), size: 6 };
+  const stroke = makeStroke(pts, style, undefined, true);
+  if (stroke) strokes.push(stroke);
 }
 
 function updateHint(): void {
@@ -475,7 +497,6 @@ function removeExample(): void {
   const before = strokes.length;
   for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i]!.example) strokes.splice(i, 1);
   if (strokes.length !== before) {
-    rebuildCommitted();
     updateHint();
     fullRepaint = true;
   }
@@ -486,13 +507,13 @@ function removeExample(): void {
 function endStroke(): void {
   if (active) {
     const finished = active.builder.finish();
-    strokes.push({ points: active.points, style: active.style });
-    cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    fillSamples(cctx, finished, colors.ink);
-    invalidate(samplesRect(finished, Math.max(0, active.drawnUpTo - 1)));
+    const stroke = makeStroke(active.points, active.style, finished);
+    if (stroke) strokes.push(stroke);
+    // Хвост законченного штриха доходит до настоящей точки пера — перерисуем этот участок.
+    invalidate(samplesRect(finished, Math.max(0, active.builder.samples.length - 1)));
+    logEvent(`штрих закончен: ${active.points.length} точек`);
   }
   active = null;
-  clearActiveLayer();
   if (pressing && settings.flash) fullRepaint = true;
   pressing = false;
   schedule();
@@ -510,15 +531,15 @@ const input = new PenInput(
       const style = strokeStyleFromSettings(!info.hasPressure);
       const builder = new StrokeBuilder(style);
       builder.add(info.point);
-      clearActiveLayer();
       active = {
         points: [info.point],
         predicted: [],
         style,
         builder,
-        drawnUpTo: 0,
+        paintedUpTo: 0,
         pendingEventTime: info.event.timeStamp,
       };
+      logEvent(`штрих начат: #${info.event.pointerId} ${info.pointerType}`);
       schedule();
     },
     onMove(points, predicted, event) {
@@ -536,11 +557,13 @@ const input = new PenInput(
     onSample(event, coalesced) {
       stats.sample(event, coalesced);
     },
-    onRejected() {
+    onRejected(e) {
       stats.rejected++;
+      logEvent(`касание отброшено: #${e.pointerId} ${e.pointerType}`);
     },
     onRecover(reason) {
       recoveries[reason]++;
+      logEvent(`восстановление: ${reason}`);
     },
   },
 );
@@ -569,6 +592,43 @@ if (env.rawUpdate) {
     diagListener(diag.raw, diag.rawSamples),
   );
 }
+// Журнал: down/up/cancel/захват — всегда; движения — только при смене «касание ↔ наведение».
+const shortType: Record<string, string> = {
+  pointerdown: 'down',
+  pointerup: 'up',
+  pointercancel: 'cancel',
+  gotpointercapture: 'got-capture',
+  lostpointercapture: 'lost-capture',
+  pointermove: 'move',
+};
+const moveKind = new Map<number, { kind: string; count: number }>();
+function logPointer(e: PointerEvent): void {
+  const who = `#${e.pointerId}${e.pointerType === 'pen' ? 'P' : e.pointerType === 'touch' ? 'T' : 'M'}`;
+  const state = `b${e.buttons} p${e.pressure.toFixed(2)}`;
+  if (e.type === 'pointermove') {
+    const kind = e.buttons !== 0 || e.pressure > 0 ? 'касание' : 'наведение';
+    const prev = moveKind.get(e.pointerId);
+    if (prev && prev.kind === kind) {
+      prev.count++;
+      return;
+    }
+    if (prev) logEvent(`  …${prev.count} move (${prev.kind})`);
+    moveKind.set(e.pointerId, { kind, count: 1 });
+    logEvent(`move ${who} ${state} → ${kind}`);
+    return;
+  }
+  const prev = moveKind.get(e.pointerId);
+  if (prev) {
+    logEvent(`  …${prev.count} move (${prev.kind})`);
+    moveKind.delete(e.pointerId);
+  }
+  lastEventLabel = shortType[e.type] ?? e.type;
+  logEvent(`${lastEventLabel} ${who} ${state}${e.target === stage ? '' : ' (вне холста)'}`);
+}
+for (const type of Object.keys(shortType)) {
+  window.addEventListener(type, logPointer as EventListener, true);
+}
+
 function updateDiagPeaks(now: number): void {
   diag.peak.move = Math.max(diag.peak.move, diag.move.rate(now));
   diag.peak.moveSamples = Math.max(diag.peak.moveSamples, diag.moveSamples.rate(now));
@@ -583,7 +643,7 @@ const r = {
   pressure: $('r-pressure'),
   pressureBar: $('r-pressure-bar'),
   maxp: $('r-maxp'),
-  tilt: $('r-tilt'),
+  state: $('r-state'),
   hz: $('r-hz'),
   coal: $('r-coal'),
   lat: $('r-lat'),
@@ -606,7 +666,7 @@ function updateHud(): void {
   r.pressure.textContent = showP ? fmt(s.pressure, 2) : '—';
   r.pressureBar.style.width = showP ? `${Math.round(s.pressure * 100)}%` : '0';
   r.maxp.textContent = s.maxPressure > 0 ? fmt(s.maxPressure, 2) : '—';
-  r.tilt.textContent = showP ? `${fmt(s.tiltX)}° / ${fmt(s.tiltY)}°` : '—';
+  r.state.innerHTML = `${active ? 'рисует' : 'ждёт'}<small>${lastEventLabel}</small>`;
   r.hz.innerHTML = s.peakEventHz > 0 ? withUnit(s.peakEventHz, 0, 'Гц пик') : '—';
   r.coal.textContent = fmt(s.coalescedPerEvent, 1);
   r.lat.innerHTML = withUnit(s.latencyMean, 1, 'мс');
@@ -736,7 +796,6 @@ $('btn-defaults').addEventListener('click', () => update({ ...defaultSettings })
 function undo(): void {
   if (strokes.length === 0) return;
   strokes.pop();
-  rebuildCommitted();
   updateHint();
   repaintAll();
 }
@@ -744,7 +803,6 @@ function undo(): void {
 $('btn-undo').addEventListener('click', undo);
 $('btn-clear').addEventListener('click', () => {
   strokes.length = 0;
-  rebuildCommitted();
   updateHint();
   repaintAll();
 });
@@ -752,6 +810,8 @@ $('btn-reset').addEventListener('click', () => {
   stats.reset();
   diag.peak = { move: 0, moveSamples: 0, raw: 0, rawSamples: 0 };
   for (const k of Object.keys(recoveries) as RecoveryReason[]) recoveries[k] = 0;
+  regionShare.clear();
+  eventLog.length = 0;
 });
 $('btn-settings').addEventListener('click', () => {
   panel.hidden = !panel.hidden;
@@ -801,6 +861,7 @@ function buildReport(): string {
         inputToPaintP95Ms: round(s.latencyP95),
         paintMeanMs: round(s.paintMean, 2),
         paintP95Ms: round(s.paintP95, 2),
+        repaintAreaMeanPct: round(regionShare.mean() * 100, 2),
         fps: round(s.fps, 0),
         longFrames: s.longFrames,
         rejectedTouches: s.rejected,
@@ -815,6 +876,7 @@ function buildReport(): string {
       },
       recoveries,
       errors,
+      eventLog: eventLog.slice(-150),
     },
     null,
     2,
@@ -852,7 +914,6 @@ $('btn-copy').addEventListener('click', () => {
 readColors();
 createCanvas();
 addExampleStroke();
-rebuildCommitted();
 updateHint();
 syncControls();
 repaintAll();
@@ -860,7 +921,6 @@ repaintAll();
 new ResizeObserver(() => resize()).observe(stage);
 const onTheme = (): void => {
   readColors();
-  rebuildCommitted();
   repaintAll();
 };
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { StrokeBuilder, defaultStrokeStyle, hullQuad, signedArea, strokeSamples } from './render';
+import {
+  StrokeBuilder,
+  boundsIntersect,
+  defaultStrokeStyle,
+  hullQuad,
+  samplesBounds,
+  signedArea,
+  strokeSamples,
+} from './render';
 
 const style = { ...defaultStrokeStyle, size: 8, thinning: 0.5, streamline: 0.3 };
 
@@ -72,5 +80,26 @@ describe('StrokeBuilder', () => {
     expect(tail.length).toBeGreaterThan(0);
     const first = tail[0]!;
     expect(Math.hypot(first.x - lastStable.x, first.y - lastStable.y)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('samplesBounds', () => {
+  it('учитывает радиус', () => {
+    expect(
+      samplesBounds([
+        { x: 0, y: 0, r: 2 },
+        { x: 10, y: 5, r: 1 },
+      ]),
+    ).toEqual({ minX: -2, minY: -2, maxX: 11, maxY: 6 });
+  });
+
+  it('пустой набор даёт null', () => {
+    expect(samplesBounds([])).toBeNull();
+  });
+
+  it('пересечение рамок', () => {
+    const a = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+    expect(boundsIntersect(a, { minX: 5, minY: 5, maxX: 20, maxY: 20 })).toBe(true);
+    expect(boundsIntersect(a, { minX: 11, minY: 0, maxX: 20, maxY: 10 })).toBe(false);
   });
 });
