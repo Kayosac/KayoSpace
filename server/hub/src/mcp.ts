@@ -89,8 +89,8 @@ export function createMcp(store: BoardStore) {
         const doc = await store.get(board);
         if (boardName && !getBoardName(doc)) setBoardName(doc, boardName, MCP_ORIGIN);
         const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(doc);
-        const base = makeSticky(content, { ...spot, color, actor: agent });
-        const sticky = { ...base, h: estimateNoteHeight(content, base.w, { sticky: true }) };
+        // Шрифт стикера подбирается под его размер сам — стикер остаётся квадратным.
+        const sticky = makeSticky(content, { ...spot, color, actor: agent });
         addElement(doc, sticky, MCP_ORIGIN);
         return text(`Стикер добавлен: ${sticky.id} в (${spot.x}, ${spot.y}).`);
       },
@@ -226,10 +226,14 @@ export function createMcp(store: BoardStore) {
           if (next.type !== 'sticky' && next.type !== 'text') {
             return fail('Текст есть только у стикеров и надписей.');
           }
-          const h = estimateNoteHeight(content, next.w, {
-            sticky: next.type === 'sticky',
-            ...(next.style.size ? { fontSize: next.style.size } : {}),
-          });
+          // Стикер не растёт (шрифт подбирается сам), надпись — по объёму текста.
+          const h =
+            next.type === 'sticky'
+              ? next.h
+              : estimateNoteHeight(content, next.w, {
+                  sticky: false,
+                  ...(next.style.size ? { fontSize: next.style.size } : {}),
+                });
           next =
             next.type === 'sticky'
               ? { ...next, h, props: { ...next.props, content } }

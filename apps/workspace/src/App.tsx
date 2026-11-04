@@ -11,6 +11,7 @@ import {
   type WorkspaceSettings,
 } from './settings';
 import { BoardsPanel } from './BoardsPanel';
+import { AssetStore, imageFiles } from './assets';
 import { NoteEditor } from './NoteEditor';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
@@ -24,6 +25,9 @@ declare global {
     __TAURI_INTERNALS__?: unknown;
   }
 }
+
+/** Картинки — одно хранилище на всё приложение (общее для досок). */
+const assets = new AssetStore();
 
 const actor: Actor = {
   kind: 'human',
@@ -47,6 +51,8 @@ export function App() {
   const [session, setSession] = useState<BoardSession | null>(null);
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
   const [panel, setPanel] = useState<'settings' | 'boards' | null>(null);
+  const [dropping, setDropping] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   /** Название новой доски — запишем в неё, когда она откроется. */
   const pendingName = useRef<{ id: string; name: string } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -101,6 +107,8 @@ export function App() {
       shapeKind: s.shapeKind,
       stickyColor: s.stickyColor,
       touchDraws: s.touchDraws,
+      rotateWithFingers: s.rotateWithFingers,
+      assets,
     });
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const stopCamera = e.onCamera((c) => {
@@ -194,6 +202,55 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Картинки ходят на тот же хаб, что и доска; при «синхронизировано» — догрузить очередь.
+  useEffect(() => {
+    assets.setHub(syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null);
+  }, [syncOn, hubUrl, hubToken]);
+  const syncState = sessionState?.sync;
+  useEffect(() => {
+    if (syncState === 'synced') void assets.uploadPending();
+  }, [syncState]);
+
+  const insertImages = useCallback(
+    async (files: File[], at?: { x: number; y: number }) => {
+      if (!engine) return;
+      let offset = 0;
+      for (const file of files) {
+        try {
+          const img = await assets.add(file);
+          engine.insertImage(
+            img.assetId,
+            { w: img.width, h: img.height },
+            {
+              blob: img.blob,
+              ...(at ? { at: { x: at.x + offset, y: at.y + offset } } : {}),
+              alt: file.name,
+            },
+          );
+          offset += 24;
+        } catch (e) {
+          setToast(e instanceof Error ? e.message : 'Картинку не удалось вставить');
+          setTimeout(() => setToast(null), 4000);
+        }
+      }
+    },
+    [engine],
+  );
+
+  // Вставка из буфера обмена (Ctrl/⌘ V) и перетаскивание файлов на холст.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent): void => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      const files = imageFiles(e.clipboardData?.files);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void insertImages(files);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [insertImages]);
+
   // Вернулись в приложение (после сна, из фона) — переподключиться сразу, не дожидаясь паузы.
   useEffect(() => {
     const onVisible = (): void => {
@@ -209,7 +266,27 @@ export function App() {
 
   return (
     <div className="app">
-      <div className="stage" ref={stageRef} data-testid="stage" />
+      <div
+        className="stage"
+        ref={stageRef}
+        data-testid="stage"
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          setDropping(true);
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDropping(false);
+          const files = imageFiles(e.dataTransfer.files);
+          const r = e.currentTarget.getBoundingClientRect();
+          if (files.length)
+            void insertImages(files, { x: e.clientX - r.left, y: e.clientY - r.top });
+        }}
+      />
+      {dropping && <div className="drop-hint">Отпустите — картинка встанет сюда</div>}
+      {toast && <div className="toast">{toast}</div>}
       <header className="top top-left">
         <SyncChip
           board={board}
@@ -219,7 +296,9 @@ export function App() {
         />
       </header>
       <div className="top top-right">
-        {engine && engineState && <ZoomControls engine={engine} zoom={engineState.zoom} />}
+        {engine && engineState && (
+          <ZoomControls engine={engine} zoom={engineState.zoom} rotation={engineState.rotation} />
+        )}
       </div>
       {engine && engineState && <SelectionMenu engine={engine} state={engineState} />}
       {engine && engineState && <NoteEditor engine={engine} state={engineState} />}
@@ -228,6 +307,7 @@ export function App() {
           engine={engine}
           state={engineState}
           onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
+          onImages={(files) => void insertImages(files)}
         />
       )}
       {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}
@@ -250,6 +330,10 @@ export function App() {
           onTouchDraws={(on) => {
             update({ touchDraws: on });
             engine?.setTouchDraws(on);
+          }}
+          onRotateWithFingers={(on) => {
+            update({ rotateWithFingers: on });
+            engine?.setRotateWithFingers(on);
           }}
           onClose={() => setPanel(null)}
         />

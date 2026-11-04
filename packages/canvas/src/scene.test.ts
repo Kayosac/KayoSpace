@@ -117,3 +117,29 @@ describe('стрелки в сцене', () => {
     expect(scene.pick(500, 100, 3)).toBe(arrow.id);
   });
 });
+
+describe('рисунок на стикере', () => {
+  it('штрих с parentId принадлежит стикеру: pick и список детей', () => {
+    const doc = createBoardDoc();
+    const st = makeSticky('', { x: 0, y: 0, actor: me });
+    const s = { ...makeStroke(line(20, 50), { hasPressure: true, actor: me }), parentId: st.id };
+    addElement(doc, st);
+    addElement(doc, s);
+    const scene = new Scene(doc);
+    expect(scene.childrenOf(st.id)).toEqual([s.id]);
+    expect(scene.pick(40, 50, 2)).toBe(st.id);
+    deleteElement(doc, st.id);
+    expect(scene.ownerOf(s.id)).toBe(s.id); // стикера нет — штрих сам по себе
+  });
+
+  it('повёрнутый стикер: рамка шире, попадание — по повёрнутому прямоугольнику', () => {
+    const doc = createBoardDoc();
+    const st = { ...makeSticky('', { x: 0, y: 0, actor: me }), rotation: Math.PI / 4 };
+    addElement(doc, st);
+    const scene = new Scene(doc);
+    const b = scene.items.get(st.id)!.bounds;
+    expect(b.maxX - b.minX).toBeCloseTo(200 * Math.SQRT2, 6);
+    expect(scene.pick(100, 100, 1)).toBe(st.id); // центр
+    expect(scene.pick(5, 5, 1)).toBeNull(); // угол рамки, но вне повёрнутого стикера
+  });
+});

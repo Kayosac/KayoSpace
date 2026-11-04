@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { HUB_ADDRESS, HUB_TOKEN, WORKSPACE_URL, drawWave, hubElements, shot } from './env';
 
@@ -420,4 +421,168 @@ test('стикеры, текст, фигуры, стрелка с привязк
   await page.getByRole('option', { name: /Мысли/ }).click();
   await expect(page.getByTestId('board-title')).toHaveText('Мысли');
   await expect.poll(() => elements(page)).toBe(4);
+});
+
+test('поворот холста, поворот стикера, рисунок на стикере, текст по размеру стикера', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+  });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ board: 'e2e-rotate' }),
+  ] as const);
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  type Eng = {
+    scene: {
+      items: Map<string, { id: string; element: Record<string, unknown>; fit?: { size: number } }>;
+      childrenOf(id: string): string[];
+    };
+    getCamera(): { rotation?: number };
+  };
+  const cdp = await context.newCDPSession(page);
+  const pen = (type: string, x: number, y: number) =>
+    cdp.send('Input.dispatchMouseEvent', {
+      type: type as 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      buttons: type === 'mouseReleased' ? 0 : 1,
+      clickCount: 1,
+      pointerType: 'pen',
+      force: 0.5,
+    });
+  const touch = (type: string, pts: [number, number, number][]) =>
+    cdp.send('Input.dispatchTouchEvent', {
+      type: type as 'touchStart',
+      touchPoints: pts.map(([x, y, id]) => ({ x, y, id, radiusX: 1, radiusY: 1, force: 1 })),
+    });
+  const sticky = () =>
+    page.evaluate(() => {
+      const e = window.__kayospace!.engine as unknown as Eng;
+      const it = [...e.scene.items.values()].find((i) => i.element.type === 'sticky')!;
+      return {
+        id: it.id,
+        rotation: (it.element.rotation as number) ?? 0,
+        y: it.element.y as number,
+        font: it.fit?.size ?? 0,
+        children: e.scene.childrenOf(it.id).length,
+      };
+    });
+
+  // Короткий текст в стикере — крупным шрифтом.
+  await page.keyboard.press('n');
+  await page.mouse.click(300, 300);
+  await page.keyboard.type('Идея');
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await sticky()).font).toBeGreaterThan(40);
+
+  // Рисунок пером поверх стикера становится его частью и едет вместе с ним.
+  await page.keyboard.press('p');
+  await pen('mousePressed', 240, 360);
+  for (let i = 1; i <= 20; i++) await pen('mouseMoved', 240 + i * 6, 360 + Math.sin(i / 3) * 10);
+  await pen('mouseReleased', 360, 360);
+  await expect.poll(async () => (await sticky()).children).toBe(1);
+  const strokeY = () =>
+    page.evaluate(() => {
+      const e = window.__kayospace!.engine as unknown as Eng;
+      return [...e.scene.items.values()].find((i) => i.element.type === 'stroke')!.element
+        .y as number;
+    });
+  await page.keyboard.press('v');
+  await page.mouse.click(300, 230);
+  const y0 = (await sticky()).y;
+  const s0 = await strokeY();
+  await page.mouse.move(300, 230);
+  await page.mouse.down();
+  await page.mouse.move(300, 330, { steps: 6 });
+  await page.mouse.up();
+  expect((await sticky()).y - y0).toBeCloseTo(100, 0);
+  expect((await strokeY()) - s0).toBeCloseTo(100, 0);
+
+  // Поворот стикера за круглую ручку над рамкой.
+  const b = await page.evaluate(() =>
+    (
+      window.__kayospace!.engine as unknown as {
+        getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number };
+      }
+    ).getSelectionBounds(),
+  );
+  const cx = (b.minX + b.maxX) / 2 + 590; // камера по умолчанию: (0, 0) мира — в центре экрана
+  const cy = (b.minY + b.maxY) / 2 + 410;
+  const radius = cy - (b.minY + 410 - 32);
+  await page.mouse.move(cx, cy - radius);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    const a = -Math.PI / 2 + (i / 10) * (Math.PI / 4);
+    await page.mouse.move(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius);
+  }
+  await page.mouse.up();
+  expect(Math.round(((await sticky()).rotation * 180) / Math.PI)).toBe(45);
+
+  // Поворот холста двумя пальцами; кнопка-компас выравнивает обратно.
+  await page.mouse.click(1000, 650); // снять выделение
+  await touch('touchStart', [
+    [500, 500, 1],
+    [700, 500, 2],
+  ]);
+  for (let i = 1; i <= 15; i++) {
+    const a = (i / 15) * (Math.PI / 3);
+    await touch('touchMove', [
+      [600 - Math.cos(a) * 100, 500 - Math.sin(a) * 100, 1],
+      [600 + Math.cos(a) * 100, 500 + Math.sin(a) * 100, 2],
+    ]);
+  }
+  await touch('touchEnd', []);
+  const rot = await page.evaluate(
+    () => (window.__kayospace!.engine as unknown as Eng).getCamera().rotation ?? 0,
+  );
+  expect((rot * 180) / Math.PI).toBeGreaterThan(30);
+  await page.screenshot({ path: shot('workspace-rotated.png') });
+  await page.getByTestId('compass').click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window.__kayospace!.engine as unknown as Eng).getCamera().rotation ?? 0),
+    )
+    .toBe(0);
+});
+
+test('картинка: вставка с устройства уезжает на хаб и видна на другом устройстве', async ({
+  browser,
+}) => {
+  const board = 'e2e-images';
+  const a = await openDevice(browser, { ...synced, board });
+  const b = await openDevice(browser, { ...synced, board });
+  await expect(a.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await a
+    .getByTestId('image-input')
+    .setInputFiles(join(import.meta.dirname, '..', 'fixtures', 'gradient.png'));
+  const imageOn = (p: Page) =>
+    p.evaluate(() => {
+      const e = window.__kayospace!.engine as unknown as {
+        scene: {
+          items: Map<string, { element: { type: string; w: number; props: { assetId?: string } } }>;
+        };
+      };
+      const it = [...e.scene.items.values()].find((i) => i.element.type === 'image');
+      return it ? { w: Math.round(it.element.w), id: it.element.props.assetId ?? '' } : null;
+    });
+  await expect.poll(() => imageOn(b)).not.toBeNull();
+  const img = (await imageOn(b))!;
+  expect(img.w).toBe(160);
+  // Файл — на хабе, по SHA-256.
+  await expect
+    .poll(async () => {
+      const res = await fetch(`http://${HUB_ADDRESS}/api/assets/${img.id}`, {
+        headers: { Authorization: `Bearer ${HUB_TOKEN}` },
+      });
+      return res.status;
+    })
+    .toBe(200);
+  await b.waitForTimeout(4000); // второе устройство скачивает (с повтором, если файл ещё ехал) и рисует
+  await b.screenshot({ path: shot('workspace-image.png') });
 });

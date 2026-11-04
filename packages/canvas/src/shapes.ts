@@ -6,6 +6,41 @@ import { distToSegment, type Pt } from './erase';
 
 export const DEFAULT_LINE = 2;
 
+/** Точка в системе координат элемента-рамки: поворот вокруг центра снят. */
+export function toLocal(el: CanvasElement, px: number, py: number): Pt {
+  const r = el.rotation ?? 0;
+  if (!r) return { x: px, y: py };
+  const cx = el.x + el.w / 2;
+  const cy = el.y + el.h / 2;
+  const c = Math.cos(-r);
+  const s = Math.sin(-r);
+  const dx = px - cx;
+  const dy = py - cy;
+  return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c };
+}
+
+/** Рамка повёрнутого прямоугольника элемента (с запасом pad), описанная по осям. */
+export function boxBounds(el: CanvasElement, pad = 0): Bounds {
+  const r = el.rotation ?? 0;
+  const hw = el.w / 2 + pad;
+  const hh = el.h / 2 + pad;
+  const cx = el.x + el.w / 2;
+  const cy = el.y + el.h / 2;
+  const c = Math.abs(Math.cos(r));
+  const s = Math.abs(Math.sin(r));
+  const ex = hw * c + hh * s;
+  const ey = hw * s + hh * c;
+  return { minX: cx - ex, minY: cy - ey, maxX: cx + ex, maxY: cy + ey };
+}
+
+/** Точка внутри повёрнутого прямоугольника элемента. */
+export function insideBox(el: CanvasElement, px: number, py: number, pad = 0): boolean {
+  const p = toLocal(el, px, py);
+  return (
+    p.x >= el.x - pad && p.x <= el.x + el.w + pad && p.y >= el.y - pad && p.y <= el.y + el.h + pad
+  );
+}
+
 /** Длина и полуширина наконечника для линии толщиной size. */
 export function headSize(size: number): { len: number; half: number } {
   return { len: size * 4 + 6 * Math.min(1, size), half: size * 2.6 + 3 * Math.min(1, size) };
@@ -81,8 +116,7 @@ export function shapeBounds(el: ShapeElement | ArrowElement, resolve?: ResolveBo
       maxY: Math.max(a.y, b.y) + pad,
     };
   }
-  const pad = size / 2;
-  return { minX: el.x - pad, minY: el.y - pad, maxX: el.x + el.w + pad, maxY: el.y + el.h + pad };
+  return boxBounds(el, size / 2);
 }
 
 /** Многоугольник, приближающий эллипс (для расстояния до контура). */
@@ -115,6 +149,7 @@ export function outlineDistance(
     return distToSegment(px, py, a, b);
   }
   if (el.type === 'shape') {
+    ({ x: px, y: py } = toLocal(el, px, py));
     if (el.props.shape === 'ellipse') {
       return polygonDistance(ellipsePolygon(el.x, el.y, el.w, el.h), px, py);
     }

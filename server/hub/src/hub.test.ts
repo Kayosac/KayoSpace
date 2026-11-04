@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
@@ -189,6 +190,24 @@ describe('MCP', () => {
     const missing = await client.callTool({ name: 'read_board', arguments: { board: 'nope' } });
     expect((missing as { isError?: boolean }).isError).toBe(true);
     await client.close();
+  });
+});
+
+describe('файлы (картинки)', () => {
+  it('сохраняет по SHA-256, отдаёт обратно, проверяет содержимое', async () => {
+    const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const id = createHash('sha256').update(data).digest('hex');
+    const base = `http://127.0.0.1:${hub.port}/api/assets`;
+    const put = await fetch(`${base}/${id}`, { method: 'PUT', body: data });
+    expect(put.status).toBe(201);
+    const got = await fetch(`${base}/${id}`);
+    expect(got.status).toBe(200);
+    expect(got.headers.get('content-type')).toBe('image/png');
+    expect(new Uint8Array(await got.arrayBuffer())).toEqual(data);
+    const wrong = await fetch(`${base}/${'0'.repeat(64)}`, { method: 'PUT', body: data });
+    expect(wrong.status).toBe(400);
+    expect((await fetch(`${base}/nope`)).status).toBe(400);
+    expect((await fetch(`${base}/${'1'.repeat(64)}`)).status).toBe(404);
   });
 });
 

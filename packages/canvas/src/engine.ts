@@ -15,6 +15,7 @@ import {
   getElement,
   isIdentity,
   makeArrow,
+  makeImage,
   makeShape,
   makeSticky,
   makeStroke,
@@ -22,19 +23,31 @@ import {
   STICKY_FONT_SIZE,
   STICKY_SIZE,
   TEXT_FONT_SIZE,
+  rotateAbout,
   scaleAbout,
   transformElement,
   type Transform,
 } from '@kayospace/board';
 import { PenInput, StrokeBuilder, type InkPoint, type PressurePoint } from '@kayospace/ink';
 import { decodeStroke, type Actor, type CanvasElement, type StrokePoint } from '@kayospace/model';
-import { defaultCamera, fitBounds, screenToWorld, viewBounds, zoomAt, type Camera } from './camera';
+import {
+  defaultCamera,
+  fitBounds,
+  rotateAt,
+  screenToWorld,
+  setRotationAt,
+  viewBounds,
+  zoomAt,
+  type Camera,
+} from './camera';
 import { eraseFromPoints } from './erase';
-import { boxFromDrag, snapAngle } from './shapes';
+import { ImageCache } from './images';
+import { boxFromDrag, insideBox, snapAngle } from './shapes';
 import { Navigation } from './navigation';
 import {
   HANDLE_SIZE,
   Renderer,
+  rotateHandleWorld,
   SELECTION_PAD,
   samplesWorldBounds,
   type ActiveStroke,
@@ -72,6 +85,8 @@ export interface EngineState {
   stickyColor: string;
   /** id стикера или текста, который сейчас редактируют. */
   editing: string | null;
+  /** Поворот вида, радианы. */
+  rotation: number;
   /** Что выделено: только стикеры, только «чернила» (линии, фигуры, текст), смесь. */
   selectionKind: 'sticky' | 'ink' | 'mixed' | null;
   zoom: number;
@@ -103,6 +118,15 @@ export interface EngineOptions {
   stickyColor?: string;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws?: boolean;
+  /** Поворачивать вид двумя пальцами. */
+  rotateWithFingers?: boolean;
+  /** Откуда грузить картинки по id содержимого. */
+  assets?: AssetLoader;
+}
+
+/** Хранилище картинок приложения: локальная копия или хаб. */
+export interface AssetLoader {
+  load(assetId: string): Promise<Blob | null>;
 }
 
 interface ActiveDraw {
@@ -120,6 +144,7 @@ interface ActiveDraw {
 type SelectGesture =
   | { kind: 'move'; start: Pt; t: Transform; moved: boolean; editOnTap?: string }
   | { kind: 'scale'; anchor: Pt; corner: Pt; t: Transform; moved: boolean }
+  | { kind: 'rotate'; center: Pt; start: number; t: Transform; moved: boolean }
   | { kind: 'lasso'; points: Pt[] }
   | { kind: 'marquee'; start: Pt; end: Pt }
   | { kind: 'shape'; start: Pt; end: Pt }
@@ -138,6 +163,7 @@ export class CanvasEngine {
   readonly scene: Scene;
   readonly renderer: Renderer;
   readonly undoManager: Y.UndoManager;
+  private readonly images: ImageCache;
   private readonly input: PenInput;
   private readonly nav: Navigation;
   private readonly resizeObserver: ResizeObserver;
@@ -197,6 +223,16 @@ export class CanvasEngine {
 
     this.renderer = new Renderer(host);
     this.scene = new Scene(doc);
+    this.images = new ImageCache(opts.assets ?? null, (assetId) => {
+      // Картинка готова — перерисовать места, где она стоит.
+      for (const item of this.scene.items.values()) {
+        if (item.element.type === 'image' && item.element.props.assetId === assetId) {
+          this.renderer.invalidateWorld(this.camera, item.bounds);
+        }
+      }
+      this.schedule();
+    });
+    this.renderer.images = this.images;
     this.undoManager = new Y.UndoManager(elementsMap(doc), {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
       // Шаги отмены разделяем вручную — по жестам (stopCapturing).
@@ -216,6 +252,7 @@ export class CanvasEngine {
     });
     this.nav.handTool = this.tool === 'hand';
     this.nav.touchPans = !this.touchDraws;
+    this.nav.rotateView = opts.rotateWithFingers ?? true;
 
     this.input = new PenInput(
       host,
@@ -433,7 +470,7 @@ export class CanvasEngine {
   }
 
   selectAll(): void {
-    this.select(this.scene.items.keys());
+    this.select([...this.scene.items.keys()].filter((id) => this.scene.ownerOf(id) === id));
   }
 
   clearSelection(): void {
@@ -445,7 +482,7 @@ export class CanvasEngine {
   deleteSelection(): void {
     if (this.selection.size === 0 || this.gesture) return;
     this.undoManager.stopCapturing();
-    deleteElements(this.doc, [...this.selection], LOCAL_ORIGIN);
+    deleteElements(this.doc, [...this.withChildren(this.selection)], LOCAL_ORIGIN);
     this.undoManager.stopCapturing();
     this.clearSelection();
   }
@@ -485,6 +522,45 @@ export class CanvasEngine {
     this.insert(cloneElements(clipboard, dx, dy, this.opts.actor));
   }
 
+  /**
+   * Вставить картинку: по центру экрана (или в точке экрана at), не больше 60% экрана.
+   * blob — чтобы показать сразу, не дожидаясь загрузки из хранилища.
+   */
+  insertImage(
+    assetId: string,
+    natural: { w: number; h: number },
+    opts: { blob?: Blob; at?: Pt; alt?: string } = {},
+  ): string {
+    const z = this.camera.zoom;
+    const maxW = (this.renderer.width * 0.6) / z;
+    const maxH = (this.renderer.height * 0.6) / z;
+    // Не крупнее исходного размера в экранных пикселях — мелкая иконка не раздувается.
+    const k = Math.min(maxW / natural.w, maxH / natural.h, 1 / z);
+    const w = natural.w * k;
+    const h = natural.h * k;
+    const c = opts.at
+      ? screenToWorld(this.camera, opts.at.x, opts.at.y)
+      : screenToWorld(this.camera, this.renderer.width / 2, this.renderer.height / 2);
+    // Вид повёрнут — картинка встаёт ровно относительно экрана.
+    const rotation = -(this.camera.rotation ?? 0);
+    const el = {
+      ...makeImage(
+        assetId,
+        { x: c.x - w / 2, y: c.y - h / 2, w, h },
+        {
+          naturalW: natural.w,
+          naturalH: natural.h,
+          actor: this.opts.actor,
+          ...(opts.alt ? { alt: opts.alt } : {}),
+        },
+      ),
+      rotation,
+    };
+    if (opts.blob) void this.images.put(assetId, opts.blob);
+    this.insert([el]);
+    return el.id;
+  }
+
   /** Сдвинуть выделенное на экранные пиксели (стрелки). */
   nudgeSelection(dx: number, dy: number): void {
     if (this.selection.size === 0 || this.gesture) return;
@@ -498,8 +574,18 @@ export class CanvasEngine {
     this.select(els.map((el) => el.id));
   }
 
+  /** Выделенные вместе с их рисунками (штрихами на стикерах). */
+  private withChildren(ids: Iterable<string>): Set<string> {
+    const out = new Set<string>();
+    for (const id of ids) {
+      out.add(id);
+      for (const c of this.scene.childrenOf(id)) out.add(c);
+    }
+    return out;
+  }
+
   private selectedElements(): CanvasElement[] {
-    return [...this.selection].flatMap((id) => {
+    return [...this.withChildren(this.selection)].flatMap((id) => {
       const el = getElement(this.doc, id);
       return el ? [el] : [];
     });
@@ -521,7 +607,9 @@ export class CanvasEngine {
     const now = Date.now();
     this.undoManager.stopCapturing();
     this.doc.transact(() => {
-      for (const el of this.selectedElements()) {
+      for (const id of this.selection) {
+        const el = getElement(this.doc, id);
+        if (!el) continue;
         const style = fn(el);
         if (style) map.set(el.id, { ...el, style, updatedBy: this.opts.actor, updatedAt: now });
       }
@@ -569,7 +657,8 @@ export class CanvasEngine {
         this.selection.delete(el.id);
       } else if (content !== el.props.content || ed.draft) {
         const { height } = this.renderer.measureNote(el, content);
-        const h = el.type === 'sticky' ? Math.max(el.w, height) : height;
+        // Стикер не растёт: шрифт сам подбирается под его размер.
+        const h = el.type === 'sticky' ? el.h : height;
         const next = {
           ...el,
           h,
@@ -595,25 +684,30 @@ export class CanvasEngine {
     let draft: CanvasElement;
     if (kind === 'sticky') {
       const s = STICKY_SIZE / z;
-      draft = makeSticky('', {
-        x: p.x - s / 2,
-        y: p.y - s / 2,
-        color: this.stickyColor,
-        actor,
-        now,
-      });
-      draft = { ...draft, w: s, h: s, style: { ...draft.style, size: STICKY_FONT_SIZE / z } };
+      draft = makeSticky('', { x: 0, y: 0, color: this.stickyColor, actor, now });
+      draft = {
+        ...draft,
+        ...this.viewBox(p, 0, 0, s, s),
+        style: { ...draft.style, size: STICKY_FONT_SIZE / z },
+      };
     } else {
       const size = TEXT_FONT_SIZE / z;
+      const w = 320 / z;
+      const h = size * 1.3;
       draft = makeText('', {
-        x: p.x,
-        y: p.y - size * 0.65,
-        w: 320 / z,
+        x: 0,
+        y: 0,
+        w,
         actor,
         now,
         ...(this.color ? { color: this.color } : {}),
       });
-      draft = { ...draft, h: size * 1.3, style: { ...draft.style, size } };
+      // Тап — левый край первой строки.
+      draft = {
+        ...draft,
+        ...this.viewBox(p, w / 2, -size * 0.65 + h / 2, w, h),
+        style: { ...draft.style, size },
+      };
     }
     if (this.editing) this.finishEditing(null);
     this.editing = { id: draft.id, draft };
@@ -654,10 +748,41 @@ export class CanvasEngine {
         heads: this.shapeKind === 'arrow' ? 'end' : 'none',
       });
     }
-    const box = tiny
-      ? { x: g.start.x - 80 / z, y: g.start.y - 50 / z, w: 160 / z, h: 100 / z }
-      : boxFromDrag(g.start, g.end, this.gestureShift);
-    return makeShape(this.shapeKind, box, opts);
+    // Рамку считаем в осях экрана: при повёрнутом виде фигура ровная относительно экрана.
+    const r = this.camera.rotation ?? 0;
+    let box: { x: number; y: number; w: number; h: number; rotation: number };
+    if (tiny) {
+      box = this.viewBox(g.start, 0, 0, 160 / z, 100 / z);
+    } else {
+      const c = Math.cos(r);
+      const sn = Math.sin(r);
+      const dx = g.end.x - g.start.x;
+      const dy = g.end.y - g.start.y;
+      const v = { x: dx * c - dy * sn, y: dx * sn + dy * c }; // смещение в осях экрана
+      const b = boxFromDrag({ x: 0, y: 0 }, v, this.gestureShift);
+      box = this.viewBox(g.start, b.x + b.w / 2, b.y + b.h / 2, b.w, b.h);
+    }
+    const { rotation, ...rect } = box;
+    return { ...makeShape(this.shapeKind, rect, opts), rotation };
+  }
+
+  /**
+   * Рамка, ровная относительно экрана: центр — в точке anchor плюс смещение (ox, oy) в осях экрана
+   * (мировые единицы), размер w × h. При повёрнутом виде элемент получает обратный поворот.
+   */
+  private viewBox(
+    anchor: Pt,
+    ox: number,
+    oy: number,
+    w: number,
+    h: number,
+  ): { x: number; y: number; w: number; h: number; rotation: number } {
+    const r = this.camera.rotation ?? 0;
+    const c = Math.cos(-r);
+    const s = Math.sin(-r);
+    const cx = anchor.x + ox * c - oy * s;
+    const cy = anchor.y + ox * s + oy * c;
+    return { x: cx - w / 2, y: cy - h / 2, w, h, rotation: r ? -r : 0 };
   }
 
   private commitTransform(t: Transform): void {
@@ -695,6 +820,15 @@ export class CanvasEngine {
     const additive = e.shiftKey;
     const b = this.getSelectionBounds();
     if (b && !additive) {
+      const grabR = (pointerType === 'mouse' ? HANDLE_SIZE : HANDLE_SIZE * 1.8) / z;
+      const [, rot] = rotateHandleWorld(b, z);
+      if (Math.hypot(p.x - rot.x, p.y - rot.y) <= grabR) {
+        const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+        const start = Math.atan2(p.y - center.y, p.x - center.x);
+        this.gesture = { kind: 'rotate', center, start, t: IDENTITY, moved: false };
+        this.selectionChanged();
+        return;
+      }
       const pad = SELECTION_PAD / z;
       const padded = {
         minX: b.minX - pad,
@@ -772,6 +906,17 @@ export class CanvasEngine {
       if (!g.moved && Math.hypot(tx, ty) * z < 3) return; // дрожь руки — ещё не перетаскивание
       g.moved = true;
       g.t = { s: 1, tx, ty };
+    } else if (g.kind === 'rotate') {
+      let a = Math.atan2(p.y - g.center.y, p.x - g.center.x) - g.start;
+      const step = Math.PI / 12; // 15°
+      if (this.gestureShift) a = Math.round(a / step) * step;
+      else {
+        // Мягкая привязка к прямым углам — чтобы легко вернуть ровно.
+        const right = Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
+        if (Math.abs(a - right) < (4 * Math.PI) / 180) a = right;
+      }
+      g.moved = true;
+      g.t = rotateAbout(g.center.x, g.center.y, a);
     } else if (g.kind === 'scale') {
       g.moved = true;
       g.t = scaleAbout(g.anchor.x, g.anchor.y, scaleFromHandle(g.anchor, g.corner, p));
@@ -796,7 +941,7 @@ export class CanvasEngine {
     this.gesture = null;
     if (!g) return;
     if (!cancel) {
-      if ((g.kind === 'move' || g.kind === 'scale') && g.moved) {
+      if ((g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
         this.commitTransform(g.t);
       } else if (g.kind === 'move' && g.editOnTap) {
         this.startEditing(g.editOnTap);
@@ -831,13 +976,13 @@ export class CanvasEngine {
           g.points.map((q) => ({ minX: q.x, minY: q.y, maxX: q.x, maxY: q.y })),
         )!;
         for (const item of this.scene.query(area)) {
-          if (itemInLasso(item, g.points)) this.selection.add(item.id);
+          if (itemInLasso(item, g.points)) this.selection.add(this.scene.ownerOf(item.id));
         }
       } else if (g.kind === 'marquee') {
         const r = rectFromPoints(g.start, g.end);
         if ((r.maxX - r.minX) * this.camera.zoom > 3 || (r.maxY - r.minY) * this.camera.zoom > 3) {
           for (const item of this.scene.query(r)) {
-            if (itemInRect(item, r)) this.selection.add(item.id);
+            if (itemInRect(item, r)) this.selection.add(this.scene.ownerOf(item.id));
           }
         }
       }
@@ -848,9 +993,17 @@ export class CanvasEngine {
   // ---------- Камера ----------
 
   setCamera(c: Camera): void {
-    if (c.x === this.camera.x && c.y === this.camera.y && c.zoom === this.camera.zoom) return;
+    if (
+      c.x === this.camera.x &&
+      c.y === this.camera.y &&
+      c.zoom === this.camera.zoom &&
+      (c.rotation ?? 0) === (this.camera.rotation ?? 0)
+    ) {
+      return;
+    }
     if (!Number.isFinite(c.x + c.y + c.zoom)) return;
-    const zoomChanged = c.zoom !== this.camera.zoom;
+    const zoomChanged =
+      c.zoom !== this.camera.zoom || (c.rotation ?? 0) !== (this.camera.rotation ?? 0);
     this.camera = c;
     this.hasCamera = true;
     this.renderer.invalidateAll();
@@ -876,7 +1029,25 @@ export class CanvasEngine {
       this.setCamera({ x: -this.renderer.width / 2, y: -this.renderer.height / 2, zoom: 1 });
       return;
     }
-    this.setCamera(fitBounds(b, this.renderer.width, this.renderer.height));
+    this.setCamera(
+      fitBounds(b, this.renderer.width, this.renderer.height, 48, this.camera.rotation ?? 0),
+    );
+  }
+
+  /** Вернуть вид без поворота (вокруг центра экрана). */
+  resetRotation(): void {
+    this.setCamera(
+      setRotationAt(this.camera, this.renderer.width / 2, this.renderer.height / 2, 0),
+    );
+  }
+
+  /** Повернуть вид на угол (радианы) вокруг центра экрана. */
+  rotateView(da: number): void {
+    this.setCamera(rotateAt(this.camera, this.renderer.width / 2, this.renderer.height / 2, da));
+  }
+
+  setRotateWithFingers(on: boolean): void {
+    this.nav.rotateView = on;
   }
 
   /** Камера ещё не задана (новая доска без сохранённого вида). */
@@ -903,6 +1074,7 @@ export class CanvasEngine {
     for (const fn of this.cleanups) fn();
     this.undoManager.destroy();
     this.scene.destroy();
+    this.images.destroy();
     this.host.removeEventListener('pointermove', this.onPointerTrack);
     this.host.removeEventListener('pointerleave', this.onPointerLeave);
     window.removeEventListener('keydown', this.onKeyDown);
@@ -992,6 +1164,7 @@ export class CanvasEngine {
             z: el.z,
             createdBy: el.createdBy,
             createdAt: el.createdAt,
+            ...(el.parentId ? { parentId: el.parentId } : {}),
           });
         }
       }
@@ -1017,11 +1190,36 @@ export class CanvasEngine {
           actor: this.opts.actor,
           unit: d.unit,
         });
-        addElement(this.doc, el, LOCAL_ORIGIN);
+        // Нарисовали поверх стикера — рисунок становится его частью.
+        const parent = this.stickyUnder(d.points);
+        addElement(this.doc, parent ? { ...el, parentId: parent } : el, LOCAL_ORIGIN);
       }
     }
     this.undoManager.stopCapturing();
     this.schedule();
+  }
+
+  /** Верхний стикер, внутри которого лежит большая часть точек штриха. */
+  private stickyUnder(points: readonly StrokePoint[]): string | null {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    const items = this.scene.query({ minX, minY, maxX, maxY });
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]!;
+      if (it.element.type !== 'sticky') continue;
+      let inside = 0;
+      for (const p of points) if (insideBox(it.element, p.x, p.y)) inside++;
+      if (inside >= points.length * 0.7) return it.id;
+    }
+    return null;
   }
 
   // ---------- Кадры ----------
@@ -1086,12 +1284,12 @@ export class CanvasEngine {
               handles:
                 this.tool === 'select' &&
                 !this.editing &&
-                (!g || g.kind === 'move' || g.kind === 'scale'),
+                (!g || g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate'),
             };
           }
         }
-        if (g && (g.kind === 'move' || g.kind === 'scale') && g.moved) {
-          overlay.preview = { ids: this.selection, t: g.t };
+        if (g && (g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
+          overlay.preview = { ids: this.withChildren(this.selection), t: g.t };
         } else if (g?.kind === 'lasso') {
           overlay.lasso = g.points;
         } else if (g?.kind === 'marquee') {
@@ -1148,6 +1346,7 @@ export class CanvasEngine {
       shapeKind: this.shapeKind,
       stickyColor: this.stickyColor,
       editing: this.editing?.id ?? null,
+      rotation: this.camera.rotation ?? 0,
       selectionKind: this.selectionKind(),
       zoom: this.camera.zoom,
       canUndo: this.undoManager.canUndo(),
@@ -1263,7 +1462,10 @@ export class CanvasEngine {
       return;
     }
     if (mod || e.altKey) return;
-    if (e.shiftKey && e.code === 'Digit1') this.zoomToFit();
+    if (e.shiftKey && e.code === 'BracketLeft') this.rotateView(-Math.PI / 12);
+    else if (e.shiftKey && e.code === 'BracketRight') this.rotateView(Math.PI / 12);
+    else if (e.shiftKey && e.code === 'Backslash') this.resetRotation();
+    else if (e.shiftKey && e.code === 'Digit1') this.zoomToFit();
     else if (e.shiftKey && e.code === 'Digit0') this.resetZoom();
     else if (e.shiftKey) return;
     else if (e.code === 'KeyV') this.setTool('select');

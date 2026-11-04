@@ -17,10 +17,19 @@ export function SelectionMenu({ engine, state }: { engine: CanvasEngine; state: 
   const b = engine.getSelectionBounds();
   if (!b) return null;
   const cam = engine.getCamera();
-  const tl = worldToScreen(cam, b.minX, b.minY);
-  const br = worldToScreen(cam, b.maxX, b.maxY);
-  const above = tl.y - MENU_GAP - MENU_HEIGHT > 64;
-  const top = above ? tl.y - MENU_GAP - MENU_HEIGHT : br.y + MENU_GAP;
+  // Повёрнутый вид: берём экранную рамку вокруг всех четырёх углов.
+  const pts = [
+    worldToScreen(cam, b.minX, b.minY),
+    worldToScreen(cam, b.maxX, b.minY),
+    worldToScreen(cam, b.maxX, b.maxY),
+    worldToScreen(cam, b.minX, b.maxY),
+  ];
+  const tl = { x: Math.min(...pts.map((q) => q.x)), y: Math.min(...pts.map((q) => q.y)) };
+  const br = { x: Math.max(...pts.map((q) => q.x)), y: Math.max(...pts.map((q) => q.y)) };
+  // Над рамкой ещё ручка поворота — меню выше неё.
+  const gapAbove = MENU_GAP + 32;
+  const above = tl.y - gapAbove - MENU_HEIGHT > 64;
+  const top = above ? tl.y - gapAbove - MENU_HEIGHT : br.y + MENU_GAP;
   const left = (tl.x + br.x) / 2;
 
   return (
