@@ -29,7 +29,8 @@
     "hub:start": "pnpm --filter @kayospace/hub start",
     "ai-worker": "pnpm --filter @kayospace/hub ai-worker",
     "pair": "pnpm --filter @kayospace/hub pair",
-    "e2e:dev": "pnpm --filter @kayospace/e2e e2e:dev"
+    "e2e:dev": "pnpm --filter @kayospace/e2e e2e:dev",
+    "e2e:bench": "pnpm --filter @kayospace/e2e e2e:bench"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",

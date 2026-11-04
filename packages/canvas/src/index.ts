@@ -6,3 +6,7 @@ export * from './images';
 export * from './navigation';
 export * from './renderer';
 export * from './scene';
+export * from './bench-board';
+export * from './lod';
+export * from './frames';
+export * from './pdf';

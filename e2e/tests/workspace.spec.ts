@@ -799,3 +799,196 @@ test('устройства: подключение по коду из «Доба
   await drawWave(a, 700, 450);
   await expect.poll(() => elements(a)).toBe(2);
 });
+
+type El = {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  z: string;
+  style: { color?: string };
+  props: Record<string, unknown>;
+};
+const allElements = (page: Page): Promise<El[]> =>
+  page.evaluate(() =>
+    [
+      ...(
+        window.__kayospace!.engine as unknown as {
+          scene: { items: Map<string, { element: El }> };
+        }
+      ).scene.items.values(),
+    ].map((i) => i.element),
+  );
+
+test('фреймы, маркер и выделитель, порядок слоёв, выравнивание, экспорт, мини-карта', async ({
+  browser,
+  request,
+}) => {
+  const board = 'e2e-frames';
+  const page = await openDevice(browser, { ...synced, board });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  const sticky = async (x: number, y: number, text: string) => {
+    await page.keyboard.press('n');
+    await page.mouse.click(x, y);
+    await page.keyboard.type(text);
+    await page.keyboard.press('Escape');
+  };
+  await sticky(300, 300, 'Альфа');
+  await sticky(520, 430, 'Бета');
+
+  // Фрейм рамкой вокруг стикеров: он под ними, сразу выделен — можно переименовать.
+  await page.keyboard.press('f');
+  await page.mouse.move(150, 150);
+  await page.mouse.down();
+  await page.mouse.move(700, 600, { steps: 8 });
+  await page.mouse.up();
+  const name = page.getByTestId('frame-name');
+  await expect(name).toHaveValue('Фрейм 1');
+  await name.fill('Неделя');
+  await name.press('Enter');
+  const frameOf = async () => (await allElements(page)).find((e) => e.type === 'frame')!;
+  await expect.poll(async () => (await frameOf())?.props.name).toBe('Неделя');
+  const before = await allElements(page);
+  const f0 = before.find((e) => e.type === 'frame')!;
+  expect(before.filter((e) => e.type === 'sticky').every((s) => s.z > f0.z)).toBe(true);
+
+  // Перенос фрейма за заголовок везёт содержимое.
+  await page.keyboard.press('Escape');
+  await page.mouse.move(200, 137);
+  await page.mouse.down();
+  await page.mouse.move(400, 137, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await frameOf()).x - f0.x)).toBe(200);
+  const moved = await allElements(page);
+  for (const s of before.filter((e) => e.type === 'sticky')) {
+    expect(Math.round(moved.find((e) => e.id === s.id)!.x - s.x)).toBe(200);
+  }
+  await page.screenshot({ path: shot('frames.png') });
+
+  // Маркер и выделитель.
+  await page.keyboard.press('m');
+  await drawWave(page, 760, 680, 200);
+  await page.keyboard.press('i');
+  await drawWave(page, 760, 720, 200);
+  await expect
+    .poll(async () =>
+      (await allElements(page))
+        .filter((e) => e.type === 'stroke')
+        .map((e) => [e.props.tool, e.style.color ?? null]),
+    )
+    .toEqual([
+      ['marker', null],
+      ['highlighter', '#f5d90a'],
+    ]);
+
+  // Порядок слоёв: Альфа под Бету, но над фреймом; Ctrl+] — обратно наверх.
+  const z = async (text: string) =>
+    (await allElements(page)).find((e) => e.props.content === text)!.z;
+  await page.keyboard.press('v');
+  await page.mouse.click(500, 300); // Альфа после переноса
+  await page.getByTestId('selection-more').click();
+  await page.getByRole('menuitem', { name: /На задний план/ }).click();
+  await expect.poll(async () => (await z('Альфа')) < (await z('Бета'))).toBe(true);
+  expect((await z('Альфа')) > (await frameOf()).z).toBe(true);
+  await page.keyboard.press('Control+BracketRight');
+  await expect.poll(async () => (await z('Альфа')) > (await z('Бета'))).toBe(true);
+
+  // Выравнивание: обе по левому краю.
+  await page.keyboard.down('Shift');
+  await page.mouse.click(720, 430); // Бета
+  await page.keyboard.up('Shift');
+  await expect(page.getByTestId('selection-menu').locator('.count')).toHaveText('2');
+  await page.getByTestId('selection-more').click();
+  await page.getByRole('menuitem', { name: 'По левому краю' }).click();
+  await expect
+    .poll(async () => {
+      const notes = (await allElements(page)).filter((e) => e.type === 'sticky');
+      return Math.round(notes[0]!.x) === Math.round(notes[1]!.x);
+    })
+    .toBe(true);
+  await expect.poll(() => hubElements(request, board)).toBe(5);
+
+  // Мини-карта: нажатие переносит вид.
+  const cam0 = await camera(page);
+  const map = page.getByTestId('minimap');
+  await expect(map).toBeVisible();
+  const box = (await map.boundingBox())!;
+  await page.mouse.click(box.x + 8, box.y + box.height - 8);
+  await expect.poll(async () => (await camera(page)).x).not.toBe(cam0.x);
+
+  // Экспорт: PNG доски и PDF — по странице на фрейм.
+  await page.keyboard.press('Escape');
+  await page.getByTestId('board-title').click();
+  await expect(page.getByTestId('frames-list')).toContainText('Неделя');
+  const [png] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-png').click(),
+  ]);
+  expect(png.suggestedFilename()).toBe('e2e-frames.png');
+  const pngBytes = readFileSync((await png.path())!);
+  expect(pngBytes.subarray(1, 4).toString()).toBe('PNG');
+  // Панель досок остаётся открытой — сразу PDF.
+  const [pdf] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-pdf').click(),
+  ]);
+  const pdfText = readFileSync((await pdf.path())!).toString('latin1');
+  expect(pdfText.startsWith('%PDF-1.4')).toBe(true);
+  expect(pdfText).toContain('/Count 1');
+  await expect(page.locator('.toast')).toHaveText('Файл сохранён');
+});
+
+test('проекты: создать, положить доску, новая доска — в выбранный проект, видно на другом устройстве', async ({
+  browser,
+  request,
+}) => {
+  const a = await openDevice(browser, { ...synced, board: 'e2e-proj-a' });
+  await expect(a.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await drawWave(a, 300, 300);
+  await a.getByTestId('board-title').click();
+  await a.getByTestId('add-project').click();
+  await a.getByLabel('Название нового проекта').fill('Ремонт');
+  await a.getByLabel('Название нового проекта').press('Enter');
+  const projects = a.getByTestId('projects');
+  await expect(projects.getByRole('tab', { name: 'Ремонт' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  // Открытая доска пока без проекта — в списке проекта её нет; кладём её туда.
+  await expect(a.getByRole('option', { name: /e2e-proj-a/ })).toHaveCount(0);
+  await a.getByTestId('board-project').selectOption({ label: 'Ремонт' });
+  await expect(a.getByRole('option', { name: /e2e-proj-a/ })).toHaveCount(1);
+  // Новая доска создаётся в выбранном проекте.
+  await a.getByLabel('Найти или создать доску').fill('Смета');
+  await a.screenshot({ path: shot('projects.png') });
+  await a.keyboard.press('Enter');
+  await expect(a.getByTestId('board-title')).toHaveText('Смета');
+  await drawWave(a, 300, 300);
+
+  // Хаб и второе устройство видят проект.
+  await expect
+    .poll(async () => {
+      const res = await request.get(`http://${HUB_ADDRESS}/api/boards`, {
+        headers: { Authorization: `Bearer ${HUB_TOKEN}` },
+      });
+      const list = (await res.json()) as { id: string; project: { name: string } | null }[];
+      return list
+        .filter((b) => b.project?.name === 'Ремонт')
+        .map((b) => b.id)
+        .sort().length;
+    })
+    .toBe(2);
+  const b = await openDevice(browser, { ...synced, board: 'e2e-proj-b' }, { colorScheme: 'dark' });
+  await expect(b.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await b.getByTestId('board-title').click();
+  await b.getByTestId('projects').getByRole('tab', { name: 'Ремонт' }).click();
+  await expect(b.getByRole('option', { name: /Смета/ })).toHaveCount(1);
+  await expect(b.getByRole('option', { name: /e2e-proj-a/ })).toHaveCount(1);
+  await expect(b.getByRole('option', { name: /e2e-proj-b/ })).toHaveCount(0);
+  await b.screenshot({ path: shot('projects-dark.png') });
+
+  // Удалить проект: доски остаются, просто без проекта.
+  await b.getByRole('button', { name: 'Удалить проект' }).click();
+  await expect(b.getByTestId('projects').getByRole('tab')).toHaveCount(1);
+  await expect(b.getByRole('option', { name: /Смета/ })).toHaveCount(1);
+});

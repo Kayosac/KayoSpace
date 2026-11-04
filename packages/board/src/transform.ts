@@ -12,7 +12,7 @@ import {
   type CanvasElement,
 } from '@kayospace/model';
 import { newId } from './ids';
-import { zIndexFor } from './factory';
+import { FRAME_Z_PREFIX, zIndexFor } from './factory';
 
 /** Размер шрифта по умолчанию: у стикера и текста его можно менять масштабом (style.size). */
 export const STICKY_FONT_SIZE = 18;
@@ -159,7 +159,8 @@ export function cloneElements(
     id: ids.get(el.id)!,
     parentId: el.parentId ? (ids.get(el.parentId) ?? undefined) : undefined,
     // Суффикс держит порядок копий; строка длиннее — всё равно выше всех, созданных раньше.
-    z: base + i.toString(36).padStart(4, '0'),
+    // Фрейм остаётся в слое фреймов — под элементами.
+    z: (el.type === 'frame' ? FRAME_Z_PREFIX : '') + base + i.toString(36).padStart(4, '0'),
     createdBy: actor,
     updatedBy: actor,
     createdAt: now,

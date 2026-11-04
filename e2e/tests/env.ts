@@ -10,6 +10,8 @@ export const WORKSPACE_URL = 'http://localhost:4174/';
 /** `pnpm dev` в проверке режима разработки (порты не из списка запрещённых для fetch). */
 export const DEV_HUB_PORT = 4211;
 export const DEV_APP_PORT = 5211;
+/** Стенд замера скорости (дев-сервер приложения). */
+export const BENCH_PORT = 5213;
 
 /** Скриншоты для просмотра (в CI уходят в ветку ci-previews). */
 export function shot(name: string): string {

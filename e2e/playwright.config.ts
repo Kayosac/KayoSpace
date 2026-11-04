@@ -22,8 +22,8 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'report' }]],
-  // Проверка режима разработки (`pnpm dev`) — отдельно: playwright.dev.config.ts.
-  testIgnore: ['dev.spec.ts'],
+  // Режим разработки и замер скорости — отдельно: playwright.dev.config.ts, playwright.bench.config.ts.
+  testIgnore: ['dev.spec.ts', 'bench.spec.ts'],
   use: {
     ...devices['Desktop Chrome'],
     // Установленный Chrome вместо скачанного Chromium: E2E_CHROME_CHANNEL=chrome.

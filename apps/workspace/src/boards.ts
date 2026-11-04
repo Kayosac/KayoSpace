@@ -16,8 +16,12 @@ export function mergeBoards(
   hub: readonly { id: string; name: string | null; elements: number }[],
 ): BoardEntry[] {
   const byId = new Map<string, BoardEntry>();
-  for (const r of recent) byId.set(r.id, { id: r.id, name: r.name, onHub: false });
+  for (const r of recent) {
+    // Служебные документы (воркспейс) — не доски.
+    if (!r.id.startsWith('_')) byId.set(r.id, { id: r.id, name: r.name, onHub: false });
+  }
   for (const h of hub) {
+    if (h.id.startsWith('_')) continue;
     const prev = byId.get(h.id);
     byId.set(h.id, {
       id: h.id,

@@ -11,6 +11,7 @@ import {
   type ArrowElement,
   type CanvasElement,
   type StrokeElement,
+  type StrokeTool,
 } from '@kayospace/model';
 import {
   samplesBounds,
@@ -20,6 +21,7 @@ import {
   type StrokeStyle,
 } from '@kayospace/ink';
 import { GridIndex } from './grid-index';
+import { frameBounds, frameHit, insideFrame } from './frames';
 import {
   arrowEnds,
   boxBounds,
@@ -43,6 +45,10 @@ export interface SceneItem {
   color: string | null;
   /** Кеш контура для отрисовки (создаётся при первой отрисовке). */
   path?: Path2D;
+  /** Средний радиус сэмплов штриха (для упрощённой отрисовки при отдалении). */
+  meanR?: number;
+  /** Упрощённая осевая линия штриха для уровня детализации level (см. lod.ts). */
+  lod?: { level: number; pts: Float64Array };
   /** Стикер или текст: строки после переноса (заполняет отрисовка). */
   lines?: string[];
   /** Стикер: подобранный шрифт и строки (заполняет отрисовка). */
@@ -51,15 +57,33 @@ export interface SceneItem {
   ends?: [{ x: number; y: number }, { x: number; y: number }];
 }
 
+/**
+ * Виды пера. Перо — толщина по нажиму; маркер — ровная и толще; выделитель — широкий
+ * полупрозрачный (цвет по умолчанию — жёлтый). scale — во сколько раз толще выбранной толщины.
+ */
+export const PEN_KINDS: Record<StrokeTool, { scale: number; thinning: number; alpha: number }> = {
+  pen: { scale: 1, thinning: STROKE_THINNING, alpha: 1 },
+  marker: { scale: 1.8, thinning: 0, alpha: 1 },
+  highlighter: { scale: 5, thinning: 0, alpha: 0.35 },
+};
+export const HIGHLIGHTER_COLOR = '#f5d90a';
+
 export function strokeStyleFor(el: StrokeElement): StrokeStyle {
+  const kind = PEN_KINDS[el.props.tool] ?? PEN_KINDS.pen;
   return {
     color: el.style.color ?? '',
     size: el.style.size ?? 4,
-    thinning: STROKE_THINNING,
+    thinning: kind.thinning,
     streamline: STROKE_STREAMLINE,
-    simulatePressure: !el.props.hasPressure,
+    // Маркер и выделитель — ровной толщины: нажим не учитываем.
+    simulatePressure: el.props.tool === 'pen' || !el.props.tool ? !el.props.hasPressure : false,
     unit: el.props.unit ?? 1,
   };
+}
+
+/** Прозрачность штриха (выделитель — полупрозрачный). */
+export function strokeAlpha(el: CanvasElement): number {
+  return el.type === 'stroke' ? (PEN_KINDS[el.props.tool]?.alpha ?? 1) : 1;
 }
 
 export class Scene {
@@ -144,6 +168,10 @@ export class Scene {
           return this.ownerOf(item.id);
         continue;
       }
+      if (item.element.type === 'frame') {
+        if (frameHit(item.element, x, y, r)) return item.id;
+        continue;
+      }
       if (item.element.type !== 'stroke') {
         if (insideBox(item.element, x, y)) return this.ownerOf(item.id);
         continue;
@@ -188,6 +216,57 @@ export class Scene {
     return hits;
   }
 
+  /**
+   * Элементы во фрейме (вместе с вложенными фреймами и их содержимым, без рисунков на стикерах —
+   * их добавляет владелец): центр рамки — внутри фрейма.
+   */
+  frameContents(frameId: string): string[] {
+    const frame = this.items.get(frameId)?.element;
+    if (frame?.type !== 'frame') return [];
+    const out: string[] = [];
+    const box = { minX: frame.x, minY: frame.y, maxX: frame.x + frame.w, maxY: frame.y + frame.h };
+    for (const id of this.index.query(box)) {
+      if (id === frameId || this.ownerOf(id) !== id) continue;
+      const item = this.items.get(id);
+      if (!item) continue;
+      const el = item.element;
+      if (el.type === 'frame') {
+        // Вложенный фрейм — только если лежит внутри целиком (внешний во внутренний не попадает).
+        if (
+          el.x >= frame.x &&
+          el.y >= frame.y &&
+          el.x + el.w <= frame.x + frame.w &&
+          el.y + el.h <= frame.y + frame.h &&
+          el.w * el.h < frame.w * frame.h
+        ) {
+          out.push(id);
+        }
+        continue;
+      }
+      if (insideFrame(frame, item.bounds)) out.push(id);
+    }
+    return out;
+  }
+
+  /** Фреймы доски: сверху вниз и слева направо. */
+  frames(): { id: string; name: string; bounds: Bounds }[] {
+    const out: { id: string; name: string; bounds: Bounds }[] = [];
+    for (const item of this.items.values()) {
+      const el = item.element;
+      if (el.type !== 'frame') continue;
+      out.push({
+        id: el.id,
+        name: el.props.name,
+        bounds: { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h },
+      });
+    }
+    return out.sort((a, b) =>
+      Math.abs(a.bounds.minY - b.bounds.minY) > 1
+        ? a.bounds.minY - b.bounds.minY
+        : a.bounds.minX - b.bounds.minX,
+    );
+  }
+
   /** Рамка всего содержимого доски. */
   contentBounds(): Bounds | null {
     let b: Bounds | null = null;
@@ -218,8 +297,8 @@ export class Scene {
   }
 
   private build(el: CanvasElement): SceneItem | null {
-    if (el.type === 'sticky' || el.type === 'text' || el.type === 'image') {
-      const bounds = boxBounds(el);
+    if (el.type === 'sticky' || el.type === 'text' || el.type === 'image' || el.type === 'frame') {
+      const bounds = el.type === 'frame' ? frameBounds(el) : boxBounds(el);
       const item: SceneItem = {
         id: el.id,
         z: el.z,
@@ -250,7 +329,7 @@ export class Scene {
       this.index.insert(el.id, bounds);
       return item;
     }
-    if (el.type !== 'stroke') return null; // картинки и фреймы — в следующих шагах
+    if (el.type !== 'stroke') return null;
     const points = decodeStroke(el.props.points).map((p) => ({
       ...p,
       x: p.x + el.x,

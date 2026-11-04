@@ -8,17 +8,18 @@
 
 import {
   boundsIntersect,
-  fillSamples,
   samplesPath,
   samplesPathInRect,
   type Bounds,
   type Sample,
 } from '@kayospace/ink';
 import { STICKY_FONT_SIZE, applyTransform, fontSizeOf, type Transform } from '@kayospace/board';
-import type { ArrowElement, CanvasElement, ShapeElement } from '@kayospace/model';
+import type { ArrowElement, CanvasElement, FrameElement, ShapeElement } from '@kayospace/model';
+import { frameTitleBand } from './frames';
 import { DEFAULT_LINE, arrowEnds, arrowHead } from './shapes';
+import { LOD_MAX_WIDTH, appendLine, lodLevel, meanRadius, simplifyLine } from './lod';
 import { screenToWorld, worldToScreen, type Camera } from './camera';
-import type { Scene, SceneItem } from './scene';
+import { strokeAlpha, type Scene, type SceneItem } from './scene';
 
 export interface Rect {
   x0: number;
@@ -32,6 +33,9 @@ export interface ThemeColors {
   ink: string;
   dot: string;
   accent: string;
+  /** Заливка и край фрейма. */
+  frame: string;
+  frameLine: string;
 }
 
 /** Штрих, который сейчас рисуется: стабильная часть и хвост (мировые координаты). */
@@ -39,6 +43,8 @@ export interface ActiveStroke {
   samples: readonly Sample[];
   tail: readonly Sample[];
   color: string | null;
+  /** Прозрачность (выделитель). */
+  alpha?: number;
 }
 
 /** Источник картинок: decoded-изображение нужного размера или null (тогда — заглушка и загрузка). */
@@ -65,6 +71,8 @@ export interface SelectionOverlay {
   ids: ReadonlySet<string>;
   /** Показывать ручки масштаба. */
   handles: boolean;
+  /** Показывать ручку поворота (фреймы не поворачиваются). */
+  rotatable?: boolean;
 }
 
 export interface PaintOverlay {
@@ -104,6 +112,16 @@ export function rotateHandleWorld(
     { x, y: top - ROTATE_HANDLE_OFFSET / zoom },
   ];
 }
+
+/** Цвета экспорта: светлая тема на белом — для печати и пересылки. */
+export const EXPORT_COLORS: ThemeColors = {
+  paper: '#ffffff',
+  ink: '#1c1f26',
+  dot: '#dcd9d0',
+  accent: '#3e63dd',
+  frame: '#ffffff',
+  frameLine: 'rgba(28, 31, 38, 0.18)',
+};
 
 /** Шаг сетки в мировых единицах при зуме 1. */
 export const GRID_STEP = 24;
@@ -191,11 +209,34 @@ export class Renderer {
   /** Размер в CSS-пикселях. */
   width = 1;
   height = 1;
-  colors: ThemeColors = { paper: '#fbfaf7', ink: '#16213a', dot: '#d9d6cf', accent: '#3e63dd' };
+  colors: ThemeColors = {
+    paper: '#fbfaf7',
+    ink: '#16213a',
+    dot: '#d9d6cf',
+    accent: '#3e63dd',
+    frame: '#ffffff',
+    frameLine: 'rgba(28, 31, 38, 0.18)',
+  };
   /** Удалось ли включить низколатентный режим (для диагностики). */
   readonly desynchronized: boolean;
 
-  private pending: Rect | null = null;
+  /** Участки, которые нужно перерисовать (пиксели устройства). */
+  private rects: Rect[] = [];
+  /** Камера, при которой нарисована картинка на канве (null — ещё ничего не нарисовано). */
+  private paintedCam: Camera | null = null;
+  /**
+   * Картинка на канве приблизительная: сдвинута на дробное число пикселей или растянута при зуме.
+   * Её нужно перерисовать начисто, когда вид перестанет меняться.
+   */
+  approx = false;
+  /**
+   * Картинка растянута CSS-трансформацией (зум на тяжёлой доске): камера, при которой она нарисована.
+   * Пока растянута, любая перерисовка — полная (она же снимает трансформацию).
+   */
+  private stretchFrom: Camera | null = null;
+  /** Сколько заняла последняя полная перерисовка, мс (JS) и когда она была (performance.now()). */
+  lastFullMs = 0;
+  lastFullAt = 0;
   private editing: string | null = null;
   private readonly widths: Record<number, Map<string, number>> = {};
   /** Откуда брать картинки (готовые к отрисовке); null — показываем заглушки. */
@@ -240,7 +281,7 @@ export class Renderer {
   }
 
   get needsPaint(): boolean {
-    return this.full || this.pending !== null;
+    return this.full || this.rects.length > 0;
   }
 
   invalidateAll(): void {
@@ -248,7 +289,106 @@ export class Renderer {
   }
 
   invalidate(r: Rect | null): void {
-    if (r) this.pending = unionRect(this.pending, r);
+    if (!r || this.full) return;
+    // Пересекающиеся и соседние участки сливаем; много участков — один общий.
+    let cur = r;
+    let merged = true;
+    while (merged) {
+      merged = false;
+      for (let i = this.rects.length - 1; i >= 0; i--) {
+        const o = this.rects[i]!;
+        if (o.x0 <= cur.x1 + 8 && o.x1 >= cur.x0 - 8 && o.y0 <= cur.y1 + 8 && o.y1 >= cur.y0 - 8) {
+          cur = unionRect(cur, o)!;
+          this.rects.splice(i, 1);
+          merged = true;
+        }
+      }
+    }
+    this.rects.push(cur);
+    if (this.rects.length > 6) this.rects = [this.rects.reduce((a, b) => unionRect(a, b)!)];
+  }
+
+  /**
+   * Перейти к новой камере, не перерисовывая всё:
+   *   - тот же масштаб и поворот — картинка сдвигается, дорисовываются открывшиеся полосы;
+   *   - другой масштаб (stretch = true) — картинка растягивается (приблизительно, approx),
+   *     чёткую перерисовку движок делает реже и в конце жеста;
+   *   - иначе — полная перерисовка.
+   */
+  moveTo(cam: Camera, stretch: boolean): void {
+    const prev = this.paintedCam;
+    if (this.full || !prev) {
+      this.full = true;
+      return;
+    }
+    const sameRot = (prev.rotation ?? 0) === (cam.rotation ?? 0);
+    if (
+      prev.x === cam.x &&
+      prev.y === cam.y &&
+      prev.zoom === cam.zoom &&
+      sameRot &&
+      !this.stretchFrom
+    ) {
+      return;
+    }
+    if (!sameRot) {
+      this.full = true;
+      return;
+    }
+    if (this.stretchFrom || prev.zoom !== cam.zoom) {
+      if (!stretch) {
+        this.full = true;
+        return;
+      }
+      // Растягивает композитор браузера (CSS-трансформация): растр канвы не трогаем вовсе.
+      // Картинка нарисована при камере prev — переводим её экран в экран новой камеры.
+      const o = worldToScreen(cam, prev.x, prev.y);
+      const k = cam.zoom / prev.zoom;
+      const style = this.canvas.style;
+      // Свой слой композитора — только на время растяжения: так трансформация не перерисовывает
+      // страницу, а в остальное время у канвы остаётся режим низкой задержки для пера (решение 0003).
+      style.willChange = 'transform';
+      style.transformOrigin = '0 0';
+      style.transform = `matrix(${k}, 0, 0, ${k}, ${o.x}, ${o.y})`;
+      this.stretchFrom = prev;
+      this.approx = true;
+      this.rects = [];
+      return;
+    }
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    // Тот же масштаб: куда на новом экране попадает левый верхний угол старого (пиксели устройства).
+    const o = worldToScreen(cam, prev.x, prev.y);
+    const dx = o.x * this.dpr;
+    const dy = o.y * this.dpr;
+    if (Math.abs(dx) >= cw * 0.8 || Math.abs(dy) >= ch * 0.8) {
+      this.full = true;
+      return;
+    }
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    // Канва копируется сама на себя (браузер сначала снимает копию источника).
+    ctx.drawImage(this.canvas, dx, dy);
+    ctx.restore();
+    if (dx !== Math.round(dx) || dy !== Math.round(dy)) this.approx = true;
+    // Ранее отмеченные участки уехали вместе с картинкой.
+    const old = this.rects;
+    this.rects = [];
+    for (const r of old) {
+      this.invalidate({
+        x0: Math.floor(r.x0 + dx),
+        y0: Math.floor(r.y0 + dy),
+        x1: Math.ceil(r.x1 + dx),
+        y1: Math.ceil(r.y1 + dy),
+      });
+    }
+    if (dx > 0) this.invalidate({ x0: 0, y0: 0, x1: Math.ceil(dx) + 2, y1: ch });
+    if (dx < 0) this.invalidate({ x0: Math.floor(cw + dx) - 2, y0: 0, x1: cw, y1: ch });
+    if (dy > 0) this.invalidate({ x0: 0, y0: 0, x1: cw, y1: Math.ceil(dy) + 2 });
+    if (dy < 0) this.invalidate({ x0: 0, y0: Math.floor(ch + dy) - 2, x1: cw, y1: ch });
+    this.paintedCam = { ...cam };
   }
 
   /** Матрица мир → пиксели устройства [a, b, c, d, e, f] (как у setTransform). */
@@ -315,25 +455,56 @@ export class Renderer {
 
   /** Нарисовать накопившиеся изменения. Возвращает долю перерисованной площади. */
   paint(cam: Camera, scene: Scene, overlay: PaintOverlay = {}): number {
-    const { active = null, ring = null, preview = null, selection = null } = overlay;
     this.editing = overlay.editing ?? null;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
-    let x = 0;
-    let y = 0;
-    let w = cw;
-    let h = ch;
-    const region = this.full ? null : this.pending;
-    if (!this.full && !region) return 0;
-    if (region) {
-      x = Math.max(0, region.x0);
-      y = Math.max(0, region.y0);
-      w = Math.min(cw, region.x1) - x;
-      h = Math.min(ch, region.y1) - y;
+    // Растянутая картинка не совпадает с камерой: частичная перерисовка легла бы криво — рисуем всё.
+    if (this.stretchFrom && this.rects.length > 0) this.full = true;
+    if (this.full) {
+      this.full = false;
+      this.rects = [];
+      this.approx = false;
+      if (this.stretchFrom) {
+        this.stretchFrom = null;
+        this.canvas.style.transform = '';
+        this.canvas.style.willChange = '';
+      }
+      const t0 = performance.now();
+      this.paintRect(cam, scene, overlay, 0, 0, cw, ch, false);
+      this.lastFullAt = performance.now();
+      this.lastFullMs = this.lastFullAt - t0;
+      this.paintedCam = { ...cam };
+      return 1;
     }
-    this.full = false;
-    this.pending = null;
-    if (w <= 0 || h <= 0) return 0;
+    const rects = this.rects;
+    this.rects = [];
+    let area = 0;
+    for (const r of rects) {
+      const x = Math.max(0, r.x0);
+      const y = Math.max(0, r.y0);
+      const w = Math.min(cw, r.x1) - x;
+      const h = Math.min(ch, r.y1) - y;
+      if (w <= 0 || h <= 0) continue;
+      this.paintRect(cam, scene, overlay, x, y, w, h, true);
+      area += w * h;
+    }
+    this.paintedCam = { ...cam };
+    return area / (cw * ch);
+  }
+
+  /** Перерисовать участок (пиксели устройства); clip — только внутри него. */
+  private paintRect(
+    cam: Camera,
+    scene: Scene,
+    overlay: PaintOverlay,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    clip: boolean,
+  ): void {
+    const { active = null, ring = null, preview = null, selection = null } = overlay;
+    const region = clip;
 
     // Участок в мировых координатах — для выбора элементов, которые его задевают.
     const view = this.deviceToWorldBounds(cam, x, y, w, h);
@@ -357,12 +528,68 @@ export class Renderer {
         const c = color ?? this.colors.ink;
         if (c !== fill) ctx.fillStyle = fill = c;
       };
+      // Тонкие на экране штрихи копятся в общие пути и рисуются одним вызовом (см. lod.ts).
+      const k = cam.zoom * this.dpr;
+      const level = lodLevel(k);
+      const tol = 2 ** level;
+      let lines: { path: Path2D; color: string; width: number; alpha: number } | null = null;
+      let dots: { path: Path2D; color: string } | null = null;
+      const flush = (): void => {
+        if (lines) {
+          ctx.strokeStyle = lines.color;
+          ctx.lineWidth = lines.width;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.globalAlpha = lines.alpha;
+          ctx.stroke(lines.path);
+          ctx.globalAlpha = 1;
+          lines = null;
+        }
+        if (dots) {
+          ctx.fillStyle = fill = dots.color;
+          ctx.fill(dots.path);
+          dots = null;
+        }
+      };
       for (const item of scene.query(view)) {
         if (preview?.ids.has(item.id)) continue;
+        if (item.element.type === 'stroke') {
+          const color = item.color ?? this.colors.ink;
+          const b = item.bounds;
+          if ((b.maxX - b.minX) * cam.zoom < 1.5 && (b.maxY - b.minY) * cam.zoom < 1.5) {
+            // Совсем мелкий на экране штрих — точкой.
+            if (lines || (dots && dots.color !== color)) flush();
+            dots ??= { path: new Path2D(), color };
+            const sz = 1.5 / cam.zoom;
+            dots.path.rect((b.minX + b.maxX - sz) / 2, (b.minY + b.maxY - sz) / 2, sz, sz);
+            continue;
+          }
+          item.meanR ??= meanRadius(item.samples);
+          const px = item.meanR * 2 * k;
+          if (px <= LOD_MAX_WIDTH) {
+            // Толщина — шагами в четверть пикселя: соседние штрихи попадают в один путь.
+            const width = Math.max(0.5, Math.round(px * 4) / 4) / k;
+            const alpha = strokeAlpha(item.element);
+            if (
+              dots ||
+              (lines && (lines.color !== color || lines.width !== width || lines.alpha !== alpha))
+            ) {
+              flush();
+            }
+            if (item.lod?.level !== level) {
+              item.lod = { level, pts: simplifyLine(item.samples, tol) };
+            }
+            lines ??= { path: new Path2D(), color, width, alpha };
+            appendLine(lines.path, item.lod.pts);
+            continue;
+          }
+        }
+        flush();
         setFill(item.color);
         this.drawItem(item, cam.zoom);
         if (item.element.type !== 'stroke') fill = ''; // стикер и фигура сами меняют fillStyle
       }
+      flush();
       if (overlay.ai && overlay.ai.deleted.length > 0) {
         // Что ИИ предлагает удалить — бледным.
         ctx.globalAlpha = 0.22;
@@ -396,14 +623,23 @@ export class Renderer {
           : active.samples.length > 0
             ? samplesPath(active.samples)
             : null;
-        if (stable) ctx.fill(stable, 'nonzero');
-        if (active.tail.length > 0 && boundsIntersect(samplesWorldBounds(active.tail)!, view)) {
-          fillSamples(ctx, active.tail, fill);
+        const tail =
+          active.tail.length > 0 && boundsIntersect(samplesWorldBounds(active.tail)!, view)
+            ? samplesPath(active.tail)
+            : null;
+        // Одной заливкой: у полупрозрачного выделителя стык с хвостом не темнеет.
+        const path = stable ?? tail;
+        if (path && stable && tail) path.addPath(tail);
+        if (path) {
+          ctx.globalAlpha = active.alpha ?? 1;
+          ctx.fill(path, 'nonzero');
+          ctx.globalAlpha = 1;
         }
       }
       if (overlay.draft) {
         const d = overlay.draft;
         if (d.type === 'shape' || d.type === 'arrow') this.drawShape(d, d.style.color ?? null);
+        if (d.type === 'frame') this.drawFrame(d, cam.zoom);
       }
       if (ring) {
         ctx.beginPath();
@@ -462,7 +698,6 @@ export class Renderer {
     } finally {
       ctx.restore();
     }
-    return (w * h) / (cw * ch);
   }
 
   private drawItem(item: SceneItem, zoom: number): void {
@@ -491,6 +726,10 @@ export class Renderer {
       this.drawShape(el as ArrowElement, item.color, item.ends);
       return;
     }
+    if (type === 'frame') {
+      this.drawFrame(el as FrameElement, zoom);
+      return;
+    }
     // Совсем мелкий на экране элемент — точкой: контур из сотен кругов там всё равно не виден.
     if ((b.maxX - b.minX) * zoom < 1.5 && (b.maxY - b.minY) * zoom < 1.5) {
       const s = 1.5 / zoom;
@@ -498,7 +737,10 @@ export class Renderer {
       return;
     }
     item.path ??= samplesPath(item.samples);
+    const alpha = strokeAlpha(el);
+    if (alpha !== 1) ctx.globalAlpha = alpha;
     ctx.fill(item.path, 'nonzero');
+    if (alpha !== 1) ctx.globalAlpha = 1;
   }
 
   private drawImage(item: SceneItem, zoom: number): void {
@@ -569,7 +811,12 @@ export class Renderer {
    * Нарисовать участок мира в отдельную канву (масштаб k пикселей на единицу мира), без сетки.
    * Для картинки, которую видит ИИ. Видимую канву не трогает.
    */
-  exportRegion(scene: Scene, area: Bounds, k: number): HTMLCanvasElement | null {
+  exportRegion(
+    scene: Scene,
+    area: Bounds,
+    k: number,
+    colors: ThemeColors | null = null,
+  ): HTMLCanvasElement | null {
     const w = Math.round((area.maxX - area.minX) * k);
     const h = Math.round((area.maxY - area.minY) * k);
     if (!(w >= 1 && h >= 1) || w > 8192 || h > 8192) return null;
@@ -585,15 +832,23 @@ export class Renderer {
       width: this.width,
       height: this.height,
       full: this.full,
-      pending: this.pending,
+      rects: this.rects,
+      paintedCam: this.paintedCam,
+      stretchFrom: this.stretchFrom,
+      approx: this.approx,
+      lastFullMs: this.lastFullMs,
+      lastFullAt: this.lastFullAt,
+      colors: this.colors,
     };
+    if (colors) this.colors = colors;
     this.canvas = c;
     this.ctx = ctx;
     this.dpr = 1;
     this.width = w;
     this.height = h;
     this.full = true;
-    this.pending = null;
+    this.rects = [];
+    this.stretchFrom = null;
     this.noGrid = true;
     try {
       this.paint({ x: area.minX, y: area.minY, zoom: k, rotation: 0 }, scene, {});
@@ -604,7 +859,13 @@ export class Renderer {
       this.width = saved.width;
       this.height = saved.height;
       this.full = saved.full;
-      this.pending = saved.pending;
+      this.rects = saved.rects;
+      this.paintedCam = saved.paintedCam;
+      this.stretchFrom = saved.stretchFrom;
+      this.approx = saved.approx;
+      this.lastFullMs = saved.lastFullMs;
+      this.lastFullAt = saved.lastFullAt;
+      this.colors = saved.colors;
       this.noGrid = false;
     }
     return c;
@@ -663,6 +924,7 @@ export class Renderer {
       ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
       ctx.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
     }
+    if (sel.rotatable === false) return;
     // Ручка поворота — над серединой верхней стороны.
     const [top, rot] = rotateHandleWorld(sel.bounds, zoom).map((p) => {
       const q = t ? applyTransform(t, p.x, p.y) : p;
@@ -677,6 +939,32 @@ export class Renderer {
     ctx.fillStyle = this.colors.paper;
     ctx.fill();
     ctx.stroke();
+  }
+
+  /** Фрейм: светлая подложка, тонкий край (1 пиксель экрана) и название над верхней стороной. */
+  private drawFrame(el: FrameElement, zoom: number): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = this.colors.frame;
+    ctx.fillRect(el.x, el.y, el.w, el.h);
+    ctx.strokeStyle = this.colors.frameLine;
+    ctx.lineWidth = 1 / zoom;
+    ctx.strokeRect(el.x, el.y, el.w, el.h);
+    const size = el.style.size ?? 14;
+    if (size * zoom < 4) return; // название неразличимо
+    const band = frameTitleBand(el);
+    ctx.font = `500 ${size}px ${NOTE_FONT}`;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = this.colors.ink;
+    ctx.globalAlpha = 0.62;
+    // Длинное название обрезаем по ширине фрейма.
+    let name = el.props.name || 'Фрейм';
+    const max = el.w;
+    if (ctx.measureText(name).width > max) {
+      while (name.length > 1 && ctx.measureText(name + '…').width > max) name = name.slice(0, -1);
+      name += '…';
+    }
+    ctx.fillText(name, el.x, el.y - band / 2);
+    ctx.globalAlpha = 1;
   }
 
   /** Прямоугольник, эллипс, линия или стрелка. */

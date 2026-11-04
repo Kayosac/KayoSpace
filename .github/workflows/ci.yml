@@ -102,6 +102,9 @@ jobs:
       - name: Режим разработки (pnpm dev с локальным хабом)
         run: pnpm --filter @kayospace/e2e e2e:dev
 
+      - name: Скорость холста (доска на 20 000 объектов)
+        run: pnpm --filter @kayospace/e2e e2e:bench
+
       - name: Отчёт о проверке
         if: always()
         uses: actions/upload-artifact@v4

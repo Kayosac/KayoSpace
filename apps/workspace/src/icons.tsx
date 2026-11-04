@@ -210,3 +210,46 @@ export const ScanIcon = () => (
     <path d="M4 12h16" />
   </Svg>
 );
+
+export const FrameIcon = () => (
+  <Svg>
+    <path d="M7 3v18M17 3v18M3 7h18M3 17h18" />
+  </Svg>
+);
+
+export const MarkerIcon = () => (
+  <Svg>
+    <path d="M15 4l5 5-9.5 9.5H6v-4.5z" />
+    <path d="M4 21h7" />
+  </Svg>
+);
+
+export const HighlighterIcon = () => (
+  <Svg>
+    <path d="M9 14l-2 2v3h3l2-2" />
+    <path d="M9 14l6-10 5 5-10 6z" />
+    <path d="M3 21h8" />
+  </Svg>
+);
+
+export const MoreIcon = () => (
+  <Svg>
+    <circle cx="5.5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="18.5" cy="12" r="1" />
+  </Svg>
+);
+
+export const MapIcon = () => (
+  <Svg>
+    <rect x="3.5" y="5" width="17" height="14" rx="2" />
+    <rect x="12" y="11" width="6" height="5" rx="1" />
+  </Svg>
+);
+
+export const ExportIcon = () => (
+  <Svg>
+    <path d="M12 15V4M8 8l4-4 4 4" />
+    <path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" />
+  </Svg>
+);

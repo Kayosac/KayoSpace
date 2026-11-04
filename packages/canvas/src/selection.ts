@@ -25,6 +25,18 @@ const center = (b: Bounds): Pt => ({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.ma
 /** Попал ли элемент в лассо: штрих — если внутри хотя бы половина его длины, остальное — по центру. */
 export function itemInLasso(item: SceneItem, poly: readonly Pt[]): boolean {
   if (poly.length < 3) return false;
+  const el = item.element;
+  if (el.type === 'frame') {
+    // Фрейм — только если обведён целиком (иначе лассо внутри фрейма выделяло бы и его).
+    return (
+      [
+        [el.x, el.y],
+        [el.x + el.w, el.y],
+        [el.x + el.w, el.y + el.h],
+        [el.x, el.y + el.h],
+      ] as const
+    ).every(([x, y]) => pointInPolygon(x, y, poly));
+  }
   const s = item.samples;
   if (item.element.type !== 'stroke' || s.length === 0) {
     const c = center(item.bounds);
@@ -44,6 +56,11 @@ export function itemInLasso(item: SceneItem, poly: readonly Pt[]): boolean {
 export function itemInRect(item: SceneItem, r: Bounds): boolean {
   const b = item.bounds;
   if (b.maxX < r.minX || b.minX > r.maxX || b.maxY < r.minY || b.minY > r.maxY) return false;
+  const el = item.element;
+  if (el.type === 'frame') {
+    // Фрейм — только если рамка охватывает его целиком.
+    return el.x >= r.minX && el.x + el.w <= r.maxX && el.y >= r.minY && el.y + el.h <= r.maxY;
+  }
   if (item.element.type !== 'stroke') return true;
   return item.samples.some(
     (s) => s.x + s.r >= r.minX && s.x - s.r <= r.maxX && s.y + s.r >= r.minY && s.y - s.r <= r.maxY,

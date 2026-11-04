@@ -16,6 +16,11 @@ import { NoteEditor } from './NoteEditor';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
+import { Minimap } from './Minimap';
+import { fileName, saveFile } from './save';
+import { useWorkspace } from './projects';
+import { addProject, removeProject, renameProject, setBoardProject } from '@kayospace/board';
+import type { ExportTarget } from '@kayospace/canvas';
 import { SelectionMenu } from './SelectionMenu';
 import { AiController, type AiAction, type AiState } from './ai';
 import { AiBar } from './AiBar';
@@ -69,6 +74,14 @@ export function App() {
   const [panel, setPanel] = useState<'settings' | 'boards' | null>(null);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Сообщение внизу экрана; ms = 0 — пока не заменят другим. */
+  const showToast = useCallback((text: string | null, ms = 4000) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setToast(text);
+    if (text && ms > 0) toastTimer.current = setTimeout(() => setToast(null), ms);
+  }, []);
   const ai = useMemo(() => new AiController(), []);
   const [aiPrompt, setAiPrompt] = useState(false);
   /** Название новой доски — запишем в неё, когда она откроется. */
@@ -152,6 +165,9 @@ export function App() {
   const hub = conn.hub;
   const hubUrl = hub?.url ?? '';
   const hubToken = hub?.token ?? '';
+  // Проекты и то, в каком проекте какая доска.
+  const workspace = useWorkspace(hubUrl ? { url: hubUrl, token: hubToken } : null);
+  const wsDoc = workspace.session?.doc ?? null;
 
   // Доска: пересоздаётся при смене доски или подключения к хабу.
   const { board } = settings;
@@ -188,6 +204,7 @@ export function App() {
       size: s.size,
       eraserSize: s.eraserSize,
       shapeKind: s.shapeKind,
+      penKind: s.penKind,
       stickyColor: s.stickyColor,
       touchDraws: s.touchDraws,
       rotateWithFingers: s.rotateWithFingers,
@@ -246,6 +263,7 @@ export function App() {
       s.size !== engineState.size ||
       s.eraserSize !== engineState.eraserSize ||
       s.shapeKind !== engineState.shapeKind ||
+      s.penKind !== engineState.penKind ||
       s.stickyColor !== engineState.stickyColor
     ) {
       update({
@@ -254,6 +272,7 @@ export function App() {
         size: engineState.size,
         eraserSize: engineState.eraserSize,
         shapeKind: engineState.shapeKind,
+        penKind: engineState.penKind,
         stickyColor: engineState.stickyColor,
       });
     }
@@ -271,12 +290,15 @@ export function App() {
   const openBoard = useCallback(
     (id: string, name: string | null, isNew: boolean) => {
       if (isNew && name) pendingName.current = { id, name };
+      // Новая доска — в выбранный в списке проект.
+      const project = settingsRef.current.project;
+      if (isNew && project && wsDoc) setBoardProject(wsDoc, id, project);
       engine?.finishEditing(null);
       const s = settingsRef.current;
       update({ board: id, recentBoards: touchRecent(s.recentBoards, id, name) });
       setPanel(null);
     },
-    [engine, update],
+    [engine, update, wsDoc],
   );
 
   // Ctrl/⌘ K — список досок.
@@ -312,6 +334,41 @@ export function App() {
   }, [engine, aiState]);
   // Сменили доску — задача прошлой доски больше не нужна.
   useEffect(() => () => ai.cancel(), [ai, board]);
+
+  /** Сохранить доску, фрейм или выделенное в PNG, доску — в PDF (по странице на фрейм). */
+  const exportTo = useCallback(
+    async (target: ExportTarget | 'pdf') => {
+      if (!engine) return;
+      const title = boardName ?? board;
+      showToast('Готовлю файл…', 0);
+      try {
+        let saved: boolean;
+        if (target === 'pdf') {
+          const pdf = await engine.exportPdf(title);
+          if (!pdf) throw new Error('На доске пока ничего нет');
+          saved = await saveFile(pdf, fileName(title, 'pdf'), 'application/pdf');
+        } else {
+          const png = await engine.exportPng(target);
+          if (!png) throw new Error('Нечего сохранять');
+          const frameName =
+            typeof target === 'object'
+              ? engine.getFrames().find((f) => f.id === target.frame)?.name
+              : undefined;
+          const name =
+            target === 'selection'
+              ? `${title} — выделенное`
+              : frameName
+                ? `${title} — ${frameName}`
+                : title;
+          saved = await saveFile(png, fileName(name, 'png'), 'image/png');
+        }
+        showToast(saved ? 'Файл сохранён' : null, 2500);
+      } catch (e) {
+        showToast(e instanceof Error ? `Не сохранилось: ${e.message}` : 'Не сохранилось');
+      }
+    },
+    [engine, board, boardName, showToast],
+  );
 
   /** Почему ИИ недоступен (null — доступен). */
   const aiBlocked: string | null = !hubUrl
@@ -392,8 +449,7 @@ export function App() {
           );
           offset += 24;
         } catch (e) {
-          setToast(e instanceof Error ? e.message : 'Картинку не удалось вставить');
-          setTimeout(() => setToast(null), 4000);
+          showToast(e instanceof Error ? e.message : 'Картинку не удалось вставить');
         }
       }
     },
@@ -514,8 +570,15 @@ export function App() {
       </header>
       <div className="top top-right">
         {engine && engineState && (
-          <ZoomControls engine={engine} zoom={engineState.zoom} rotation={engineState.rotation} />
+          <ZoomControls
+            engine={engine}
+            zoom={engineState.zoom}
+            rotation={engineState.rotation}
+            minimap={settings.minimap}
+            onMinimap={() => update({ minimap: !settings.minimap })}
+          />
         )}
+        {engine && settings.minimap && <Minimap engine={engine} />}
       </div>
       {engine && engineState && (
         <SelectionMenu
@@ -524,6 +587,7 @@ export function App() {
           ai={aiBlocked}
           onAi={(a) => void runAi(a)}
           onAiPrompt={() => setAiPrompt(true)}
+          onExport={(t) => void exportTo(t)}
         />
       )}
       {aiState && (
@@ -567,6 +631,31 @@ export function App() {
           hub={hubUrl ? { url: hubUrl, token: hubToken } : null}
           onOpen={openBoard}
           onRename={(n) => session?.rename(n)}
+          frames={engine?.getFrames() ?? []}
+          onFrame={(id) => {
+            engine?.goToFrame(id);
+            setPanel(null);
+          }}
+          onExport={(t) => void exportTo(t)}
+          projects={workspace.projects}
+          membership={workspace.membership}
+          project={
+            settings.project && workspace.projects.some((p) => p.id === settings.project)
+              ? settings.project
+              : null
+          }
+          onProject={(id) => update({ project: id })}
+          onCreateProject={(name) => {
+            if (!wsDoc) return;
+            const id = addProject(wsDoc, name);
+            update({ project: id });
+          }}
+          onRenameProject={(id, name) => wsDoc && renameProject(wsDoc, id, name)}
+          onDeleteProject={(id) => {
+            if (wsDoc) removeProject(wsDoc, id);
+            update({ project: null });
+          }}
+          onMoveBoard={(project) => wsDoc && setBoardProject(wsDoc, board, project)}
           onClose={() => setPanel(null)}
         />
       )}
