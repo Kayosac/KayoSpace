@@ -1,0 +1,36 @@
+# Хаб Kayospace на VPS: хаб + Caddy (автоматический HTTPS от Let's Encrypt).
+# Переменные берутся из deploy/.env (его создаёт setup.sh).
+name: kayospace
+
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: deploy/hub.Dockerfile
+    restart: unless-stopped
+    environment:
+      HUB_TOKEN: ${HUB_TOKEN:?Задайте HUB_TOKEN в deploy/.env}
+      PUBLIC_HOST: ${HUB_DOMAIN:?Задайте HUB_DOMAIN в deploy/.env}
+    volumes:
+      - hub-data:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      HUB_DOMAIN: ${HUB_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - hub
+
+volumes:
+  hub-data:
+  caddy-data:
+  caddy-config:

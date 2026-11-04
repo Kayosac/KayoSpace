@@ -8,6 +8,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import type * as Y from 'yjs';
 import { handleMessage, isValidBoardId, step1Message, updateMessage } from '@kayospace/sync';
+import { CLOSE_UNAUTHORIZED, requestToken, tokenMatches } from './auth';
 import type { BoardStore } from './store';
 
 export interface SyncServer {
@@ -16,7 +17,11 @@ export interface SyncServer {
   close(): Promise<void>;
 }
 
-export function attachSync(server: Server, store: BoardStore): SyncServer {
+export function attachSync(
+  server: Server,
+  store: BoardStore,
+  opts: { token?: string } = {},
+): SyncServer {
   const wss = new WebSocketServer({ noServer: true });
   const rooms = new Map<string, Set<WebSocket>>();
   const watched = new WeakSet<Y.Doc>();
@@ -82,7 +87,13 @@ export function attachSync(server: Server, store: BoardStore): SyncServer {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, id));
+    const allowed = !opts.token || tokenMatches(requestToken(req, url), opts.token);
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      // Неверный токен: принимаем соединение и сразу закрываем с кодом 4401 —
+      // браузер не показывает HTTP-статус отказа, а код закрытия клиент увидит.
+      if (!allowed) ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
+      else onConnection(ws, id);
+    });
   };
   server.on('upgrade', onUpgrade);
 

@@ -31,13 +31,21 @@ export interface LinkHandlers {
 }
 
 /**
- * Адрес хаба из того, что ввёл человек: «192.168.1.10:4000», «ws://host:4000», «http://host:4000».
+ * Адрес хаба из того, что ввёл человек: «192.168.1.10:4000», «hub.example.com», «https://…».
+ * Голый домен без порта считается хабом за HTTPS (wss://), IP или адрес с портом — локальным (ws://).
  * null — если адрес или имя доски не подходят.
  */
-export function hubSyncUrl(input: string, board: string): string | null {
+export function hubSyncUrl(input: string, board: string, token = ''): string | null {
   const raw = input.trim();
   if (!raw || !isValidBoardId(board)) return null;
-  const withScheme = /^[a-z]+:\/\//i.test(raw) ? raw : `ws://${raw}`;
+  const hasScheme = /^[a-z]+:\/\//i.test(raw);
+  const looksPublic =
+    !hasScheme &&
+    !/:\d+$/.test(raw) &&
+    !/^[\d.]+$/.test(raw) &&
+    raw !== 'localhost' &&
+    !raw.endsWith('.local');
+  const withScheme = hasScheme ? raw : looksPublic ? `wss://${raw}` : `ws://${raw}`;
   let url: URL;
   try {
     url = new URL(withScheme);
@@ -48,7 +56,8 @@ export function hubSyncUrl(input: string, board: string): string | null {
   if (url.protocol === 'https:') url.protocol = 'wss:';
   if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null;
   if (!url.port && url.protocol === 'ws:') url.port = '4000';
-  return `${url.protocol}//${url.host}/sync/${board}`;
+  const q = token.trim() ? `?token=${encodeURIComponent(token.trim())}` : '';
+  return `${url.protocol}//${url.host}/sync/${board}${q}`;
 }
 
 export class BoardLink {

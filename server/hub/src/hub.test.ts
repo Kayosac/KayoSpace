@@ -1,4 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
+import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -182,5 +184,119 @@ describe('MCP', () => {
     const missing = await client.callTool({ name: 'read_board', arguments: { board: 'nope' } });
     expect((missing as { isError?: boolean }).isError).toBe(true);
     await client.close();
+  });
+});
+
+describe('доступ по токену', () => {
+  const TOKEN = 'test-token-123';
+
+  beforeEach(async () => {
+    await hub.close();
+    hub = await startHub({
+      dataDir: dir,
+      port: 0,
+      host: '127.0.0.1',
+      saveDelayMs: 20,
+      token: TOKEN,
+    });
+  });
+
+  function connectWith(board: string, token?: string): { doc: Y.Doc; client: SyncClient } {
+    const doc = createBoardDoc();
+    const q = token ? `?token=${encodeURIComponent(token)}` : '';
+    const client = new SyncClient(doc, {
+      url: `ws://127.0.0.1:${hub.port}/sync/${board}${q}`,
+      WebSocket: WebSocket as unknown as WebSocketCtor,
+      minDelayMs: 30,
+    });
+    clients.push(client);
+    return { doc, client };
+  }
+
+  it('health открыт, REST требует токен', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    const health = await (await fetch(`${base}/health`)).json();
+    expect(health).toMatchObject({ ok: true, auth: true });
+    expect((await fetch(`${base}/api/boards`)).status).toBe(401);
+    const ok = await fetch(`${base}/api/boards`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(ok.status).toBe(200);
+  });
+
+  it('синхронизация без токена получает отказ и не переподключается', async () => {
+    const bad = connectWith('secure', 'wrong');
+    await bad.client.waitFor('unauthorized');
+    expect(bad.client.lastError).toBe('unauthorized');
+    const good = connectWith('secure', TOKEN);
+    await good.client.waitFor('synced');
+  });
+
+  it('MCP требует Bearer-токен', async () => {
+    const url = new URL(`http://127.0.0.1:${hub.port}/mcp`);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    expect(res.status).toBe(401);
+
+    const client = new Client({ name: 'auth-test', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(url, {
+        requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
+      }),
+    );
+    const { tools } = await client.listTools();
+    expect(tools.length).toBe(4);
+    await client.close();
+  });
+
+  it('MCP отвергает чужой Host', async () => {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port: hub.port,
+          path: '/mcp',
+          method: 'POST',
+          headers: {
+            Host: 'evil.example.com',
+            Authorization: `Bearer ${TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(status).toBe(403);
+  });
+});
+
+describe('клиент синхронизации', () => {
+  it('не висит вечно, если хаб не отвечает', async () => {
+    // TCP-сервер, который принимает соединение и молчит — как файрвол, глотающий пакеты.
+    const sockets: Socket[] = [];
+    const silent = createTcpServer((socket) => sockets.push(socket));
+    await new Promise<void>((r) => silent.listen(0, '127.0.0.1', () => r()));
+    const port = (silent.address() as AddressInfo).port;
+    const client = new SyncClient(createBoardDoc(), {
+      url: `ws://127.0.0.1:${port}/sync/x`,
+      WebSocket: WebSocket as unknown as WebSocketCtor,
+      connectTimeoutMs: 300,
+      minDelayMs: 5000,
+    });
+    clients.push(client);
+    await client.waitFor('offline', 3000);
+    expect(client.lastError).toBe('timeout');
+    client.destroy();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((r) => silent.close(() => r()));
   });
 });

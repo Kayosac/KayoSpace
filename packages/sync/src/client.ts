@@ -15,13 +15,26 @@ export interface WebSocketLike {
   close(code?: number, reason?: string): void;
   onopen: ((ev: unknown) => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
-  onclose: ((ev: unknown) => void) | null;
+  onclose: ((ev: { code?: number; reason?: string }) => void) | null;
   onerror: ((ev: unknown) => void) | null;
 }
 
 export type WebSocketCtor = new (url: string) => WebSocketLike;
 
-export type SyncStatus = 'connecting' | 'connected' | 'synced' | 'offline' | 'stopped';
+export type SyncStatus =
+  | 'connecting'
+  | 'connected'
+  | 'synced'
+  | 'offline'
+  /** Хаб отклонил токен — переподключаться бессмысленно, пока токен не исправят. */
+  | 'unauthorized'
+  | 'stopped';
+
+/** Почему соединения нет — чтобы показать человеку понятную причину. */
+export type SyncError = 'timeout' | 'closed' | 'unauthorized' | 'invalid-url';
+
+/** Код закрытия, которым хаб сообщает о неверном токене. */
+export const CLOSE_UNAUTHORIZED = 4401;
 
 export interface SyncClientOptions {
   /** Адрес вида ws://host:4000/sync/<id доски>. */
@@ -31,13 +44,18 @@ export interface SyncClientOptions {
   maxDelayMs?: number;
   /** Подключиться сразу (по умолчанию да). */
   connect?: boolean;
+  /** Сколько ждать открытия соединения, прежде чем считать хаб недоступным (по умолчанию 8 с). */
+  connectTimeoutMs?: number;
 }
 
 const OPEN = 1;
 
 export class SyncClient {
   status: SyncStatus = 'offline';
+  /** Причина последнего разрыва или неудачной попытки. */
+  lastError: SyncError | null = null;
   private ws: WebSocketLike | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private delay: number;
   private stopped = false;
@@ -88,13 +106,34 @@ export class SyncClient {
     try {
       ws = new this.Ctor(this.opts.url);
     } catch {
+      // Например, адрес с ошибкой или ws:// со страницы по HTTPS — браузер отказывает сразу.
+      this.lastError = 'invalid-url';
+      this.setStatus('offline');
       this.scheduleReconnect();
       return;
     }
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
+    let timedOut = false;
+    this.connectTimer = setTimeout(() => {
+      // Пакеты могут молча теряться (файрвол, изоляция в сети) — тогда браузер ждёт минутами.
+      timedOut = true;
+      try {
+        ws.close();
+      } catch {
+        /* уже закрыт */
+      }
+      if (this.ws === ws) {
+        this.ws = null;
+        this.lastError = 'timeout';
+        this.setStatus('offline');
+        this.scheduleReconnect();
+      }
+    }, this.opts.connectTimeoutMs ?? 8000);
     ws.onopen = () => {
+      this.clearConnectTimer();
       this.delay = this.opts.minDelayMs ?? 500;
+      this.lastError = null;
       this.setStatus('connected');
       ws.send(step1Message(this.doc));
     };
@@ -109,9 +148,17 @@ export class SyncClient {
         console.error('[sync] не удалось обработать сообщение', err);
       }
     };
-    ws.onclose = () => {
-      if (this.ws === ws) this.ws = null;
+    ws.onclose = (ev) => {
+      this.clearConnectTimer();
+      if (this.ws !== ws) return; // это соединение уже заменено или отменено по таймауту
+      this.ws = null;
       if (this.stopped) return;
+      if (ev?.code === CLOSE_UNAUTHORIZED) {
+        this.lastError = 'unauthorized';
+        this.setStatus('unauthorized');
+        return;
+      }
+      this.lastError = timedOut ? 'timeout' : 'closed';
       this.setStatus('offline');
       this.scheduleReconnect();
     };
@@ -124,6 +171,7 @@ export class SyncClient {
   disconnect(): void {
     this.stopped = true;
     this.clearRetry();
+    this.clearConnectTimer();
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -158,6 +206,11 @@ export class SyncClient {
       this.retryTimer = null;
       this.connect();
     }, wait);
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   private clearRetry(): void {
