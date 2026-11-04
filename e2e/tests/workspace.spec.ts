@@ -122,8 +122,8 @@ test('офлайн: доска сохраняется на устройстве 
   await expect.poll(() => elements(page)).toBe(2);
   expect(await hubElements(request, board)).toBe(0);
 
-  // Включаем синхронизацию через панель настроек.
-  await page.getByTestId('sync').click();
+  // Включаем синхронизацию через панель настроек (шестерёнка на панели инструментов).
+  await page.getByRole('button', { name: 'Настройки' }).click();
   await page.getByLabel('Синхронизировать через хаб').check();
   await page.getByLabel('Адрес хаба').fill(HUB_ADDRESS);
   await page.getByLabel('Токен').fill(HUB_TOKEN);

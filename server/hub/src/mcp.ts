@@ -226,15 +226,14 @@ export function createMcp(store: BoardStore) {
           if (next.type !== 'sticky' && next.type !== 'text') {
             return fail('Текст есть только у стикеров и надписей.');
           }
-          const sticky = next.type === 'sticky';
-          next = {
-            ...next,
-            props: { ...next.props, content },
-            h: estimateNoteHeight(content, next.w, {
-              sticky,
-              ...(next.style.size ? { fontSize: next.style.size } : {}),
-            }),
-          };
+          const h = estimateNoteHeight(content, next.w, {
+            sticky: next.type === 'sticky',
+            ...(next.style.size ? { fontSize: next.style.size } : {}),
+          });
+          next =
+            next.type === 'sticky'
+              ? { ...next, h, props: { ...next.props, content } }
+              : { ...next, h, props: { ...next.props, content } };
         }
         doc.transact(() => elementsMap(doc).set(id, next), MCP_ORIGIN);
         return text(`Элемент ${id} изменён.`);
