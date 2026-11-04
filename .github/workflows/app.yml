@@ -70,11 +70,38 @@ jobs:
           pnpm --filter @kayospace/app tauri android init --ci
           pnpm --filter @kayospace/app tauri icon app-icon.png
 
-      - name: Сборка APK (debug, ARM64)
-        # Debug-сборка подписана отладочным ключом, поэтому её можно сразу поставить на планшет.
+      - name: Подпись APK постоянным ключом
+        id: signing
+        # Ключ из секретов (решение 0011): новая версия ставится поверх старой, только если ключ тот же.
+        # Нет ключа — debug-сборка с отладочным ключом этой машины (поверх прежней не встанет).
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "::warning::Нет ANDROID_KEYSTORE — debug-сборка, обновить поверх прежней версии не получится"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/kayospace.jks"
+          node apps/app/scripts/android-signing.mjs apps/app/src-tauri/gen/android "$RUNNER_TEMP/kayospace.jks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка APK (ARM64)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-          pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            pnpm --filter @kayospace/app tauri android build --apk --target aarch64
+          else
+            pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
+          fi
+
+      - name: Подпись APK — проверка
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          test -n "$APK" || { echo "::error::Нет release APK"; exit 1; }
+          "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner" verify --print-certs "$APK" | head -3
 
       - name: Понятное имя файла
         run: |

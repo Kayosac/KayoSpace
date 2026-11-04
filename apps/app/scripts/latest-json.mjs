@@ -6,6 +6,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
@@ -38,7 +39,7 @@ export function latestJson(files, tag, repo, readSig = (p) => readFileSync(p, 'u
   };
 }
 
-if (process.argv[1] && import.meta.url.endsWith(basename(process.argv[1]))) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [dir, tag, repo] = process.argv.slice(2);
   if (!dir || !tag || !repo) {
     console.error('node latest-json.mjs <папка> <тег> <owner/repo>');
