@@ -623,7 +623,7 @@ function logPointer(e: PointerEvent): void {
     moveKind.delete(e.pointerId);
   }
   lastEventLabel = shortType[e.type] ?? e.type;
-  logEvent(`${lastEventLabel} ${who} ${state}${e.target === stage ? '' : ' (вне холста)'}`);
+  logEvent(`${lastEventLabel} ${who} ${state}${e.target instanceof Node && stage.contains(e.target) ? '' : ' (вне холста)'}`);
 }
 for (const type of Object.keys(shortType)) {
   window.addEventListener(type, logPointer as EventListener, true);

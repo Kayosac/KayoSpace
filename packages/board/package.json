@@ -1,0 +1,24 @@
+{
+  "name": "@kayospace/board",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Доска на Yjs: элементы, изменения, экспорт для агентов",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kayospace/model": "workspace:*",
+    "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  }
+}

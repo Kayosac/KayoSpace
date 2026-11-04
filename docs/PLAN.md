@@ -40,7 +40,7 @@ Claude Code подключается по MCP (stdio или HTTP) и допол�
 - [x] Монорепо, TypeScript strict, ESLint/Prettier, Vitest
 - [x] Pen Lab: стенд замера пера (браузер)
 - [x] Оболочка Tauri 2 (macOS, Windows, Android)
-- [ ] Замер пера на планшете: браузер и APK, сравнение с Samsung Notes (см. `docs/pen-lab.md`)
+- [x] Замер пера на планшете: WebView справляется, нативный слой не нужен (решение 0003)
 - [ ] Спайк синка: два клиента + Hocuspocus, офлайн-правки и слияние
 - [ ] Спайк MCP: сервер с `list_boards` и `read_board`, подключение из Claude Code и ChatGPT
 - [x] CI на GitHub Actions: проверки на каждый пуш, сборка APK/macOS/Windows по кнопке
