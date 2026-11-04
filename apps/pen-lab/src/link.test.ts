@@ -11,6 +11,14 @@ describe('адрес хаба', () => {
     expect(hubSyncUrl('192.168.1.10', 'b')).toBe('ws://192.168.1.10:4000/sync/b');
     expect(hubSyncUrl('http://mac.local:5000', 'b')).toBe('ws://mac.local:5000/sync/b');
     expect(hubSyncUrl('https://hub.example.com', 'b')).toBe('wss://hub.example.com/sync/b');
+    expect(hubSyncUrl('1-2-3-4.sslip.io', 'b')).toBe('wss://1-2-3-4.sslip.io/sync/b');
+    expect(hubSyncUrl('localhost:4000', 'b')).toBe('ws://localhost:4000/sync/b');
+  });
+
+  it('добавляет токен', () => {
+    expect(hubSyncUrl('hub.example.com', 'b', 'a b&c')).toBe(
+      'wss://hub.example.com/sync/b?token=a%20b%26c',
+    );
   });
 
   it('отвергает плохой ввод', () => {

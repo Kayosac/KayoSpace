@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Установка и обновление хаба Kayospace на VPS (Ubuntu/Debian).
+#
+#   curl -fsSL https://raw.githubusercontent.com/Kayosac/KayoSpace/main/deploy/setup.sh | sudo bash
+#
+# Повторный запуск обновляет код и перезапускает хаб; токен и данные сохраняются.
+# Переменные (необязательно): HUB_DOMAIN — свой домен вместо <IP>.sslip.io, BRANCH, DIR, REPO.
+set -euo pipefail
+
+REPO="${REPO:-https://github.com/Kayosac/KayoSpace.git}"
+BRANCH="${BRANCH:-main}"
+DIR="${DIR:-/opt/kayospace}"
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+fail() { printf '\n\033[31mОшибка: %s\033[0m\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || fail "запустите от root: … | sudo bash"
+
+say "1/5 Docker"
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+docker compose version >/dev/null 2>&1 || fail "нет docker compose — обновите Docker"
+
+say "2/5 Код Kayospace ($BRANCH)"
+if ! command -v git >/dev/null 2>&1; then
+  apt-get update -qq && apt-get install -y -qq git
+fi
+if [ -d "$DIR/.git" ]; then
+  git -C "$DIR" fetch --depth 1 origin "$BRANCH"
+  git -C "$DIR" reset --hard "origin/$BRANCH"
+else
+  git clone --depth 1 --branch "$BRANCH" "$REPO" "$DIR"
+fi
+cd "$DIR/deploy"
+
+say "3/5 Настройки"
+if [ ! -f .env ]; then
+  IP="$(curl -4fsS --max-time 10 https://api.ipify.org || hostname -I | awk '{print $1}')"
+  [ -n "$IP" ] || fail "не удалось узнать внешний IP сервера"
+  DOMAIN="${HUB_DOMAIN:-$(echo "$IP" | tr . -).sslip.io}"
+  TOKEN="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  umask 077
+  printf 'HUB_DOMAIN=%s\nHUB_TOKEN=%s\n' "$DOMAIN" "$TOKEN" > .env
+  echo "Создан deploy/.env"
+else
+  echo "deploy/.env уже есть — использую его"
+fi
+# shellcheck disable=SC1091
+. ./.env
+
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+  ufw allow 80/tcp >/dev/null
+  ufw allow 443/tcp >/dev/null
+  ufw allow 443/udp >/dev/null
+  echo "Открыл порты 80 и 443 в ufw"
+fi
+
+say "4/5 Сборка и запуск (первый раз — пара минут)"
+docker compose up -d --build --remove-orphans
+
+say "5/5 Жду HTTPS-сертификат и хаб"
+OK=""
+for _ in $(seq 1 36); do
+  if curl -fsS --max-time 5 "https://$HUB_DOMAIN/health" >/dev/null 2>&1; then OK=1; break; fi
+  sleep 5
+done
+
+if [ -z "$OK" ]; then
+  echo "Хаб не ответил по https://$HUB_DOMAIN/health за 3 минуты."
+  echo "Проверьте, что порты 80 и 443 открыты в панели провайдера, и посмотрите логи:"
+  echo "  cd $DIR/deploy && docker compose logs --tail 50"
+  exit 1
+fi
+
+cat <<EOF
+
+Готово. Хаб работает: https://$HUB_DOMAIN
+
+  Адрес хаба:  $HUB_DOMAIN
+  Токен:       $HUB_TOKEN
+
+Pen Lab / приложение → Настройки → Синхронизация:
+  Хаб:   $HUB_DOMAIN
+  Токен: (строка выше)
+
+Claude Code на своём компьютере:
+  claude mcp add --transport http kayospace https://$HUB_DOMAIN/mcp --header "Authorization: Bearer $HUB_TOKEN"
+
+Обновить хаб:      повторите команду установки
+Логи:              cd $DIR/deploy && docker compose logs -f hub
+Резервная копия:   docker run --rm -v kayospace_hub-data:/data -v "\$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .
+Показать токен:    cat $DIR/deploy/.env
+EOF

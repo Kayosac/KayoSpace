@@ -15,6 +15,8 @@ export interface Settings {
   streamline: number;
   /** Адрес хаба, например 192.168.1.10:4000. */
   hubUrl: string;
+  /** Токен доступа к хабу (если хаб в интернете). Хранится только на этом устройстве. */
+  hubToken: string;
   board: string;
   /** Подключаться к хабу при запуске. */
   syncOn: boolean;
@@ -32,6 +34,7 @@ export const defaultSettings: Settings = {
   thinning: 0.6,
   streamline: 0.25,
   hubUrl: '',
+  hubToken: '',
   board: 'pen-lab',
   syncOn: false,
 };

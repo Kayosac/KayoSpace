@@ -61,3 +61,34 @@ jobs:
           name: pen-lab
           path: apps/pen-lab/dist-single/pen-lab.html
           retention-days: 14
+
+  hub-image:
+    name: Образ хаба для VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Скрипт установки (shellcheck)
+        run: shellcheck deploy/setup.sh
+
+      - name: Compose-файл
+        run: HUB_DOMAIN=example.sslip.io HUB_TOKEN=x docker compose -f deploy/docker-compose.yml config -q
+
+      - name: Сборка образа
+        run: docker build -f deploy/hub.Dockerfile -t kayospace-hub .
+
+      - name: Запуск и проверка доступа
+        run: |
+          docker run -d --name hub -p 4000:4000 -e HUB_TOKEN=ci-token -e PUBLIC_HOST=example.sslip.io kayospace-hub
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4000/health && break; sleep 2; done
+          echo
+          curl -fsS http://127.0.0.1:4000/health | grep -q '"auth":true'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/boards)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-token' http://127.0.0.1:4000/api/boards)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:4000/mcp)" = 401
+          echo "Образ работает, доступ по токену проверен"
+
+      - name: Логи хаба
+        if: always()
+        run: docker logs hub || true

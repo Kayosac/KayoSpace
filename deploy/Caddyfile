@@ -1,0 +1,7 @@
+# Caddy сам получает и продлевает сертификат Let's Encrypt для HUB_DOMAIN.
+# WebSocket (/sync/...) проксируется без дополнительных настроек.
+{$HUB_DOMAIN} {
+	encode zstd gzip
+	header -Server
+	reverse_proxy hub:4000
+}

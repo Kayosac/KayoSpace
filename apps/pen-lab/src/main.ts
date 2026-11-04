@@ -23,7 +23,7 @@ import { defaultSettings, loadSettings, saveSettings, type Settings } from './se
 import { BoardLink, hubSyncUrl, type RemoteStroke } from './link';
 import type { SyncStatus } from '@kayospace/sync';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 interface Stroke {
   /** id элемента на доске хаба (если штрих синхронизирован). */
@@ -162,9 +162,10 @@ app.innerHTML = `
       <section class="group">
         <h2>Синхронизация</h2>
         <label class="field"><span>Хаб</span><input id="opt-hub" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.10:4000" /></label>
+        <label class="field"><span>Токен</span><input id="opt-token" type="password" autocomplete="off" spellcheck="false" placeholder="если хаб в интернете" /></label>
         <label class="field"><span>Доска</span><input id="opt-board" type="text" autocomplete="off" spellcheck="false" placeholder="pen-lab" /></label>
         <button type="button" id="btn-sync">Подключить</button>
-        <p class="note" id="sync-note">Запустите хаб на компьютере (pnpm hub) и введите его адрес из вывода команды.</p>
+        <p class="note" id="sync-note">Адрес хаба: домен на VPS (например 1-2-3-4.sslip.io) с токеном или адрес из вывода pnpm hub в домашней сети.</p>
       </section>
       <section class="group">
         <h2>Среда</h2>
@@ -817,7 +818,14 @@ const syncLabels: Record<SyncStatus, string> = {
   connected: 'соединено, сверяю доску…',
   synced: 'синхронизировано',
   offline: 'нет связи, переподключаюсь…',
+  unauthorized: 'неверный токен',
   stopped: 'отключено',
+};
+const syncReasons: Record<string, string> = {
+  timeout: 'хаб не ответил за 8 секунд — проверьте адрес, сеть и файрвол',
+  closed: 'соединение закрылось',
+  'invalid-url': 'браузер отказался открывать соединение — проверьте адрес',
+  unauthorized: 'хаб не принял токен — проверьте его в настройках',
 };
 
 function cssBoundsToRect(b: { minX: number; minY: number; maxX: number; maxY: number }): Rect {
@@ -861,15 +869,17 @@ function renderSync(status: SyncStatus | 'off'): void {
   badge.hidden = false;
   badge.textContent = `Хаб: ${syncLabels[status]}`;
   badge.classList.toggle('quiet', status === 'synced');
+  const reason = link?.client.lastError ? syncReasons[link.client.lastError] : undefined;
+  const where = (link?.url ?? '').replace(/\?token=.*$/, '');
   note.textContent =
     status === 'synced'
       ? `Доска «${settings.board}»: ${strokes.filter((x) => x.id).length} штрихов с хабом.`
-      : `${link?.url ?? ''} — ${syncLabels[status]}`;
+      : `${where} — ${syncLabels[status]}${reason && status !== 'connecting' ? `: ${reason}` : ''}`;
 }
 
 function startSync(): void {
   stopSync();
-  const url = hubSyncUrl(settings.hubUrl, settings.board);
+  const url = hubSyncUrl(settings.hubUrl, settings.board, settings.hubToken);
   if (!url) {
     $('sync-note').textContent =
       'Проверьте адрес хаба (например 192.168.1.10:4000) и имя доски (латиница, цифры, «-», «_»).';
@@ -904,6 +914,7 @@ function stopSync(): void {
 }
 
 $<HTMLInputElement>('opt-hub').value = settings.hubUrl;
+$<HTMLInputElement>('opt-token').value = settings.hubToken;
 $<HTMLInputElement>('opt-board').value = settings.board;
 $('btn-sync').addEventListener('click', () => {
   if (link) {
@@ -913,6 +924,7 @@ $('btn-sync').addEventListener('click', () => {
   }
   update({
     hubUrl: $<HTMLInputElement>('opt-hub').value.trim(),
+    hubToken: $<HTMLInputElement>('opt-token').value.trim(),
     board: $<HTMLInputElement>('opt-board').value.trim() || 'pen-lab',
     syncOn: true,
   });
@@ -981,7 +993,7 @@ function buildReport(): string {
         predictedSupported: env.predicted,
         rawUpdateSupported: env.rawUpdate,
       },
-      settings,
+      settings: { ...settings, hubToken: settings.hubToken ? '…' : '' },
       measured: {
         pointerType: s.pointerType,
         maxPressure: round(s.maxPressure, 3),
@@ -999,7 +1011,8 @@ function buildReport(): string {
         points: userStrokes.reduce((n, x) => n + x.points.length, 0),
       },
       sync: {
-        hub: link?.url ?? null,
+        hub: link?.url.replace(/\?token=.*$/, '?token=…') ?? null,
+        lastError: link?.client.lastError ?? null,
         status: link?.client.status ?? 'off',
         syncedStrokes: strokes.filter((x) => x.id).length,
       },
