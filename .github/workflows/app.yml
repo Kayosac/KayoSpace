@@ -10,6 +10,10 @@ on:
         description: 'Платформы через запятую: android, macos, windows'
         required: true
         default: 'android,macos,windows'
+      release:
+        description: 'Выпустить релиз с этим тегом (например, v0.11.0). Пусто — только сборка.'
+        required: false
+        default: ''
   push:
     tags: ['v*']
 
@@ -22,6 +26,8 @@ concurrency:
 
 env:
   PLATFORMS: ${{ github.event.inputs.platforms || 'android,macos,windows' }}
+  # Имя версии в файлах и релизе: тег (по тегу или из поля release), иначе — ветка.
+  RELEASE_TAG: ${{ github.event.inputs.release || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
   NDK_VERSION: '27.2.12479018'
   # Адрес хаба по умолчанию на экране подключения: Settings → Secrets and variables → Actions →
   # Variables → KAYOSPACE_DEFAULT_HUB (например, 1-2-3-4.sslip.io:8443). Не задан — поле пустое.
@@ -107,7 +113,8 @@ jobs:
         run: |
           mkdir -p out
           APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
-          cp "$APK" "out/kayospace-${GITHUB_REF_NAME//\//-}-android-arm64.apk"
+          NAME="${RELEASE_TAG:-$GITHUB_REF_NAME}"
+          cp "$APK" "out/kayospace-${NAME//\//-}-android-arm64.apk"
           ls -la out
 
       - uses: actions/upload-artifact@v4
@@ -196,7 +203,8 @@ jobs:
 
   release:
     name: Релиз
-    if: startsWith(github.ref, 'refs/tags/v')
+    # По тегу v* или по запуску вручную с полем release.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release != ''
     needs: [android, desktop]
     runs-on: ubuntu-latest
     steps:
@@ -210,14 +218,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: src
-          sparse-checkout: apps/app/scripts
+          sparse-checkout: |
+            /apps/app/scripts/
+            /apps/app/src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+
+      - name: Тег совпадает с версией приложения
+        run: |
+          case "$RELEASE_TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::Тег вида v1.2.3, а не «$RELEASE_TAG»"; exit 1;; esac
+          V=$(node -p "require('./src/apps/app/src-tauri/tauri.conf.json').version")
+          [ "v$V" = "$RELEASE_TAG" ] || { echo "::error::Тег $RELEASE_TAG, а версия приложения $V"; exit 1; }
 
       - name: Список версий для автообновления (latest.json)
-        run: node src/apps/app/scripts/latest-json.mjs dist "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" > dist/latest.json && cat dist/latest.json
+        run: node src/apps/app/scripts/latest-json.mjs dist "$RELEASE_TAG" "$GITHUB_REPOSITORY" > dist/latest.json && cat dist/latest.json
 
       # Обычный (не предварительный) релиз: приложения берут latest.json из «последнего релиза».
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Kayospace ${{ env.RELEASE_TAG }}
           files: dist/**/*
           make_latest: true
           generate_release_notes: true
