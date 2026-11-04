@@ -229,11 +229,14 @@ export class Renderer {
    * Её нужно перерисовать начисто, когда вид перестанет меняться.
    */
   approx = false;
+  /**
+   * Картинка растянута CSS-трансформацией (зум на тяжёлой доске): камера, при которой она нарисована.
+   * Пока растянута, любая перерисовка — полная (она же снимает трансформацию).
+   */
+  private stretchFrom: Camera | null = null;
   /** Сколько заняла последняя полная перерисовка, мс (JS) и когда она была (performance.now()). */
   lastFullMs = 0;
   lastFullAt = 0;
-  /** Вспомогательная канва для растягивания картинки при зуме. */
-  private scratch: HTMLCanvasElement | null = null;
   private editing: string | null = null;
   private readonly widths: Record<number, Map<string, number>> = {};
   /** Откуда брать картинки (готовые к отрисовке); null — показываем заглушки. */
@@ -319,19 +322,46 @@ export class Renderer {
       return;
     }
     const sameRot = (prev.rotation ?? 0) === (cam.rotation ?? 0);
-    if (prev.x === cam.x && prev.y === cam.y && prev.zoom === cam.zoom && sameRot) return;
-    if (!sameRot || (prev.zoom !== cam.zoom && !stretch)) {
+    if (
+      prev.x === cam.x &&
+      prev.y === cam.y &&
+      prev.zoom === cam.zoom &&
+      sameRot &&
+      !this.stretchFrom
+    ) {
+      return;
+    }
+    if (!sameRot) {
       this.full = true;
+      return;
+    }
+    if (this.stretchFrom || prev.zoom !== cam.zoom) {
+      if (!stretch) {
+        this.full = true;
+        return;
+      }
+      // Растягивает композитор браузера (CSS-трансформация): растр канвы не трогаем вовсе.
+      // Картинка нарисована при камере prev — переводим её экран в экран новой камеры.
+      const o = worldToScreen(cam, prev.x, prev.y);
+      const k = cam.zoom / prev.zoom;
+      const style = this.canvas.style;
+      // Свой слой композитора — только на время растяжения: так трансформация не перерисовывает
+      // страницу, а в остальное время у канвы остаётся режим низкой задержки для пера (решение 0003).
+      style.willChange = 'transform';
+      style.transformOrigin = '0 0';
+      style.transform = `matrix(${k}, 0, 0, ${k}, ${o.x}, ${o.y})`;
+      this.stretchFrom = prev;
+      this.approx = true;
+      this.rects = [];
       return;
     }
     const cw = this.canvas.width;
     const ch = this.canvas.height;
-    // Куда на новом экране попадает левый верхний угол старого (пиксели устройства).
+    // Тот же масштаб: куда на новом экране попадает левый верхний угол старого (пиксели устройства).
     const o = worldToScreen(cam, prev.x, prev.y);
-    const s = cam.zoom / prev.zoom;
     const dx = o.x * this.dpr;
     const dy = o.y * this.dpr;
-    if (s === 1 && (Math.abs(dx) >= cw * 0.8 || Math.abs(dy) >= ch * 0.8)) {
+    if (Math.abs(dx) >= cw * 0.8 || Math.abs(dy) >= ch * 0.8) {
       this.full = true;
       return;
     }
@@ -339,47 +369,25 @@ export class Renderer {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = true;
-    if (s === 1) {
-      // Канва копируется сама на себя (браузер сначала снимает копию источника).
-      ctx.drawImage(this.canvas, dx, dy);
-      ctx.restore();
-      if (dx !== Math.round(dx) || dy !== Math.round(dy)) this.approx = true;
-      // Ранее отмеченные участки уехали вместе с картинкой.
-      const old = this.rects;
-      this.rects = [];
-      for (const r of old) {
-        this.invalidate({
-          x0: Math.floor(r.x0 + dx),
-          y0: Math.floor(r.y0 + dy),
-          x1: Math.ceil(r.x1 + dx),
-          y1: Math.ceil(r.y1 + dy),
-        });
-      }
-      if (dx > 0) this.invalidate({ x0: 0, y0: 0, x1: Math.ceil(dx) + 2, y1: ch });
-      if (dx < 0) this.invalidate({ x0: Math.floor(cw + dx) - 2, y0: 0, x1: cw, y1: ch });
-      if (dy > 0) this.invalidate({ x0: 0, y0: 0, x1: cw, y1: Math.ceil(dy) + 2 });
-      if (dy < 0) this.invalidate({ x0: 0, y0: Math.floor(ch + dy) - 2, x1: cw, y1: ch });
-    } else {
-      const sc = (this.scratch ??= document.createElement('canvas'));
-      if (sc.width !== cw || sc.height !== ch) {
-        sc.width = cw;
-        sc.height = ch;
-      }
-      const sctx = sc.getContext('2d');
-      if (!sctx) {
-        ctx.restore();
-        this.full = true;
-        return;
-      }
-      sctx.drawImage(this.canvas, 0, 0);
-      ctx.fillStyle = this.colors.paper;
-      ctx.fillRect(0, 0, cw, ch);
-      ctx.drawImage(sc, dx, dy, cw * s, ch * s);
-      ctx.restore();
-      this.approx = true;
-      // Ранее отмеченные участки после растяжения уже не точны — перерисуем всё при чистовой отрисовке.
-      this.rects = [];
+    // Канва копируется сама на себя (браузер сначала снимает копию источника).
+    ctx.drawImage(this.canvas, dx, dy);
+    ctx.restore();
+    if (dx !== Math.round(dx) || dy !== Math.round(dy)) this.approx = true;
+    // Ранее отмеченные участки уехали вместе с картинкой.
+    const old = this.rects;
+    this.rects = [];
+    for (const r of old) {
+      this.invalidate({
+        x0: Math.floor(r.x0 + dx),
+        y0: Math.floor(r.y0 + dy),
+        x1: Math.ceil(r.x1 + dx),
+        y1: Math.ceil(r.y1 + dy),
+      });
     }
+    if (dx > 0) this.invalidate({ x0: 0, y0: 0, x1: Math.ceil(dx) + 2, y1: ch });
+    if (dx < 0) this.invalidate({ x0: Math.floor(cw + dx) - 2, y0: 0, x1: cw, y1: ch });
+    if (dy > 0) this.invalidate({ x0: 0, y0: 0, x1: cw, y1: Math.ceil(dy) + 2 });
+    if (dy < 0) this.invalidate({ x0: 0, y0: Math.floor(ch + dy) - 2, x1: cw, y1: ch });
     this.paintedCam = { ...cam };
   }
 
@@ -450,10 +458,17 @@ export class Renderer {
     this.editing = overlay.editing ?? null;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
+    // Растянутая картинка не совпадает с камерой: частичная перерисовка легла бы криво — рисуем всё.
+    if (this.stretchFrom && this.rects.length > 0) this.full = true;
     if (this.full) {
       this.full = false;
       this.rects = [];
       this.approx = false;
+      if (this.stretchFrom) {
+        this.stretchFrom = null;
+        this.canvas.style.transform = '';
+        this.canvas.style.willChange = '';
+      }
       const t0 = performance.now();
       this.paintRect(cam, scene, overlay, 0, 0, cw, ch, false);
       this.lastFullAt = performance.now();
@@ -819,6 +834,7 @@ export class Renderer {
       full: this.full,
       rects: this.rects,
       paintedCam: this.paintedCam,
+      stretchFrom: this.stretchFrom,
       approx: this.approx,
       lastFullMs: this.lastFullMs,
       lastFullAt: this.lastFullAt,
@@ -832,6 +848,7 @@ export class Renderer {
     this.height = h;
     this.full = true;
     this.rects = [];
+    this.stretchFrom = null;
     this.noGrid = true;
     try {
       this.paint({ x: area.minX, y: area.minY, zoom: k, rotation: 0 }, scene, {});
@@ -844,6 +861,7 @@ export class Renderer {
       this.full = saved.full;
       this.rects = saved.rects;
       this.paintedCam = saved.paintedCam;
+      this.stretchFrom = saved.stretchFrom;
       this.approx = saved.approx;
       this.lastFullMs = saved.lastFullMs;
       this.lastFullAt = saved.lastFullAt;

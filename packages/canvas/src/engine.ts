@@ -1714,10 +1714,12 @@ export class CanvasEngine {
       if (this.cameraMoved) {
         this.cameraMoved = false;
         // Тяжёлая доска (полная перерисовка дольше 12 мс): при зуме растягиваем готовую картинку,
-        // а чисто перерисовываем не чаще раза в 120 мс и когда зум остановится.
+        // а чисто перерисовываем реже — не чаще раза в 120 мс и так, чтобы на чистовую уходило
+        // не больше четверти времени (на медленном устройстве перерисовка сама длится долго), —
+        // и когда зум остановится.
         const r = this.renderer;
         const heavy = r.lastFullMs > 12;
-        const due = performance.now() - r.lastFullAt > 120;
+        const due = performance.now() - r.lastFullAt > Math.max(120, r.lastFullMs * 3);
         r.moveTo(this.camera, heavy && !due && !this.draw && !this.gesture);
         this.settleSoon();
       }

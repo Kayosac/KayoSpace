@@ -129,6 +129,8 @@ input:focus-visible {
 .stage {
   position: absolute;
   inset: 0;
+  /* Видно по краям, пока холст растянут при зуме (до чистовой перерисовки). */
+  background: var(--canvas-paper);
 }
 
 /* ---------- Плашки сверху ---------- */
