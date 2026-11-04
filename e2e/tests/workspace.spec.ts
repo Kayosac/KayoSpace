@@ -1,3 +1,5 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { chmodSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { HUB_ADDRESS, HUB_TOKEN, WORKSPACE_URL, drawWave, hubElements, shot } from './env';
@@ -585,4 +587,145 @@ test('картинка: вставка с устройства уезжает н
     .toBe(200);
   await b.waitForTimeout(4000); // второе устройство скачивает (с повтором, если файл ещё ехал) и рисует
   await b.screenshot({ path: shot('workspace-image.png') });
+});
+
+/** Элементы доски на устройстве: тип, текст и рамка. */
+const boardElements = (page: Page) =>
+  page.evaluate(() =>
+    [
+      ...(
+        window.__kayospace!.engine as unknown as {
+          scene: {
+            items: Map<
+              string,
+              { element: { type: string; x: number; y: number; props: Record<string, unknown> } }
+            >;
+          };
+        }
+      ).scene.items.values(),
+    ].map((i) => ({
+      type: i.element.type,
+      x: i.element.x,
+      content: (i.element.props.content as string | undefined) ?? null,
+    })),
+  );
+
+test('вставка из буфера: текст — надписью, картинка — картинкой', async ({ browser, request }) => {
+  const board = 'e2e-paste';
+  const page = await openDevice(browser, { ...synced, board });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await page.mouse.move(400, 300);
+  // Текст из другой программы.
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'Список дел:\nпозвонить\nкупить перо');
+    window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt }));
+  });
+  await expect
+    .poll(async () => (await boardElements(page)).find((e) => e.type === 'text')?.content)
+    .toBe('Список дел:\nпозвонить\nкупить перо');
+  // Картинка (как скриншот в буфере).
+  const png = readFileSync(join(import.meta.dirname, '..', 'fixtures', 'gradient.png')).toString(
+    'base64',
+  );
+  await page.mouse.move(800, 300);
+  await page.evaluate((b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+    window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt }));
+  }, png);
+  await expect
+    .poll(async () => (await boardElements(page)).filter((e) => e.type === 'image').length)
+    .toBe(1);
+  await expect.poll(() => hubElements(request, board)).toBe(2);
+  await page.screenshot({ path: shot('workspace-paste.png') });
+});
+
+test.describe('ИИ в доске', () => {
+  let worker: ChildProcess | null = null;
+
+  test.beforeAll(() => {
+    // Исполнитель с поддельным Claude Code: добавляет в черновик стикер «Черновик от ИИ».
+    const root = join(import.meta.dirname, '..', '..');
+    const fake = join(root, 'server', 'hub', 'test', 'fake-claude.mjs');
+    chmodSync(fake, 0o755);
+    worker = spawn('pnpm', ['--filter', '@kayospace/hub', 'ai-worker'], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HUB_URL: `http://${HUB_ADDRESS}`,
+        HUB_TOKEN,
+        WORKER_NAME: 'e2e',
+        CLAUDE_BIN: fake,
+      },
+      stdio: ['ignore', 'inherit', 'inherit'],
+      detached: true,
+    });
+  });
+
+  test.afterAll(() => {
+    if (worker?.pid) {
+      try {
+        process.kill(-worker.pid, 'SIGTERM');
+      } catch {
+        worker.kill('SIGTERM');
+      }
+    }
+  });
+
+  test('действие над выделением: предпросмотр, «Вставить», отмена одним шагом', async ({
+    browser,
+    request,
+  }) => {
+    const board = `e2e-ai-${Date.now()}`;
+    const page = await openDevice(browser, { ...synced, board });
+    await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+    await page.keyboard.press('n');
+    await page.mouse.click(300, 300);
+    await page.keyboard.type('Идея для резюме');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => hubElements(request, board)).toBe(1);
+
+    // Выделить стикер → «✦ ИИ» → «Резюме».
+    await page.keyboard.press('v');
+    await page.keyboard.press('Control+a');
+    await page.getByTestId('selection-menu').getByRole('button', { name: 'ИИ' }).click();
+    await page.getByRole('menuitem', { name: 'Резюме' }).click();
+    const bar = page.getByTestId('ai-bar');
+    await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
+    await expect(bar).toContainText('Добавил стикер.');
+    // Предпросмотр: в доске ещё ничего не поменялось.
+    expect((await boardElements(page)).length).toBe(1);
+    await page.screenshot({ path: shot('workspace-ai-preview.png') });
+
+    await bar.getByRole('button', { name: 'Вставить' }).click();
+    await expect(bar).toBeHidden();
+    await expect
+      .poll(async () => (await boardElements(page)).map((e) => e.content).sort())
+      .toEqual(['Идея для резюме', 'Черновик от ИИ']);
+    await expect.poll(() => hubElements(request, board)).toBe(2);
+    await page.screenshot({ path: shot('workspace-ai-applied.png') });
+
+    // «Отменить» убирает правку ИИ целиком.
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await boardElements(page)).length).toBe(1);
+  });
+
+  test('свой запрос (Ctrl+J): результат можно не вставлять', async ({ browser }) => {
+    const board = `e2e-ai-prompt-${Date.now()}`;
+    const page = await openDevice(browser, { ...synced, board });
+    await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+    await page.keyboard.press('Control+j');
+    const prompt = page.getByTestId('ai-prompt');
+    await expect(prompt).toBeVisible();
+    await prompt.getByRole('textbox').fill('Набросай идею');
+    await page.screenshot({ path: shot('workspace-ai-prompt.png') });
+    await page.keyboard.press('Enter');
+    const bar = page.getByTestId('ai-bar');
+    await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
+    await bar.getByRole('button', { name: 'Отменить' }).click();
+    await expect(bar).toBeHidden();
+    expect((await boardElements(page)).length).toBe(0);
+  });
 });

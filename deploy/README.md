@@ -62,12 +62,49 @@ curl -fsSL https://raw.githubusercontent.com/Kayosac/KayoSpace/main/deploy/setup
 **Claude Code:** выполните на своём компьютере команду `claude mcp add …` из вывода скрипта, затем в любой
 папке запустите `claude` и попросите, например, «прочитай доску pen-lab через kayospace».
 
+**Приложение Claude (claude.ai, телефон, компьютер) — коннектор.** Хаб умеет вход по OAuth, поэтому
+Kayospace подключается как свой коннектор, и доски доступны в Claude с любого устройства:
+
+1. claude.ai → Настройки → Коннекторы → «Добавить свой коннектор».
+2. Название — `Kayospace`, URL — `https://<домен>:<порт>/mcp` (тот же адрес хаба плюс `/mcp`).
+3. «Подключить» → откроется страница хаба «Подключить Kayospace» → вставьте токен хаба → «Разрешить».
+4. Коннектор появится и в приложениях на телефоне и компьютере (тот же аккаунт).
+
+Доступ коннектора отзывается сменой токена хаба (см. «Обслуживание»).
+
+## 4. ИИ в доске (кнопка «✦ ИИ»)
+
+ИИ работает на вашей подписке Claude через официальный Claude Code (решение 0007) — без оплаты по API.
+Задачи с устройств встают в очередь на хабе, их выполняет **исполнитель**: Claude Code на сервере
+или на вашем компьютере. Нужен хотя бы один.
+
+**Исполнитель на сервере** (работает всегда, даже когда компьютер выключен):
+
+1. На своём компьютере (где Claude Code уже вошёл в аккаунт): `claude setup-token` — выдаст длинный токен.
+2. На сервере допишите в `/opt/kayospace/deploy/.env`:
+   ```
+   COMPOSE_PROFILES=ai
+   CLAUDE_CODE_OAUTH_TOKEN=<токен из шага 1>
+   ```
+3. `cd /opt/kayospace/deploy && docker compose up -d --build`
+4. Проверка: `docker compose logs -f ai-worker` — строка «на связи с хабом, жду задачи».
+
+Исполнителю нужно ~1 ГБ памяти (лимит — `AI_WORKER_MEMORY` в `.env`). Задачи выполняются по одной.
+
+**Исполнитель на Маке или Windows** (Claude Code установлен и вошёл в аккаунт), в папке проекта:
+
+```bash
+HUB_URL=https://<домен>:<порт> HUB_TOKEN=<токен хаба> pnpm ai-worker
+```
+
+На Windows (PowerShell): `$env:HUB_URL="https://…"; $env:HUB_TOKEN="…"; pnpm ai-worker`.
+
 ## Обслуживание
 
 | Что                           | Команда на сервере                                                                                                     |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Обновить хаб до свежей версии | повторить команду установки                                                                                            |
-| Логи                          | `cd /opt/kayospace/deploy && docker compose logs -f hub`                                                               |
+| Логи                          | `cd /opt/kayospace/deploy && docker compose logs -f hub` (исполнитель ИИ — `logs -f ai-worker`)                        |
 | Перезапуск                    | `cd /opt/kayospace/deploy && docker compose restart`                                                                   |
 | Остановить                    | `cd /opt/kayospace/deploy && docker compose down`                                                                      |
 | Резервная копия досок         | `docker run --rm -v kayospace_hub-data:/data -v "$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .` |
@@ -75,6 +112,5 @@ curl -fsSL https://raw.githubusercontent.com/Kayosac/KayoSpace/main/deploy/setup
 
 ## Что пока не сделано
 
-- ChatGPT и приложение Claude (claude.ai) требуют вход через OAuth — появится в фазе 3. Claude Code работает
-  уже сейчас, с токеном в заголовке.
+- ChatGPT как коннектор — позже (OAuth на хабе уже есть, нужна проверка с их стороны).
 - Автоматические резервные копии во внешнее хранилище — фаза 2.

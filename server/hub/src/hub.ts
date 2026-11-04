@@ -19,10 +19,12 @@ import { bearerToken, hostAllowed, originAllowed, requestToken, tokenMatches } f
 import { createMcp } from './mcp';
 import { join } from 'node:path';
 import { AssetStore, handleAsset } from './assets';
+import { OAuthServer, publicBase } from './oauth';
+import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.1.0';
+export const HUB_VERSION = '0.2.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -34,11 +36,14 @@ export interface HubOptions {
   token?: string;
   /** Публичный домен хаба (для проверки Host/Origin в MCP), например 1-2-3-4.sslip.io. */
   publicHost?: string;
+  /** Внутренние имена хаба (например, «hub» в сети Docker) — для исполнителя ИИ на том же сервере. */
+  internalHosts?: string[];
 }
 
 export interface Hub {
   port: number;
   store: BoardStore;
+  ai: AiQueue;
   sync: SyncServer;
   close(): Promise<void>;
 }
@@ -48,6 +53,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   await store.init();
   const assets = new AssetStore(join(opts.dataDir, 'assets'));
   await assets.init();
+  // Вход по OAuth — только когда хаб закрыт токеном (в интернете); локально MCP открыт и так.
+  const oauth = opts.token ? new OAuthServer(join(opts.dataDir, 'oauth.json'), opts.token) : null;
+  await oauth?.init();
+  const ai = new AiQueue(store);
+  /** MCP черновиков ИИ: по обработчику на задачу. */
+  const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
 
   const mcp = createMcp(store);
   const mcpNode = toNodeHandler(mcp);
@@ -65,13 +76,38 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (url.pathname === '/mcp') {
+    if (oauth && (await oauth.handle(req, res, url))) return;
+    const draft = /^\/mcp\/draft\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+    if (url.pathname === '/mcp' || draft) {
       if (token) {
-        if (!hostAllowed(req, opts.publicHost) || !originAllowed(req, opts.publicHost)) {
+        if (
+          !hostAllowed(req, opts.publicHost, opts.internalHosts) ||
+          !originAllowed(req, opts.publicHost)
+        ) {
           return json(res, 403, { error: 'Недопустимый Host или Origin' });
         }
-        if (!tokenMatches(bearerToken(req), token)) return unauthorized(res);
+        const given = bearerToken(req);
+        if (!tokenMatches(given, token) && !oauth?.validAccessToken(given)) {
+          // Указатель на метаданные — по нему приложение Claude находит вход по OAuth.
+          res.setHeader(
+            'WWW-Authenticate',
+            `Bearer realm="kayospace", resource_metadata="${publicBase(req)}/.well-known/oauth-protected-resource"`,
+          );
+          return json(res, 401, { error: 'Нужен токен доступа' });
+        }
       } else if (!validateHost(req, res) || !validateOrigin(req, res)) {
+        return;
+      }
+      if (draft) {
+        // Исполнитель ИИ работает с копией доски — черновиком задачи.
+        const task = ai.tasks.get(draft[1]!);
+        if (!task || task.status !== 'running') return json(res, 404, { error: 'Задачи нет' });
+        let handler = draftMcp.get(task.id);
+        if (!handler) {
+          handler = toNodeHandler(createMcp(ai.draftSource(task), { actorName: 'kayospace-ai' }));
+          draftMcp.set(task.id, handler);
+        }
+        await handler(req, res);
         return;
       }
       await mcpNode(req, res);
@@ -81,7 +117,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
-        'Access-Control-Allow-Methods': 'GET, PUT',
+        'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
       });
       res.end();
@@ -91,6 +127,10 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return json(res, 200, { ok: true, version: HUB_VERSION, auth: Boolean(token) });
     }
     if (token && !tokenMatches(requestToken(req, url), token)) return unauthorized(res);
+    if (await handleAi(req, res, url, ai)) {
+      for (const id of draftMcp.keys()) if (!ai.tasks.has(id)) draftMcp.delete(id);
+      return;
+    }
     if (url.pathname === '/api/boards' && req.method === 'GET') {
       return json(res, 200, await store.list());
     }
@@ -110,13 +150,16 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   return {
     port,
     store,
+    ai,
     sync,
     async close() {
+      ai.close();
       await sync.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections?.();
       await mcp.close?.();
       await store.close();
+      await oauth?.flush();
     },
   };
 }

@@ -13,6 +13,10 @@ const host = process.env.HOST ?? '0.0.0.0';
 const dataDir = resolve(process.env.DATA_DIR ?? 'data');
 const token = process.env.HUB_TOKEN?.trim() || undefined;
 const publicHost = process.env.PUBLIC_HOST?.trim() || undefined;
+const internalHosts = (process.env.INTERNAL_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean);
 
 if (!token && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
   console.warn(
@@ -20,7 +24,7 @@ if (!token && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
   );
 }
 
-const hub = await startHub({ port, host, dataDir, token, publicHost });
+const hub = await startHub({ port, host, dataDir, token, publicHost, internalHosts });
 
 const lan = Object.values(networkInterfaces())
   .flat()

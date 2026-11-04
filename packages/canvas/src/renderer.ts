@@ -82,6 +82,8 @@ export interface PaintOverlay {
   draft?: CanvasElement | null;
   /** Стикер или текст, который сейчас редактируют: текст рисует поле ввода, а не канва. */
   editing?: string | null;
+  /** Предпросмотр правок ИИ: что подсветить и что ИИ удалил (рисуем бледно). */
+  ai?: { ids: ReadonlySet<string>; deleted: readonly SceneItem[] } | null;
 }
 
 /** Отступ рамки выделения от элементов и размер ручек, CSS-пиксели. */
@@ -181,8 +183,10 @@ export function gridStepFor(zoom: number): number {
 }
 
 export class Renderer {
-  readonly canvas: HTMLCanvasElement;
-  private readonly ctx: CanvasRenderingContext2D;
+  canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  /** Не рисовать сетку (экспорт картинки). */
+  private noGrid = false;
   dpr = 1;
   /** Размер в CSS-пикселях. */
   width = 1;
@@ -359,6 +363,17 @@ export class Renderer {
         this.drawItem(item, cam.zoom);
         if (item.element.type !== 'stroke') fill = ''; // стикер и фигура сами меняют fillStyle
       }
+      if (overlay.ai && overlay.ai.deleted.length > 0) {
+        // Что ИИ предлагает удалить — бледным.
+        ctx.globalAlpha = 0.22;
+        for (const item of overlay.ai.deleted) {
+          if (!boundsIntersect(item.bounds, view)) continue;
+          setFill(item.color);
+          this.drawItem(item, cam.zoom);
+          fill = '';
+        }
+        ctx.globalAlpha = 1;
+      }
       if (preview) {
         // Перетаскиваемые элементы — поверх остальных, с преобразованием жеста.
         const t = preview.t;
@@ -406,6 +421,7 @@ export class Renderer {
       if (selection) {
         this.drawSelection(selection, scene, toScreen, preview?.t ?? null, cam.zoom);
       }
+      if (overlay.ai) this.drawAiMarks(overlay.ai, scene, toScreen);
       if (overlay.lasso && overlay.lasso.length > 1) {
         ctx.beginPath();
         overlay.lasso.forEach((p, i) => {
@@ -498,6 +514,100 @@ export class Renderer {
     // Картинка ещё грузится (или её нет на этом устройстве) — серая заглушка.
     ctx.fillStyle = this.colors.dot;
     ctx.fillRect(el.x, el.y, el.w, el.h);
+  }
+
+  /** Рамки вокруг того, что ИИ добавил или изменил (сплошные), и удалённого (пунктир). */
+  private drawAiMarks(
+    ai: NonNullable<PaintOverlay['ai']>,
+    scene: Scene,
+    toScreen: (x: number, y: number) => [number, number],
+  ): void {
+    const ctx = this.ctx;
+    const outline = (b: Bounds): void => {
+      ctx.beginPath();
+      (
+        [
+          [b.minX, b.minY],
+          [b.maxX, b.minY],
+          [b.maxX, b.maxY],
+          [b.minX, b.maxY],
+        ] as const
+      ).forEach(([wx, wy], i) => {
+        const [sx, sy] = toScreen(wx, wy);
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      });
+      ctx.closePath();
+    };
+    ctx.strokeStyle = this.colors.accent;
+    ctx.fillStyle = this.colors.accent;
+    ctx.lineWidth = 2;
+    let n = 0;
+    for (const id of ai.ids) {
+      const item = scene.items.get(id);
+      if (!item || item.element.parentId || ++n > 300) continue;
+      const b = item.bounds;
+      outline({ minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY });
+      ctx.globalAlpha = 0.07;
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.stroke();
+    }
+    ctx.setLineDash([5, 4]);
+    ctx.globalAlpha = 0.6;
+    ctx.lineWidth = 1.5;
+    for (const item of ai.deleted) {
+      if (item.element.parentId) continue;
+      outline(item.bounds);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Нарисовать участок мира в отдельную канву (масштаб k пикселей на единицу мира), без сетки.
+   * Для картинки, которую видит ИИ. Видимую канву не трогает.
+   */
+  exportRegion(scene: Scene, area: Bounds, k: number): HTMLCanvasElement | null {
+    const w = Math.round((area.maxX - area.minX) * k);
+    const h = Math.round((area.maxY - area.minY) * k);
+    if (!(w >= 1 && h >= 1) || w > 8192 || h > 8192) return null;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+    const saved = {
+      canvas: this.canvas,
+      ctx: this.ctx,
+      dpr: this.dpr,
+      width: this.width,
+      height: this.height,
+      full: this.full,
+      pending: this.pending,
+    };
+    this.canvas = c;
+    this.ctx = ctx;
+    this.dpr = 1;
+    this.width = w;
+    this.height = h;
+    this.full = true;
+    this.pending = null;
+    this.noGrid = true;
+    try {
+      this.paint({ x: area.minX, y: area.minY, zoom: k, rotation: 0 }, scene, {});
+    } finally {
+      this.canvas = saved.canvas;
+      this.ctx = saved.ctx;
+      this.dpr = saved.dpr;
+      this.width = saved.width;
+      this.height = saved.height;
+      this.full = saved.full;
+      this.pending = saved.pending;
+      this.noGrid = false;
+    }
+    return c;
   }
 
   private drawSelection(
@@ -671,6 +781,12 @@ export class Renderer {
     return { size: lo, lines: best, pad };
   }
 
+  /** Ширина самой длинной строки текста шрифтом size (мировые единицы). */
+  textWidth(content: string, size: number): number {
+    const measure = this.measurer(400);
+    return Math.max(0, ...content.split('\n').map((l) => (measure(l) * size) / 100));
+  }
+
   /** Ширина строки шрифтом 100 px (кэш): ширина при другом размере — пропорциональна. */
   private measurer(weight: number): (s: string) => number {
     const cache = this.widths[weight] ?? (this.widths[weight] = new Map());
@@ -729,6 +845,7 @@ export class Renderer {
 
   /** Точки сетки в участке (x, y, w, h — пиксели устройства); квадратики по пиксельной сетке — чётче. */
   private drawGrid(cam: Camera, x: number, y: number, w: number, h: number): void {
+    if (this.noGrid) return;
     const step = gridStepFor(cam.zoom);
     const k = this.dpr * cam.zoom;
     const size = Math.max(2, Math.round(this.dpr * 1.5));
