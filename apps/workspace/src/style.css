@@ -506,3 +506,53 @@ hr {
     display: none;
   }
 }
+
+/* ---------- Меню выделения ---------- */
+
+.selection-menu {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+
+.selection-menu .count {
+  min-width: 24px;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.selection-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.selection-menu button:hover {
+  background: var(--surface-2);
+}
+
+.selection-menu .danger {
+  color: var(--bad);
+}
+
+@media (max-width: 560px) {
+  .selection-menu button span {
+    display: none;
+  }
+}

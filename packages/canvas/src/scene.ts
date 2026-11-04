@@ -93,6 +93,25 @@ export class Scene {
     return out.sort((a, b) => (a.z === b.z ? (a.id < b.id ? -1 : 1) : a.z < b.z ? -1 : 1));
   }
 
+  /** Верхний элемент под точкой (штрих — с допуском r от линии), или null. */
+  pick(x: number, y: number, r: number): string | null {
+    const box = { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r };
+    const items = this.query(box);
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i]!;
+      if (item.element.type !== 'stroke') {
+        const b = item.bounds;
+        if (x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY) return item.id;
+        continue;
+      }
+      for (const s of item.samples) {
+        const reach = r + s.r;
+        if ((s.x - x) ** 2 + (s.y - y) ** 2 <= reach * reach) return item.id;
+      }
+    }
+    return null;
+  }
+
   /** Штрихи, которых касается круг радиуса r (мировые координаты) — для ластика. */
   hitTest(x: number, y: number, r: number): string[] {
     const hits: string[] = [];

@@ -4,16 +4,48 @@
  */
 
 import * as Y from 'yjs';
-import { addElement, deleteElement, elementsMap, getElement, makeStroke } from '@kayospace/board';
+import {
+  IDENTITY,
+  addElement,
+  addElements,
+  cloneElements,
+  deleteElement,
+  deleteElements,
+  elementsMap,
+  getElement,
+  isIdentity,
+  makeStroke,
+  scaleAbout,
+  transformElement,
+  type Transform,
+} from '@kayospace/board';
 import { PenInput, StrokeBuilder, type InkPoint, type PressurePoint } from '@kayospace/ink';
-import { decodeStroke, type Actor, type StrokePoint } from '@kayospace/model';
+import { decodeStroke, type Actor, type CanvasElement, type StrokePoint } from '@kayospace/model';
 import { defaultCamera, fitBounds, screenToWorld, viewBounds, zoomAt, type Camera } from './camera';
 import { eraseFromPoints } from './erase';
 import { Navigation } from './navigation';
-import { Renderer, samplesWorldBounds, type ActiveStroke, type Rect } from './renderer';
+import {
+  HANDLE_SIZE,
+  Renderer,
+  SELECTION_PAD,
+  samplesWorldBounds,
+  type ActiveStroke,
+  type PaintOverlay,
+  type Rect,
+} from './renderer';
+import {
+  corners,
+  handleAt,
+  itemInLasso,
+  itemInRect,
+  rectFromPoints,
+  scaleFromHandle,
+  unionBounds,
+  type Pt,
+} from './selection';
 import { Scene, STROKE_STREAMLINE, STROKE_THINNING } from './scene';
 
-export type Tool = 'pen' | 'eraser' | 'hand';
+export type Tool = 'select' | 'pen' | 'eraser' | 'hand';
 
 /** Origin транзакций с этого устройства: только их отменяет «Отменить». */
 export const LOCAL_ORIGIN = 'kayospace:local';
@@ -29,6 +61,14 @@ export interface EngineState {
   canRedo: boolean;
   elements: number;
   touchDraws: boolean;
+  /** Сколько элементов выделено. */
+  selected: number;
+  /** Счётчик изменений выделения и его рамки — чтобы интерфейс перерисовал меню. */
+  selectionRev: number;
+  /** Идёт перемещение, масштаб или выделение лассо. */
+  transforming: boolean;
+  /** Есть что вставить. */
+  canPaste: boolean;
 }
 
 export interface EngineOptions {
@@ -57,6 +97,15 @@ interface ActiveDraw {
   prevTail: Rect | null;
 }
 
+type SelectGesture =
+  | { kind: 'move'; start: Pt; t: Transform; moved: boolean }
+  | { kind: 'scale'; anchor: Pt; corner: Pt; t: Transform; moved: boolean }
+  | { kind: 'lasso'; points: Pt[] }
+  | { kind: 'marquee'; start: Pt; end: Pt };
+
+/** Буфер обмена — общий для всех досок в окне приложения. */
+let clipboard: CanvasElement[] = [];
+
 interface ActiveErase {
   last: { x: number; y: number };
   /** Кольцо ластика на экране (пиксели устройства) — чтобы стереть его в следующем кадре. */
@@ -83,6 +132,11 @@ export class CanvasEngine {
   private touchDraws: boolean;
   private draw: ActiveDraw | null = null;
   private erase: ActiveErase | null = null;
+  private gesture: SelectGesture | null = null;
+  private readonly selection = new Set<string>();
+  private selectionRev = 0;
+  /** Последнее положение указателя над холстом (clientX/Y) — для вставки. */
+  private pointer: Pt | null = null;
   private raf = 0;
   private state: EngineState;
   private hasCamera: boolean;
@@ -146,6 +200,8 @@ export class CanvasEngine {
           if (this.tool === 'eraser' || info.eraser) {
             this.erase = { last: p, ringRect: null };
             this.eraseAt(p, p);
+          } else if (this.tool === 'select') {
+            this.selectStart(p, info.event, info.pointerType);
           } else {
             this.startDraw(p, info.hasPressure);
           }
@@ -160,6 +216,8 @@ export class CanvasEngine {
             }
             this.draw.predicted = predicted.map((pt) => this.toWorld(pt));
             this.schedule();
+          } else if (this.gesture) {
+            for (const pt of points) this.selectMove(this.toWorld(pt));
           } else if (this.erase) {
             for (const pt of points) {
               const w = this.toWorld(pt);
@@ -187,6 +245,12 @@ export class CanvasEngine {
 
     this.cleanups.push(
       this.scene.onChange((dirty) => {
+        if (this.selection.size > 0) {
+          // Выделенный элемент могли удалить или сдвинуть (в том числе с другого устройства).
+          for (const id of this.selection) if (!this.scene.items.has(id)) this.selection.delete(id);
+          this.selectionRev++;
+          this.renderer.invalidateAll();
+        }
         for (const b of dirty) this.renderer.invalidateWorld(this.camera, b);
         this.schedule();
         this.emit();
@@ -197,6 +261,8 @@ export class CanvasEngine {
     this.undoManager.on('stack-item-popped', onStack);
     this.undoManager.on('stack-cleared', onStack);
 
+    host.addEventListener('pointermove', this.onPointerTrack);
+    host.addEventListener('pointerleave', this.onPointerLeave);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
@@ -230,12 +296,20 @@ export class CanvasEngine {
   setTool(tool: Tool): void {
     if (tool === this.tool) return;
     this.tool = tool;
+    if (tool !== 'select') this.clearSelection();
+    else this.renderer.invalidateAll();
+    this.schedule();
     this.nav.handTool = tool === 'hand';
     this.updateCursor();
     this.emit();
   }
 
   setColor(color: string | null): void {
+    // Есть выделение — перекрашиваем выделенные штрихи, инструмент не меняем.
+    if (this.tool === 'select' && this.selection.size > 0) {
+      this.recolorSelection(color);
+      return;
+    }
     this.color = color;
     if (this.tool !== 'pen') this.setTool('pen');
     this.emit();
@@ -261,13 +335,249 @@ export class CanvasEngine {
   }
 
   undo(): void {
-    if (this.draw || this.erase) return;
+    if (this.draw || this.erase || this.gesture) return;
     this.undoManager.undo();
   }
 
   redo(): void {
-    if (this.draw || this.erase) return;
+    if (this.draw || this.erase || this.gesture) return;
     this.undoManager.redo();
+  }
+
+  // ---------- Выделение ----------
+
+  getSelection(): string[] {
+    return [...this.selection];
+  }
+
+  /** Рамка выделения в мировых координатах (с учётом идущего жеста). */
+  getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const b = unionBounds(
+      [...this.selection].flatMap((id) => {
+        const item = this.scene.items.get(id);
+        return item ? [item.bounds] : [];
+      }),
+    );
+    return b;
+  }
+
+  select(ids: Iterable<string>): void {
+    this.selection.clear();
+    for (const id of ids) if (this.scene.items.has(id)) this.selection.add(id);
+    if (this.selection.size > 0 && this.tool !== 'select') {
+      this.tool = 'select';
+      this.nav.handTool = false;
+      this.updateCursor();
+    }
+    this.selectionChanged();
+  }
+
+  selectAll(): void {
+    this.select(this.scene.items.keys());
+  }
+
+  clearSelection(): void {
+    if (this.selection.size === 0) return;
+    this.selection.clear();
+    this.selectionChanged();
+  }
+
+  deleteSelection(): void {
+    if (this.selection.size === 0 || this.gesture) return;
+    this.undoManager.stopCapturing();
+    deleteElements(this.doc, [...this.selection], LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    this.clearSelection();
+  }
+
+  copySelection(): void {
+    const els = this.selectedElements();
+    if (els.length === 0) return;
+    clipboard = els.map((el) => structuredClone(el));
+    this.emit();
+  }
+
+  cutSelection(): void {
+    this.copySelection();
+    this.deleteSelection();
+  }
+
+  /** Копия выделенного рядом с оригиналом. */
+  duplicateSelection(): void {
+    const els = this.selectedElements();
+    if (els.length === 0 || this.gesture) return;
+    const d = 24 / this.camera.zoom;
+    this.insert(cloneElements(els, d, d, this.opts.actor));
+  }
+
+  /** Вставить из буфера: под указатель, если он над холстом, иначе в центр экрана. */
+  paste(): void {
+    if (clipboard.length === 0 || this.gesture) return;
+    const b = unionBounds(
+      clipboard.map((el) => ({ minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h })),
+    )!;
+    const r = this.host.getBoundingClientRect();
+    const target = this.pointer
+      ? screenToWorld(this.camera, this.pointer.x - r.left, this.pointer.y - r.top)
+      : screenToWorld(this.camera, this.renderer.width / 2, this.renderer.height / 2);
+    const dx = target.x - (b.minX + b.maxX) / 2;
+    const dy = target.y - (b.minY + b.maxY) / 2;
+    this.insert(cloneElements(clipboard, dx, dy, this.opts.actor));
+  }
+
+  /** Сдвинуть выделенное на экранные пиксели (стрелки). */
+  nudgeSelection(dx: number, dy: number): void {
+    if (this.selection.size === 0 || this.gesture) return;
+    this.commitTransform({ s: 1, tx: dx / this.camera.zoom, ty: dy / this.camera.zoom });
+  }
+
+  private insert(els: CanvasElement[]): void {
+    this.undoManager.stopCapturing();
+    addElements(this.doc, els, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    this.select(els.map((el) => el.id));
+  }
+
+  private selectedElements(): CanvasElement[] {
+    return [...this.selection].flatMap((id) => {
+      const el = getElement(this.doc, id);
+      return el ? [el] : [];
+    });
+  }
+
+  private recolorSelection(color: string | null): void {
+    const map = elementsMap(this.doc);
+    const now = Date.now();
+    this.undoManager.stopCapturing();
+    this.doc.transact(() => {
+      for (const el of this.selectedElements()) {
+        if (el.type !== 'stroke') continue;
+        const style = { ...el.style };
+        if (color) style.color = color;
+        else delete style.color;
+        map.set(el.id, { ...el, style, updatedBy: this.opts.actor, updatedAt: now });
+      }
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+  }
+
+  private commitTransform(t: Transform): void {
+    if (isIdentity(t)) return;
+    const map = elementsMap(this.doc);
+    const now = Date.now();
+    this.undoManager.stopCapturing();
+    this.doc.transact(() => {
+      for (const el of this.selectedElements()) {
+        map.set(el.id, transformElement(el, t, this.opts.actor, now));
+      }
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+  }
+
+  private selectionChanged(): void {
+    this.selectionRev++;
+    this.renderer.invalidateAll();
+    this.schedule();
+    this.emit();
+  }
+
+  private selectStart(p: Pt, e: PointerEvent, pointerType: string): void {
+    const z = this.camera.zoom;
+    const additive = e.shiftKey;
+    const b = this.getSelectionBounds();
+    if (b && !additive) {
+      const pad = SELECTION_PAD / z;
+      const padded = {
+        minX: b.minX - pad,
+        minY: b.minY - pad,
+        maxX: b.maxX + pad,
+        maxY: b.maxY + pad,
+      };
+      // Пальцем и пером попасть в ручку труднее, чем мышью.
+      const grab = (pointerType === 'mouse' ? HANDLE_SIZE : HANDLE_SIZE * 1.8) / z;
+      const h = handleAt(padded, p.x, p.y, grab);
+      if (h >= 0) {
+        // Неподвижен противоположный угол самих элементов (без отступа рамки);
+        // масштаб считаем от точки, где схватили ручку, — в начале он ровно 1.
+        const anchor = corners(b)[(h + 2) % 4]!;
+        this.gesture = { kind: 'scale', anchor, corner: p, t: IDENTITY, moved: false };
+        this.selectionChanged();
+        return;
+      }
+      if (p.x >= padded.minX && p.x <= padded.maxX && p.y >= padded.minY && p.y <= padded.maxY) {
+        this.gesture = { kind: 'move', start: p, t: IDENTITY, moved: false };
+        this.selectionChanged();
+        return;
+      }
+    }
+    const hit = this.scene.pick(p.x, p.y, (pointerType === 'mouse' ? 6 : 10) / z);
+    if (hit) {
+      if (additive && this.selection.has(hit)) {
+        this.selection.delete(hit);
+      } else {
+        if (!additive && !this.selection.has(hit)) this.selection.clear();
+        this.selection.add(hit);
+        this.gesture = { kind: 'move', start: p, t: IDENTITY, moved: false };
+      }
+      this.selectionChanged();
+      return;
+    }
+    if (!additive) this.selection.clear();
+    this.gesture =
+      pointerType === 'mouse'
+        ? { kind: 'marquee', start: p, end: p }
+        : { kind: 'lasso', points: [p] };
+    this.selectionChanged();
+  }
+
+  private selectMove(p: Pt): void {
+    const g = this.gesture;
+    if (!g) return;
+    const z = this.camera.zoom;
+    if (g.kind === 'move') {
+      const tx = p.x - g.start.x;
+      const ty = p.y - g.start.y;
+      if (!g.moved && Math.hypot(tx, ty) * z < 3) return; // дрожь руки — ещё не перетаскивание
+      g.moved = true;
+      g.t = { s: 1, tx, ty };
+    } else if (g.kind === 'scale') {
+      g.moved = true;
+      g.t = scaleAbout(g.anchor.x, g.anchor.y, scaleFromHandle(g.anchor, g.corner, p));
+    } else if (g.kind === 'lasso') {
+      const last = g.points[g.points.length - 1]!;
+      if (Math.hypot(p.x - last.x, p.y - last.y) * z < 2) return;
+      g.points.push(p);
+    } else {
+      g.end = p;
+    }
+    this.renderer.invalidateAll();
+    this.schedule();
+  }
+
+  private selectEnd(cancel: boolean): void {
+    const g = this.gesture;
+    this.gesture = null;
+    if (!g) return;
+    if (!cancel) {
+      if ((g.kind === 'move' || g.kind === 'scale') && g.moved) {
+        this.commitTransform(g.t);
+      } else if (g.kind === 'lasso' && g.points.length >= 3) {
+        const area = unionBounds(
+          g.points.map((q) => ({ minX: q.x, minY: q.y, maxX: q.x, maxY: q.y })),
+        )!;
+        for (const item of this.scene.query(area)) {
+          if (itemInLasso(item, g.points)) this.selection.add(item.id);
+        }
+      } else if (g.kind === 'marquee') {
+        const r = rectFromPoints(g.start, g.end);
+        if ((r.maxX - r.minX) * this.camera.zoom > 3 || (r.maxY - r.minY) * this.camera.zoom > 3) {
+          for (const item of this.scene.query(r)) {
+            if (itemInRect(item, r)) this.selection.add(item.id);
+          }
+        }
+      }
+    }
+    this.selectionChanged();
   }
 
   // ---------- Камера ----------
@@ -328,6 +638,8 @@ export class CanvasEngine {
     for (const fn of this.cleanups) fn();
     this.undoManager.destroy();
     this.scene.destroy();
+    this.host.removeEventListener('pointermove', this.onPointerTrack);
+    this.host.removeEventListener('pointerleave', this.onPointerLeave);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
@@ -417,6 +729,7 @@ export class CanvasEngine {
   }
 
   private endGesture(cancel: boolean): void {
+    if (this.gesture) this.selectEnd(cancel);
     const d = this.draw;
     this.draw = null;
     if (this.erase) {
@@ -491,7 +804,26 @@ export class CanvasEngine {
         er.ringRect = rect;
       }
       if (this.renderer.needsPaint) {
-        this.renderer.paint(this.camera, this.scene, active, ring);
+        const overlay: PaintOverlay = { active, ring };
+        const g = this.gesture;
+        if (this.selection.size > 0) {
+          const bounds = this.getSelectionBounds();
+          if (bounds) {
+            overlay.selection = {
+              bounds,
+              ids: this.selection,
+              handles: this.tool === 'select' && (!g || g.kind === 'move' || g.kind === 'scale'),
+            };
+          }
+        }
+        if (g && (g.kind === 'move' || g.kind === 'scale') && g.moved) {
+          overlay.preview = { ids: this.selection, t: g.t };
+        } else if (g?.kind === 'lasso') {
+          overlay.lasso = g.points;
+        } else if (g?.kind === 'marquee') {
+          overlay.marquee = rectFromPoints(g.start, g.end);
+        }
+        this.renderer.paint(this.camera, this.scene, overlay);
         this.paints++;
       }
     } catch (err) {
@@ -526,7 +858,7 @@ export class CanvasEngine {
   }
 
   private updateCursor(): void {
-    let cursor = 'crosshair';
+    let cursor = this.tool === 'select' ? 'default' : 'crosshair';
     if (this.nav.isPanning) cursor = 'grabbing';
     else if (this.tool === 'hand' || this.nav.spaceDown) cursor = 'grab';
     else if (this.tool === 'eraser') cursor = eraserCursor(this.eraserSize);
@@ -544,6 +876,10 @@ export class CanvasEngine {
       canRedo: this.undoManager.canRedo(),
       elements: this.scene.size,
       touchDraws: this.touchDraws,
+      selected: this.selection.size,
+      selectionRev: this.selectionRev,
+      transforming: this.gesture !== null,
+      canPaste: clipboard.length > 0,
     };
   }
 
@@ -577,6 +913,53 @@ export class CanvasEngine {
       else this.undo();
       return;
     }
+    if (mod && e.code === 'KeyA') {
+      e.preventDefault();
+      this.selectAll();
+      return;
+    }
+    if (mod && e.code === 'KeyC') {
+      if (this.selection.size === 0) return; // пусть работает обычное копирование
+      e.preventDefault();
+      this.copySelection();
+      return;
+    }
+    if (mod && e.code === 'KeyX') {
+      if (this.selection.size === 0) return;
+      e.preventDefault();
+      this.cutSelection();
+      return;
+    }
+    if (mod && e.code === 'KeyV') {
+      if (clipboard.length === 0) return;
+      e.preventDefault();
+      this.paste();
+      return;
+    }
+    if (mod && e.code === 'KeyD') {
+      e.preventDefault();
+      this.duplicateSelection();
+      return;
+    }
+    if (e.code === 'Delete' || e.code === 'Backspace') {
+      if (this.selection.size === 0) return;
+      e.preventDefault();
+      this.deleteSelection();
+      return;
+    }
+    if (e.code === 'Escape') {
+      this.clearSelection();
+      return;
+    }
+    if (e.code.startsWith('Arrow') && this.selection.size > 0 && !mod) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[
+        e.code
+      ] ?? [0, 0];
+      this.nudgeSelection(dir[0]! * step, dir[1]! * step);
+      return;
+    }
     if (mod && e.code === 'KeyY') {
       e.preventDefault();
       this.redo();
@@ -596,9 +979,19 @@ export class CanvasEngine {
     if (e.shiftKey && e.code === 'Digit1') this.zoomToFit();
     else if (e.shiftKey && e.code === 'Digit0') this.resetZoom();
     else if (e.shiftKey) return;
+    else if (e.code === 'KeyV') this.setTool('select');
     else if (e.code === 'KeyP' || e.code === 'KeyB') this.setTool('pen');
     else if (e.code === 'KeyE') this.setTool('eraser');
     else if (e.code === 'KeyH') this.setTool('hand');
+  };
+
+  private onPointerTrack = (e: PointerEvent): void => {
+    // Только запоминаем: раскладку (getBoundingClientRect) читаем при вставке, не на каждом движении.
+    this.pointer = { x: e.clientX, y: e.clientY };
+  };
+
+  private onPointerLeave = (): void => {
+    this.pointer = null;
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {

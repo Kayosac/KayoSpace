@@ -55,7 +55,7 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     if (!raw) return { ...defaultSettings };
     const parsed = JSON.parse(raw) as Partial<WorkspaceSettings>;
     const s = { ...defaultSettings, ...parsed };
-    if (!['pen', 'eraser', 'hand'].includes(s.tool)) s.tool = 'pen';
+    if (!['select', 'pen', 'eraser', 'hand'].includes(s.tool)) s.tool = 'pen';
     if (!(typeof s.size === 'number' && s.size > 0 && s.size <= 64)) s.size = defaultSettings.size;
     if (!(typeof s.eraserSize === 'number' && s.eraserSize >= 4 && s.eraserSize <= 200)) {
       s.eraserSize = defaultSettings.eraserSize;

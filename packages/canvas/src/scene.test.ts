@@ -68,6 +68,18 @@ describe('сцена', () => {
     expect(scene.hitTest(100, 100, 2)).toEqual([]);
   });
 
+  it('pick находит верхний элемент под точкой', () => {
+    const doc = createBoardDoc();
+    const s = makeStroke(line(0, 0), { hasPressure: true, style: { size: 4 }, actor: me, now: 1 });
+    const st = makeSticky('сверху', { x: 50, y: -50, actor: me, now: 2 });
+    addElement(doc, s);
+    addElement(doc, st);
+    const scene = new Scene(doc);
+    expect(scene.pick(20, 4, 3)).toBe(s.id);
+    expect(scene.pick(60, 0, 3)).toBe(st.id); // стикер выше штриха
+    expect(scene.pick(20, 40, 3)).toBeNull();
+  });
+
   it('рамка содержимого', () => {
     const doc = createBoardDoc();
     const scene = new Scene(doc);

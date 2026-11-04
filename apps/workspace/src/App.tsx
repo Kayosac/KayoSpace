@@ -12,6 +12,7 @@ import {
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
+import { SelectionMenu } from './SelectionMenu';
 
 declare global {
   interface Window {
@@ -150,6 +151,7 @@ export function App() {
       <div className="top top-right">
         {engine && engineState && <ZoomControls engine={engine} zoom={engineState.zoom} />}
       </div>
+      {engine && engineState && <SelectionMenu engine={engine} state={engineState} />}
       {engine && engineState && (
         <Toolbar engine={engine} state={engineState} onSettings={() => setPanelOpen((v) => !v)} />
       )}

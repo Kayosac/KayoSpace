@@ -245,3 +245,80 @@ test('ластик стирает часть штриха, как кисть; о
   await page.keyboard.press('Control+z');
   await expect.poll(() => elements(page)).toBe(1);
 });
+
+test('выделение: рамка, перемещение, масштаб, копия, перекраска, удаление — и всё уходит на хаб', async ({
+  browser,
+  request,
+}) => {
+  const board = 'e2e-select';
+  const page = await openDevice(browser, { ...synced, board });
+  const other = await openDevice(browser, { ...synced, board });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await drawWave(page, 200, 250, 200);
+  await drawWave(page, 200, 420, 200);
+  await drawWave(page, 700, 300, 200);
+  await expect.poll(() => hubElements(request, board)).toBe(3);
+
+  const selected = () =>
+    page.evaluate(() => (window.__kayospace!.engine as unknown as Sel).getSelection().length);
+  const selBounds = () =>
+    page.evaluate(() => (window.__kayospace!.engine as unknown as Sel).getSelectionBounds()!);
+
+  await page.keyboard.press('v');
+  await page.mouse.move(150, 180);
+  await page.mouse.down();
+  await page.mouse.move(450, 500, { steps: 10 });
+  await page.mouse.up();
+  expect(await selected()).toBe(2);
+  await expect(page.getByTestId('selection-menu')).toBeVisible();
+
+  // Перетаскивание: обе линии сдвигаются, на другом устройстве тоже.
+  const b0 = await selBounds();
+  await page.mouse.move(300, 260);
+  await page.mouse.down();
+  await page.mouse.move(400, 310, { steps: 10 });
+  await page.mouse.up();
+  const b1 = await selBounds();
+  expect(b1.minX - b0.minX).toBeCloseTo(100, 0);
+  expect(b1.minY - b0.minY).toBeCloseTo(50, 0);
+  await expect
+    .poll(() =>
+      other.evaluate(() => {
+        const items = [...(window.__kayospace!.engine as unknown as Sel).scene.items.values()];
+        return Math.min(...items.map((i) => i.bounds.minX));
+      }),
+    )
+    .toBeCloseTo(b1.minX, 0);
+
+  // Масштаб за правый нижний угол: левый верхний угол на месте.
+  const cam = await camera(page);
+  const hx = (b1.maxX - cam.x) * cam.zoom + 6;
+  const hy = (b1.maxY - cam.y) * cam.zoom + 6;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(hx + 80, hy + 80, { steps: 10 });
+  await page.mouse.up();
+  const b2 = await selBounds();
+  expect(b2.maxX - b2.minX).toBeGreaterThan((b1.maxX - b1.minX) * 1.2);
+  expect(b2.minX).toBeCloseTo(b1.minX, 0);
+  await page.screenshot({ path: shot('workspace-selection.png') });
+
+  // Копия рядом, перекраска, удаление через меню.
+  await page.keyboard.press('Control+d');
+  await expect.poll(() => elements(page)).toBe(5);
+  await page.getByRole('radio', { name: 'Синий' }).click();
+  await page.getByTestId('selection-menu').getByRole('button', { name: 'Удалить' }).click();
+  await expect.poll(() => elements(page)).toBe(3);
+  await expect.poll(() => hubElements(request, board)).toBe(3);
+  await expect(page.getByTestId('selection-menu')).toBeHidden();
+
+  // Отмена удаления возвращает копии.
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => elements(page)).toBe(5);
+});
+
+interface Sel {
+  getSelection(): string[];
+  getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null;
+  scene: { items: Map<string, { bounds: { minX: number } }> };
+}
