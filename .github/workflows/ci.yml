@@ -50,10 +50,11 @@ jobs:
       - name: Тесты
         run: pnpm test
 
-      - name: Сборка Pen Lab
+      - name: Сборка Pen Lab и приложения
         run: |
           pnpm --filter @kayospace/pen-lab build
           pnpm --filter @kayospace/pen-lab build:single
+          pnpm --filter @kayospace/workspace build
 
       - name: Pen Lab одним файлом
         uses: actions/upload-artifact@v4
@@ -61,6 +62,85 @@ jobs:
           name: pen-lab
           path: apps/pen-lab/dist-single/pen-lab.html
           retention-days: 14
+
+  e2e:
+    name: Проверка в браузере
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Установка зависимостей
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Браузер для тестов
+        run: pnpm --filter @kayospace/e2e exec playwright install --with-deps chromium
+
+      - name: Сборка Pen Lab и приложения
+        run: |
+          pnpm --filter @kayospace/pen-lab build
+          pnpm --filter @kayospace/workspace build
+
+      - name: Тесты в браузере (вместе с хабом)
+        env:
+          SCREENSHOTS_DIR: ${{ github.workspace }}/e2e/screens
+        run: pnpm --filter @kayospace/e2e e2e
+
+      - name: Отчёт о проверке
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e/report
+            e2e/test-results
+            e2e/screens
+          retention-days: 7
+
+      # Скриншоты кладём в отдельную ветку ci-previews: их можно скачать обычным git fetch.
+      - name: Скриншоты в ветку ci-previews
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -eu
+          if ! ls e2e/screens/*.png >/dev/null 2>&1; then echo "скриншотов нет"; exit 0; fi
+          dir="previews/${REF_NAME//\//-}"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tmp="$(mktemp -d)"
+          git worktree add --detach "$tmp"
+          # Каждый прогон пишет только свою папку, поэтому при гонке просто повторяем поверх свежей ветки.
+          for i in 1 2 3; do
+            if git -C "$tmp" fetch --depth 1 origin ci-previews 2>/dev/null; then
+              git -C "$tmp" checkout -qf -B ci-previews FETCH_HEAD
+            else
+              git -C "$tmp" checkout -qf --orphan ci-previews
+              git -C "$tmp" rm -rfq --ignore-unmatch .
+            fi
+            rm -rf "${tmp:?}/$dir"
+            mkdir -p "$tmp/$dir"
+            cp e2e/screens/*.png "$tmp/$dir/"
+            printf '%s\n' "$GITHUB_SHA" > "$tmp/$dir/SHA"
+            git -C "$tmp" add -A
+            if git -C "$tmp" diff --cached --quiet; then echo "без изменений"; exit 0; fi
+            git -C "$tmp" commit -qm "previews: $REF_NAME @ ${GITHUB_SHA:0:7}"
+            if git -C "$tmp" push origin ci-previews; then exit 0; fi
+          done
+          exit 1
 
   hub-image:
     name: Образ хаба для VPS

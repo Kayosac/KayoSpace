@@ -20,6 +20,11 @@ export interface PenInputOptions {
   palm: PalmMode;
   usePredicted: boolean;
   useRawUpdate: boolean;
+  /**
+   * Начинать ли штрих с этого касания. false — касание достаётся другим обработчикам
+   * (например, навигации: инструмент «рука», зажатый пробел, средняя кнопка мыши).
+   */
+  accept?: (e: PointerEvent) => boolean;
 }
 
 export interface StrokeStart {
@@ -101,6 +106,16 @@ export class PenInput {
     return this.active !== null;
   }
 
+  /** Тип указателя текущего штриха ('' — штриха нет). */
+  get drawingWith(): string {
+    return this.active !== null ? this.activeType : '';
+  }
+
+  /** Отменить текущий штрих (например, второй палец начал жест масштабирования). */
+  cancel(): void {
+    this.finish(null, true);
+  }
+
   destroy(): void {
     this.el.removeEventListener('pointerdown', this.onDown);
     this.el.removeEventListener('lostpointercapture', this.onLostCapture);
@@ -162,6 +177,7 @@ export class PenInput {
         return;
       }
     }
+    if (this.options.accept && !this.options.accept(e)) return;
     if (!this.accepts(e)) {
       this.handlers.onRejected?.(e);
       return;

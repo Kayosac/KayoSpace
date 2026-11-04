@@ -1,9 +1,9 @@
 {
   "name": "@kayospace/app",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Оболочка Tauri 2 для macOS, Windows и Android. Пока показывает Pen Lab.",
+  "description": "Оболочка Tauri 2 для macOS, Windows и Android. Показывает основное приложение (apps/workspace).",
   "scripts": {
     "tauri": "tauri",
     "icons": "tauri icon app-icon.png"

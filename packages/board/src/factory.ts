@@ -37,7 +37,15 @@ export function zIndexFor(now: number): string {
  */
 export function makeStroke(
   points: readonly StrokePoint[],
-  opts: { tool?: StrokeTool; style?: Style; hasPressure: boolean; actor: Actor; now?: number },
+  opts: {
+    tool?: StrokeTool;
+    style?: Style;
+    hasPressure: boolean;
+    actor: Actor;
+    now?: number;
+    /** Мировых единиц на экранный пиксель (1 / zoom), см. StrokeProps.unit. */
+    unit?: number;
+  },
 ): StrokeElement {
   const now = opts.now ?? Date.now();
   const b = strokeBounds(points);
@@ -55,6 +63,7 @@ export function makeStroke(
       tool: opts.tool ?? 'pen',
       points: encodeStroke(local),
       hasPressure: opts.hasPressure,
+      ...(opts.unit !== undefined && opts.unit !== 1 ? { unit: opts.unit } : {}),
     },
   };
 }

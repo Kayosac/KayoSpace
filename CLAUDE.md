@@ -1,15 +1,15 @@
 # Kayospace — правила для Claude Code
 
 Личный воркспейс: бесконечный холст со стилусом, проекты, доступ агентов через MCP. Платформы: macOS, Windows, Android.
-Полный план и решения: `docs/PLAN.md`, `docs/decisions/`. Текущая фаза — **0 (спайки и фундамент)**.
+Полный план и решения: `docs/PLAN.md`, `docs/decisions/`. Текущая фаза — **1 (холст MVP)**, шаги — в `docs/PLAN.md`.
 
 ## Стек
 
 - TypeScript (strict), монорепо pnpm + Turborepo.
-- UI: Vite + чистый TS (React появится вместе с основным холстом в фазе 1).
+- UI: Vite; основное приложение — React 19 (без плагина, TSX через esbuild), Pen Lab — чистый TS.
 - Холст: **свой движок** (решение 0001). Внешние движки холста (tldraw, Excalidraw) не подключаем.
 - Штрихи: свой алгоритм в `packages/ink/src/render.ts` (решение 0002).
-- Данные: Yjs (CRDT); синхронизация — свой протокол поверх WebSocket (`packages/sync`, решение 0004).
+- Данные: Yjs (CRDT), локально — IndexedDB (`y-indexeddb`); синхронизация — свой протокол поверх WebSocket (`packages/sync`, решение 0004).
 - Оболочка: Tauri 2 (`apps/app`).
 - Агенты: MCP TypeScript SDK v2 (`@modelcontextprotocol/server`), Streamable HTTP на `/mcp` хаба.
 
@@ -19,14 +19,18 @@
 - `packages/ink` — ввод пера, отрисовка штрихов, метрики. Зависит только от `model`.
 - `packages/board` — доска на Yjs: элементы, изменения, экспорт для агентов.
 - `packages/sync` — протокол синхронизации и клиент (браузер и Node).
+- `packages/canvas` — движок холста без React: камера, сцена, отрисовка, навигация, инструменты (решение 0006).
 - `server/hub` — хаб: WebSocket-синк, хранение досок на диске, REST, MCP.
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
-- `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/pen-lab/dist` (позже — из основного приложения).
+- `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк.
+- `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`.
+- `e2e` — проверки в настоящем браузере (Playwright) вместе с хабом; скриншоты из CI — в ветке `ci-previews`.
 
 ## Команды
 
 - `pnpm install`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm format`
-- `pnpm dev` — Pen Lab на http://localhost:5173
+- `pnpm dev` — приложение на http://localhost:5180; `pnpm pen-lab` — Pen Lab на http://localhost:5173
+- `pnpm e2e` — собрать приложения и прогнать проверки в браузере (нужен `pnpm exec playwright install chromium` в `e2e`)
 - `pnpm hub` — хаб на http://localhost:4000 (MCP: `/mcp`, синк: `/sync/<доска>`)
 - `pnpm app:dev`, `pnpm app:android:dev` — приложение
 
@@ -44,4 +48,6 @@
 - Всегда читаем `getCoalescedEvents()`; предсказанные точки (`getPredictedEvents()`) рисуем только во временном хвосте.
 - Построение штриха причинное: уже выпущенные сэмплы не меняются — это позволяет дорисовывать штрих по кускам.
 - Законченный штрих хранится как исходные точки (`encodeStroke`), а не как контур: контур всегда можно пересчитать.
+- Толщина пера — в экранных пикселях; штрих хранит `unit = 1 / zoom`, чтобы контур пересчитывался одинаково везде.
+- Отменяются только свои правки: всё, что делает пользователь, пишется с origin `LOCAL_ORIGIN`.
 - Любое изменение отрисовки проверяем в Pen Lab на реальном планшете и сравниваем отчёт с предыдущим.
