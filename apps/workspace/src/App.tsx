@@ -14,6 +14,7 @@ import { BoardsPanel } from './BoardsPanel';
 import { AssetStore, imageFiles } from './assets';
 import { NoteEditor } from './NoteEditor';
 import { lowLatencyInk, releaseFieldFocus } from './touch';
+import { UpdateBanner, useUpdates } from './UpdateBanner';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
@@ -200,6 +201,7 @@ export function App() {
     };
   }, [board, hubUrl, hubToken]);
 
+  const updates = useUpdates();
   const lowLatency = lowLatencyInk(settings.lowLatencyInk);
   // Холст для открытой доски.
   useEffect(() => {
@@ -621,6 +623,7 @@ export function App() {
       />
       {dropping && <div className="drop-hint">Отпустите — картинка встанет сюда</div>}
       {toast && <div className="toast">{toast}</div>}
+      <UpdateBanner updates={updates} />
       <header className="top top-left">
         <SyncChip
           board={board}
@@ -745,6 +748,7 @@ export function App() {
           lowLatency={lowLatency}
           onLowLatency={(on) => update({ lowLatencyInk: on })}
           onOpenBoard={(id, name) => openBoard(id, name, false)}
+          updates={updates}
           onClose={() => setPanel(null)}
         />
       )}

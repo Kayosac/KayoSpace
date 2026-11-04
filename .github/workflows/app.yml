@@ -1,7 +1,8 @@
 name: Сборка приложения
 
 # Запуск вручную (Actions → «Сборка приложения» → Run workflow) или по тегу v*.
-# По тегу v* все сборки дополнительно публикуются в GitHub Release.
+# По тегу v* все сборки публикуются в GitHub Release вместе с latest.json — по нему приложения
+# на компьютере обновляются сами, Android предлагает скачать новый APK (решение 0011).
 on:
   workflow_dispatch:
     inputs:
@@ -69,11 +70,38 @@ jobs:
           pnpm --filter @kayospace/app tauri android init --ci
           pnpm --filter @kayospace/app tauri icon app-icon.png
 
-      - name: Сборка APK (debug, ARM64)
-        # Debug-сборка подписана отладочным ключом, поэтому её можно сразу поставить на планшет.
+      - name: Подпись APK постоянным ключом
+        id: signing
+        # Ключ из секретов (решение 0011): новая версия ставится поверх старой, только если ключ тот же.
+        # Нет ключа — debug-сборка с отладочным ключом этой машины (поверх прежней не встанет).
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "::warning::Нет ANDROID_KEYSTORE — debug-сборка, обновить поверх прежней версии не получится"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/kayospace.jks"
+          node apps/app/scripts/android-signing.mjs apps/app/src-tauri/gen/android "$RUNNER_TEMP/kayospace.jks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка APK (ARM64)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-          pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            pnpm --filter @kayospace/app tauri android build --apk --target aarch64
+          else
+            pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
+          fi
+
+      - name: Подпись APK — проверка
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          test -n "$APK" || { echo "::error::Нет release APK"; exit 1; }
+          "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner" verify --print-certs "$APK" | head -3
 
       - name: Понятное имя файла
         run: |
@@ -102,7 +130,10 @@ jobs:
             os: macos-15-intel
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: --target universal-apple-darwin
-            bundle: apps/app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            bundle: |
+              apps/app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              apps/app/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.tar.gz
+              apps/app/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.tar.gz.sig
           - name: Windows
             key: windows
             os: windows-latest
@@ -111,6 +142,7 @@ jobs:
             bundle: |
               apps/app/src-tauri/target/release/bundle/msi/*.msi
               apps/app/src-tauri/target/release/bundle/nsis/*.exe
+              apps/app/src-tauri/target/release/bundle/nsis/*.exe.sig
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -143,7 +175,16 @@ jobs:
 
       - name: Сборка
         if: steps.gate.outputs.run == 'true'
-        run: pnpm --filter @kayospace/app tauri build ${{ matrix.args }}
+        shell: bash
+        env:
+          # Ключ подписи обновлений (решение 0011). Есть — сборка выпускает ещё и подписанные
+          # файлы обновления (.tar.gz/.exe + .sig); нет — обычная сборка без автообновления.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          EXTRA=""
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then EXTRA="--config src-tauri/tauri.updater.conf.json"; else echo "::warning::Нет TAURI_SIGNING_PRIVATE_KEY — сборка без файлов автообновления"; fi
+          pnpm --filter @kayospace/app tauri build ${{ matrix.args }} $EXTRA
 
       - uses: actions/upload-artifact@v4
         if: steps.gate.outputs.run == 'true'
@@ -166,8 +207,17 @@ jobs:
 
       - run: find dist -type f -exec ls -la {} \;
 
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: apps/app/scripts
+
+      - name: Список версий для автообновления (latest.json)
+        run: node src/apps/app/scripts/latest-json.mjs dist "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" > dist/latest.json && cat dist/latest.json
+
+      # Обычный (не предварительный) релиз: приложения берут latest.json из «последнего релиза».
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
-          prerelease: true
+          make_latest: true
           generate_release_notes: true

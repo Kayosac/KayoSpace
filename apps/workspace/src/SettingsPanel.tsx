@@ -3,6 +3,7 @@ import { isValidBoardId } from '@kayospace/sync';
 import type { ConnectionState } from './connection';
 import { DevicesSection } from './DevicesSection';
 import { BackupsSection } from './BackupsSection';
+import type { useUpdates } from './UpdateBanner';
 import type { SessionState } from './session';
 import type { WorkspaceSettings } from './settings';
 import { CloseIcon } from './icons';
@@ -22,6 +23,7 @@ export function SettingsPanel({
   lowLatency,
   onLowLatency,
   onOpenBoard,
+  updates,
   onClose,
 }: {
   settings: WorkspaceSettings;
@@ -38,6 +40,7 @@ export function SettingsPanel({
   onLowLatency: (on: boolean) => void;
   /** Открыть доску (восстановленную из копии). */
   onOpenBoard: (id: string, name: string) => void;
+  updates: ReturnType<typeof useUpdates>;
   onClose: () => void;
 }) {
   const [board, setBoard] = useState(settings.board);
@@ -188,7 +191,39 @@ export function SettingsPanel({
         <dt>Вид</dt>
         <dd>Shift 1 — всё, Shift 0 — 100%</dd>
       </dl>
-      <p className="muted version">Kayospace {__APP_VERSION__}</p>
+      <div className="version">
+        <span className="muted">Kayospace {__APP_VERSION__}</span>
+        {updates.supported && (
+          <>
+            <button
+              className="link-btn"
+              onClick={updates.check}
+              disabled={updates.status.kind === 'checking' || updates.status.kind === 'installing'}
+              data-testid="update-check"
+            >
+              Проверить обновления
+            </button>
+            <small data-testid="update-status">{updateText(updates.status)}</small>
+          </>
+        )}
+      </div>
     </aside>
   );
+}
+
+function updateText(s: ReturnType<typeof useUpdates>['status']): string {
+  switch (s.kind) {
+    case 'checking':
+      return 'Проверяю…';
+    case 'none':
+      return 'Установлена последняя версия.';
+    case 'available':
+      return `Доступна версия ${s.update.version}.`;
+    case 'installing':
+      return `Устанавливаю ${s.update.version}…`;
+    case 'error':
+      return s.message;
+    default:
+      return '';
+  }
 }

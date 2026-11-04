@@ -41,6 +41,8 @@
 - `pnpm hub` — хаб на http://localhost:4000 (MCP: `/mcp`, синк: `/sync/<доска>`); `pnpm pair` — QR и код
   подключения устройства; `pnpm e2e:dev` — проверка режима разработки
 - `pnpm app:dev`, `pnpm app:android:dev` — приложение
+- Выпуск версии: одна версия в `apps/workspace`, `apps/app`, `tauri.conf.json`, `Cargo.toml` (проверяет тест),
+  затем тег `vX.Y.Z` — CI соберёт, подпишет и опубликует релиз с `latest.json` (автообновление, решение 0011)
 
 ## Соглашения
 
