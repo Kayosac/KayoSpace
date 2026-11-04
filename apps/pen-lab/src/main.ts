@@ -23,7 +23,7 @@ import { defaultSettings, loadSettings, saveSettings, type Settings } from './se
 import { BoardLink, hubSyncUrl, type RemoteStroke } from './link';
 import type { SyncStatus } from '@kayospace/sync';
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 
 interface Stroke {
   /** id элемента на доске хаба (если штрих синхронизирован). */
@@ -706,7 +706,6 @@ function frame(t: number): void {
     recordError('frame', err);
   } finally {
     // Цикл кадров не должен останавливаться ни при какой ошибке.
-    if (settings.syncOn && settings.hubUrl) startSync();
     requestAnimationFrame(frame);
   }
 }
@@ -878,8 +877,10 @@ function renderSync(status: SyncStatus | 'off'): void {
 }
 
 function startSync(): void {
-  stopSync();
   const url = hubSyncUrl(settings.hubUrl, settings.board, settings.hubToken);
+  // Уже подключены к тому же адресу — ничего не пересоздаём (повторный вызов безопасен).
+  if (link && url && link.url === url && link.client.status !== 'stopped') return;
+  stopSync();
   if (!url) {
     $('sync-note').textContent =
       'Проверьте адрес хаба (например 192.168.1.10:4000) и имя доски (латиница, цифры, «-», «_»).';
@@ -902,7 +903,7 @@ function startSync(): void {
       st.id = link.publish(st.points, st.style.size, !st.style.simulatePressure);
     }
   }
-  logEvent(`синхронизация: ${url}`);
+  logEvent(`синхронизация: ${url.replace(/\?token=.*$/, '?token=…')}`);
 }
 
 function stopSync(): void {
@@ -1080,4 +1081,6 @@ if (window.innerWidth >= 1100) {
   panel.hidden = false;
   $('btn-settings').setAttribute('aria-pressed', 'true');
 }
+// Автоподключение к хабу, если оно было включено в прошлый раз.
+if (settings.syncOn && settings.hubUrl) startSync();
 requestAnimationFrame(frame);

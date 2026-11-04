@@ -1,6 +1,6 @@
 {
   "name": "@kayospace/pen-lab",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "Стенд для замера пера: давление, наклон, частота событий, задержка отрисовки",
