@@ -57,17 +57,16 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Android-проект и иконки
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
         run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           pnpm --filter @kayospace/app tauri android init --ci
           pnpm --filter @kayospace/app tauri icon app-icon.png
 
       - name: Сборка APK (debug, ARM64)
         # Debug-сборка подписана отладочным ключом, поэтому её можно сразу поставить на планшет.
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
-        run: pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
 
       - uses: actions/upload-artifact@v4
         with:
