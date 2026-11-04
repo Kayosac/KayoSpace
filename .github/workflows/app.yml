@@ -97,7 +97,9 @@ jobs:
         include:
           - name: macOS (universal)
             key: macos
-            os: macos-latest
+            # Intel-машины: у GitHub не хватает ARM-машин с macOS (задачи часами ждут в очереди
+            # и отменяются). Универсальная сборка (ARM + Intel) с Intel-машины собирается так же.
+            os: macos-15-intel
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: --target universal-apple-darwin
             bundle: apps/app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
