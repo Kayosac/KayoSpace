@@ -125,3 +125,43 @@ describe('samplesBounds', () => {
     expect(boundsIntersect(a, { minX: 11, minY: 0, maxX: 20, maxY: 10 })).toBe(false);
   });
 });
+
+describe('скошенный наконечник (маркер)', () => {
+  const nib = { ...style, thinning: 0, nib: { angle: -Math.PI / 4, ratio: 0.25 } };
+  const line = (dx: number, dy: number) =>
+    Array.from({ length: 40 }, (_, i) => ({ x: i * dx, y: i * dy, p: 0.5, t: i * 8 }));
+  const mid = (pts: { x: number; y: number; p: number }[]) => {
+    const s = strokeSamples(pts, nib);
+    return s[Math.floor(s.length / 2)]!.r;
+  };
+
+  it('вдоль узкой кромки — тонко, поперёк — толсто, нажим не влияет', () => {
+    const thin = mid(line(3, -3)); // «/» — вдоль кромки
+    const thick = mid(line(3, 3)); // «\» — поперёк
+    expect(thin).toBeCloseTo((nib.size / 2) * 0.25, 1);
+    expect(thick).toBeCloseTo(nib.size / 2, 1);
+    const pressed = line(3, 3).map((p) => ({ ...p, p: 1 }));
+    expect(mid(pressed)).toBeCloseTo(thick, 6);
+  });
+
+  it('построение остаётся причинным', () => {
+    const b = new StrokeBuilder(nib);
+    wave.slice(0, 30).forEach((p) => b.add(p));
+    const snapshot = b.samples.map((s) => ({ ...s }));
+    wave.slice(30).forEach((p) => b.add(p));
+    snapshot.forEach((s, i) => expect(b.samples[i]).toEqual(s));
+  });
+
+  it('толщина меняется плавно, без зубцов от дрожи', () => {
+    const shaky = Array.from({ length: 80 }, (_, i) => ({
+      x: i * 3,
+      y: (i % 2) * 0.4,
+      p: 0.5,
+      t: i * 8,
+    }));
+    const s = strokeSamples(shaky, nib);
+    for (let i = 1; i < s.length; i++) {
+      expect(Math.abs(s[i]!.r - s[i - 1]!.r)).toBeLessThan(nib.size * 0.1);
+    }
+  });
+});

@@ -7,6 +7,7 @@ import {
 } from '@kayospace/canvas';
 import type { AlignMode } from '@kayospace/board';
 import { AI_MENU, type AiAction } from './ai';
+import { CommitInput } from './CommitInput';
 import { CopyIcon, DuplicateIcon, MoreIcon, SparkleIcon, TrashIcon } from './icons';
 
 const ALIGN: { mode: AlignMode; name: string; min: number }[] = [
@@ -73,8 +74,6 @@ export function SelectionMenu({
   }, [none]);
   const frame = state.selectedFrame;
   const frameName = frame ? frameNameOf(engine, frame) : '';
-  const [name, setName] = useState(frameName);
-  useEffect(() => setName(frameName), [frameName, frame]);
 
   if (
     state.selected === 0 ||
@@ -113,21 +112,14 @@ export function SelectionMenu({
       data-rev={state.selectionRev}
     >
       {frame ? (
-        <input
+        <CommitInput
+          key={frame}
           className="frame-name"
-          value={name}
+          value={frameName}
           aria-label="Название фрейма"
           data-testid="frame-name"
-          onChange={(e) => setName(e.target.value)}
-          onBlur={() => engine.renameFrame(frame, name)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') {
-              setName(frameName);
-              e.currentTarget.blur();
-            }
-          }}
+          onCommit={(v) => engine.renameFrame(frame, v)}
+          onKeyDown={(e) => e.stopPropagation()}
         />
       ) : (
         <span className="count">{state.selected}</span>

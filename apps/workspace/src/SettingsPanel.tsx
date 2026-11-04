@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { isValidBoardId } from '@kayospace/sync';
 import type { ConnectionState } from './connection';
 import { DevicesSection } from './DevicesSection';
+import { BackupsSection } from './BackupsSection';
 import type { SessionState } from './session';
 import type { WorkspaceSettings } from './settings';
 import { CloseIcon } from './icons';
@@ -18,6 +19,9 @@ export function SettingsPanel({
   onSelfRevoked,
   onTouchDraws,
   onRotateWithFingers,
+  lowLatency,
+  onLowLatency,
+  onOpenBoard,
   onClose,
 }: {
   settings: WorkspaceSettings;
@@ -30,6 +34,10 @@ export function SettingsPanel({
   onSelfRevoked: () => void;
   onTouchDraws: (on: boolean) => void;
   onRotateWithFingers: (on: boolean) => void;
+  lowLatency: boolean;
+  onLowLatency: (on: boolean) => void;
+  /** Открыть доску (восстановленную из копии). */
+  onOpenBoard: (id: string, name: string) => void;
   onClose: () => void;
 }) {
   const [board, setBoard] = useState(settings.board);
@@ -102,6 +110,7 @@ export function SettingsPanel({
         )}
       </div>
       {hub && !connection.dev && <DevicesSection hub={hub} onSelfRevoked={onSelfRevoked} />}
+      {hub && <BackupsSection hub={hub} current={settings.board} onOpen={onOpenBoard} />}
       <hr />
       <label className="check">
         <input
@@ -124,6 +133,21 @@ export function SettingsPanel({
           Поворачивать холст двумя пальцами
           <small>
             Начинается после заметного поворота пальцев; у прямого угла холст выравнивается сам.
+          </small>
+        </span>
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={lowLatency}
+          onChange={(e) => onLowLatency(e.target.checked)}
+          data-testid="low-latency"
+        />
+        <span>
+          Перо с минимальной задержкой
+          <small>
+            Линия появляется под пером быстрее. На некоторых экранах (чаще Windows) при сдвиге
+            холста видны разрывы картинки — тогда выключите. Само включается только на Android.
           </small>
         </span>
       </label>

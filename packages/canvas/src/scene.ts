@@ -58,12 +58,17 @@ export interface SceneItem {
 }
 
 /**
- * Виды пера. Перо — толщина по нажиму; маркер — ровная и толще; выделитель — широкий
- * полупрозрачный (цвет по умолчанию — жёлтый). scale — во сколько раз толще выбранной толщины.
+ * Виды пера. Перо — толщина по нажиму; маркер — скошенный наконечник: толщина зависит от
+ * направления (вдоль «/» — тонко, поперёк — толсто), чуть прозрачный, поэтому наложения темнее;
+ * выделитель — широкий полупрозрачный (цвет по умолчанию — жёлтый).
+ * scale — во сколько раз толще выбранной толщины (для маркера — самая толстая часть).
  */
-export const PEN_KINDS: Record<StrokeTool, { scale: number; thinning: number; alpha: number }> = {
+export const PEN_KINDS: Record<
+  StrokeTool,
+  { scale: number; thinning: number; alpha: number; nib?: { angle: number; ratio: number } }
+> = {
   pen: { scale: 1, thinning: STROKE_THINNING, alpha: 1 },
-  marker: { scale: 1.8, thinning: 0, alpha: 1 },
+  marker: { scale: 2.6, thinning: 0, alpha: 0.85, nib: { angle: -Math.PI / 4, ratio: 0.22 } },
   highlighter: { scale: 5, thinning: 0, alpha: 0.35 },
 };
 export const HIGHLIGHTER_COLOR = '#f5d90a';
@@ -78,6 +83,7 @@ export function strokeStyleFor(el: StrokeElement): StrokeStyle {
     // Маркер и выделитель — ровной толщины: нажим не учитываем.
     simulatePressure: el.props.tool === 'pen' || !el.props.tool ? !el.props.hasPressure : false,
     unit: el.props.unit ?? 1,
+    ...(kind.nib ? { nib: kind.nib } : {}),
   };
 }
 

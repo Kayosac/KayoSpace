@@ -95,6 +95,14 @@ test('навигация: масштаб колесом с Ctrl, сдвиг ко
   await page.keyboard.up('Control');
   await expect.poll(async () => (await camera(page)).zoom).toBeGreaterThan(1.2);
   await expect(page.getByTestId('zoom')).not.toHaveText('100%');
+  // Щелчок колеса доводится плавно за несколько кадров — ждём, пока вид остановится.
+  await expect
+    .poll(async () => {
+      const z = (await camera(page)).zoom;
+      await page.waitForTimeout(60);
+      return (await camera(page)).zoom === z;
+    })
+    .toBe(true);
 
   const c1 = await camera(page);
   await page.mouse.wheel(120, 60);
@@ -235,6 +243,67 @@ test('планшет: перо рисует, палец двигает холс�
   await expect.poll(() => elements(page)).toBe(1);
 
   await page.screenshot({ path: shot('workspace-tablet.png') });
+});
+
+test('планшет без клавиатуры: проекты, доски и названия — только касаниями', async ({
+  browser,
+}) => {
+  // Ни одного нажатия клавиш: текст вводится как с экранной клавиатуры (fill), действия — касанием.
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ board: 'e2e-touch-only' }),
+  ] as const);
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  const focused = () => page.evaluate(() => document.activeElement?.tagName ?? null);
+
+  await page.getByTestId('board-title').tap();
+  const panel = page.getByTestId('boards-panel');
+  await expect(panel).toBeVisible();
+  // Панель не открывает клавиатуру сама.
+  expect(await focused()).not.toBe('INPUT');
+
+  // Новый проект: название и кнопка «Создать».
+  await page.getByTestId('add-project').tap();
+  await page.getByTestId('new-project-name').fill('Ремонт');
+  // Клавиатуру спрятали, тапнув по пустому месту панели, — ввод не пропадает.
+  await panel.getByRole('heading', { name: 'Доски' }).tap();
+  await expect(page.getByTestId('new-project-name')).toHaveValue('Ремонт');
+  await page.getByTestId('new-project-create').tap();
+  const tabs = page.getByTestId('projects');
+  await expect(tabs.getByRole('tab', { name: 'Ремонт' })).toHaveAttribute('aria-selected', 'true');
+
+  // Переименование проекта сохраняется касанием холста — без Enter.
+  await page.getByTestId('project-name').fill('Ремонт кухни');
+  await page.getByTestId('stage').tap({ position: { x: 900, y: 600 } });
+  await expect(tabs.getByRole('tab', { name: 'Ремонт кухни' })).toBeVisible();
+
+  // Название доски сохраняется и при закрытии панели крестиком.
+  await page.getByTestId('board-name').fill('Кухня');
+  await panel.getByRole('button', { name: 'Закрыть' }).tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Кухня');
+
+  // Новая доска — кнопкой в списке, в выбранном проекте.
+  await page.getByTestId('board-title').tap();
+  await page.getByLabel('Найти или создать доску').fill('Смета');
+  await page.getByRole('button', { name: /Создать «Смета» в «Ремонт кухни»/ }).tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Смета');
+  await page.getByTestId('board-title').tap();
+  await expect(page.getByRole('option', { name: /Смета/ })).toHaveCount(1);
+  await page.screenshot({ path: shot('touch-only.png') });
+
+  // Отмена ввода проекта — тоже касанием.
+  await page.getByTestId('add-project').tap();
+  await page.getByTestId('new-project-name').fill('Лишний');
+  await page.getByRole('button', { name: 'Не создавать проект' }).tap();
+  await expect(tabs.getByRole('tab', { name: 'Лишний' })).toHaveCount(0);
+  await context.close();
 });
 
 test('ластик стирает часть штриха, как кисть; отмена возвращает всё одним шагом', async ({
@@ -805,6 +874,7 @@ type El = {
   type: string;
   x: number;
   y: number;
+  h: number;
   z: string;
   style: { color?: string };
   props: Record<string, unknown>;
@@ -991,4 +1061,85 @@ test('проекты: создать, положить доску, новая д
   await b.getByRole('button', { name: 'Удалить проект' }).click();
   await expect(b.getByTestId('projects').getByRole('tab')).toHaveCount(1);
   await expect(b.getByRole('option', { name: /Смета/ })).toHaveCount(1);
+});
+
+test('резервные копии: доска из копии открывается рядом с исходной', async ({
+  browser,
+  request,
+}) => {
+  const page = await openDevice(browser, { ...synced, board: 'e2e-backup' });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await drawWave(page, 300, 300);
+  await expect.poll(() => hubElements(request, 'e2e-backup')).toBe(1);
+  const made = await request.post(`http://${HUB_ADDRESS}/api/backups`, {
+    headers: { Authorization: `Bearer ${HUB_TOKEN}` },
+  });
+  expect(made.ok()).toBe(true);
+  // После копии доску очистили — восстанавливаем.
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Delete');
+  await expect.poll(() => hubElements(request, 'e2e-backup')).toBe(0);
+
+  await page.getByRole('button', { name: 'Настройки' }).click();
+  const section = page.getByTestId('backups');
+  await expect(section.getByTestId('backups-last')).toContainText('Всего копий');
+  await section.getByTestId('restore-open').click();
+  const row = section.getByTestId('backup-boards').locator('li', { hasText: 'открыта' });
+  await expect(row).toContainText('1 эл.');
+  await page.screenshot({ path: shot('backups.png') });
+  await row.getByRole('button', { name: 'Восстановить' }).click();
+  await section.getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.getByTestId('board-title')).toContainText('(копия от');
+  await expect.poll(() => elements(page)).toBe(1);
+});
+
+test('«Поделиться» (Android): текст и картинка ложатся во «Входящие» лентой', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1180, height: 820 } });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ board: 'e2e-before-share', connectSkipped: true }),
+  ] as const);
+  // Оболочка Tauri: плагин отдаёт присланное один раз, остальные команды ничего не делают.
+  const png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4YWODFTEMLQkAZZlQAVIPr1MAAAAASUVORK5CYII=';
+  await context.addInitScript((data) => {
+    let shared: unknown = {
+      subject: 'Статья про холсты',
+      text: 'https://example.com/canvas',
+      files: [{ name: 'скрин.png', mime: 'image/png', data }],
+    };
+    let cb = 0;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      transformCallback: () => ++cb,
+      unregisterCallback: () => {},
+      invoke: async (cmd: string) => {
+        if (cmd === 'plugin:share-target|take') {
+          const out = shared ?? { files: [] };
+          shared = null;
+          return out;
+        }
+        return null;
+      },
+    };
+  }, png);
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await expect(page.getByTestId('board-title')).toHaveText('Входящие');
+  await expect.poll(() => elements(page)).toBe(2);
+  const els = (await allElements(page)).map((e) => ({
+    type: e.type,
+    y: e.y,
+    h: e.h,
+    content: e.props.content ?? null,
+  }));
+  const text = els.find((e) => e.type === 'text')!;
+  const image = els.find((e) => e.type === 'image')!;
+  expect(text.content).toBe('Статья про холсты\nhttps://example.com/canvas');
+  // Картинка — под текстом, не поверх.
+  expect(image.y).toBeGreaterThanOrEqual(text.y + text.h);
+  await page.screenshot({ path: shot('share-inbox.png') });
+  await context.close();
 });

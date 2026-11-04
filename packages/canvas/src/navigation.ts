@@ -29,6 +29,8 @@ const PALM_SIZE = 30;
 /** Ограничение шага колеса при масштабе: у мыши один щелчок = 100 и больше. */
 const MAX_ZOOM_DELTA = 30;
 const ZOOM_SPEED = 0.01;
+/** Постоянная времени плавной прокрутки колесом мыши, мс. */
+const SMOOTH_MS = 45;
 /** Касание пальцами считается тапом, если короче этого (мс)… */
 const TAP_MAX_MS = 350;
 /** …и ни один палец не сдвинулся дальше этого (CSS-пиксели). */
@@ -122,6 +124,8 @@ export class Navigation {
   }
 
   destroy(): void {
+    if (this.smooth) cancelAnimationFrame(this.smooth.raf);
+    this.smooth = null;
     const el = this.el;
     el.removeEventListener('wheel', this.onWheel);
     el.removeEventListener('pointerdown', this.onDown);
@@ -155,19 +159,83 @@ export class Navigation {
       dx *= this.rect.width;
       dy *= this.rect.height;
     }
+    // Щелчок колеса мыши — большой рывок: его растягиваем на несколько кадров.
+    // Трекпад шлёт мелкие частые шаги — их применяем сразу, без задержки.
+    const notch = isWheelNotch(e);
     const cam = this.opts.getCamera();
     if (e.ctrlKey || e.metaKey) {
       const p = this.local(e);
       const d = Math.max(-MAX_ZOOM_DELTA, Math.min(MAX_ZOOM_DELTA, dy));
-      this.opts.setCamera(zoomAt(cam, p.x, p.y, Math.exp(-d * ZOOM_SPEED)));
+      if (notch) this.smoothBy(0, 0, -d * ZOOM_SPEED, p);
+      else this.opts.setCamera(zoomAt(cam, p.x, p.y, Math.exp(-d * ZOOM_SPEED)));
       return;
     }
     if (e.shiftKey && dx === 0) {
       dx = dy;
       dy = 0;
     }
-    this.opts.setCamera(panBy(cam, -dx, -dy));
+    if (notch) this.smoothBy(dx, dy, 0, null);
+    else this.opts.setCamera(panBy(cam, -dx, -dy));
   };
+
+  /** Плавная прокрутка колесом: сколько ещё сдвинуть (CSS-пиксели) и приблизить (логарифм). */
+  private smooth: {
+    dx: number;
+    dy: number;
+    zoom: number;
+    at: TouchPoint;
+    last: number;
+    raf: number;
+  } | null = null;
+
+  private smoothBy(dx: number, dy: number, zoom: number, at: TouchPoint | null): void {
+    const s = (this.smooth ??= {
+      dx: 0,
+      dy: 0,
+      zoom: 0,
+      at: at ?? { x: 0, y: 0 },
+      last: performance.now(),
+      raf: requestAnimationFrame(this.stepSmooth),
+    });
+    s.dx += dx;
+    s.dy += dy;
+    s.zoom += zoom;
+    if (at) s.at = at;
+  }
+
+  private stepSmooth = (now: number): void => {
+    const s = this.smooth;
+    if (!s) return;
+    const dt = Math.max(1, Math.min(50, now - s.last));
+    s.last = now;
+    // Экспоненциальное приближение: за ~150 мс проходим почти весь путь.
+    const f = 1 - Math.exp(-dt / SMOOTH_MS);
+    const done = Math.abs(s.dx) < 0.5 && Math.abs(s.dy) < 0.5 && Math.abs(s.zoom) < 0.002;
+    const k = done ? 1 : f;
+    this.applySmooth(s.dx * k, s.dy * k, s.zoom * k);
+    s.dx -= s.dx * k;
+    s.dy -= s.dy * k;
+    s.zoom -= s.zoom * k;
+    if (done) this.smooth = null;
+    else s.raf = requestAnimationFrame(this.stepSmooth);
+  };
+
+  private applySmooth(dx: number, dy: number, zoom: number): void {
+    const s = this.smooth!;
+    let cam = this.opts.getCamera();
+    if (dx || dy) cam = panBy(cam, -dx, -dy);
+    if (zoom) cam = zoomAt(cam, s.at.x, s.at.y, Math.exp(zoom));
+    this.opts.setCamera(cam);
+  }
+
+  /** Довести плавную прокрутку сразу (началось перетаскивание или другой жест). */
+  finishSmooth(): void {
+    const s = this.smooth;
+    if (!s) return;
+    cancelAnimationFrame(s.raf);
+    this.applySmooth(s.dx, s.dy, s.zoom);
+    this.smooth = null;
+  }
 
   private onGestureStart = (e: WebKitGestureEvent): void => {
     e.preventDefault();
@@ -220,6 +288,7 @@ export class Navigation {
   }
 
   private onDown = (e: PointerEvent): void => {
+    this.finishSmooth();
     if (e.pointerType === 'touch') {
       // Пока рисуют пером, пальцы на экране — это ладонь.
       if (this.opts.drawingWith() === 'pen') return;
@@ -347,4 +416,20 @@ export class Navigation {
       /* синтетические события */
     }
   }
+}
+
+/**
+ * Щелчок колеса мыши, а не трекпад: строки или страницы (Firefox), либо крупный шаг,
+ * кратный 120 в устаревшем wheelDelta (Chrome, Edge, WebView2). Трекпад шлёт мелкие дробные шаги.
+ */
+export function isWheelNotch(e: {
+  deltaMode: number;
+  deltaX: number;
+  deltaY: number;
+  wheelDeltaY?: number;
+}): boolean {
+  if (e.deltaMode !== 0) return true;
+  if (e.deltaX !== 0 || Math.abs(e.deltaY) < 50) return false;
+  const legacy = e.wheelDeltaY;
+  return legacy === undefined || (legacy !== 0 && legacy % 120 === 0);
 }

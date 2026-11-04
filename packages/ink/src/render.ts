@@ -36,6 +36,12 @@ export interface StrokeStyle {
    * в экранных пикселях, поэтому штрих выглядит одинаково при любом зуме. По умолчанию 1.
    */
   unit?: number;
+  /**
+   * Скошенный наконечник (маркер): толщина зависит от направления, как у плоского пера.
+   * angle — направление узкой кромки в координатах штриха (радианы); ratio — толщина вдоль кромки
+   * относительно поперёк (0..1). Нажим при этом не учитывается.
+   */
+  nib?: { angle: number; ratio: number };
 }
 
 export const defaultStrokeStyle: StrokeStyle = {
@@ -62,6 +68,8 @@ export class StrokeBuilder {
   private smoothed: Sample[] = [];
   private lastRaw: PressurePoint | null = null;
   private pressure = 0.5;
+  /** Сглаженная доля толщины от наконечника (только для скошенного). */
+  private nibF = -1;
   private readonly unit: number;
   private readonly step: number;
 
@@ -83,7 +91,10 @@ export class StrokeBuilder {
       this.lastRaw = pt;
       return; // точка на месте — пропускаем
     }
-    const s: Sample = { x, y, r: this.radiusFor(pt) };
+    const r = this.style.nib
+      ? this.nibRadius(prev ? x - prev.x : 1, prev ? y - prev.y : 0)
+      : this.radiusFor(pt);
+    const s: Sample = { x, y, r };
     this.lastRaw = pt;
     this.smoothed.push(s);
     this.emit();
@@ -137,6 +148,22 @@ export class StrokeBuilder {
     const c = s[n - 2]!;
     const b = mid(s[n - 2]!, s[n - 1]!);
     pushQuad(this.samples, a, c, b, this.step);
+  }
+
+  /**
+   * Радиус скошенного наконечника по направлению движения. Направление берём от прошлой
+   * сглаженной точки — только прошлое, поэтому построение остаётся причинным. Доля сглаживается,
+   * чтобы дрожь руки не давала зубцов.
+   */
+  private nibRadius(dx: number, dy: number): number {
+    const nib = this.style.nib!;
+    const ratio = clamp(nib.ratio, 0.05, 1);
+    const across = Math.abs(Math.sin(Math.atan2(dy, dx) - nib.angle));
+    const f = ratio + (1 - ratio) * across;
+    // Короткий шаг — направление ненадёжно: доверяем ему меньше.
+    const w = clamp(Math.hypot(dx, dy) / (4 * this.unit), 0, 1) * 0.6;
+    this.nibF = this.nibF < 0 ? f : this.nibF + (f - this.nibF) * w;
+    return Math.max(MIN_RADIUS * this.unit, (this.style.size / 2) * this.nibF);
   }
 
   private radiusFor(pt: PressurePoint): number {

@@ -243,14 +243,18 @@ export class Renderer {
   images: ImageSource | null = null;
   private full = true;
 
-  constructor(host: HTMLElement) {
+  /**
+   * lowLatency — канва в режиме низкой задержки (desynchronized): перо отзывчивее, но на части
+   * экранов (Windows) при сдвиге холста видны разрывы картинки.
+   */
+  constructor(host: HTMLElement, opts: { lowLatency?: boolean } = {}) {
     const c = document.createElement('canvas');
     c.style.position = 'absolute';
     c.style.inset = '0';
     c.style.width = '100%';
     c.style.height = '100%';
     c.style.display = 'block';
-    const ctx = c.getContext('2d', { desynchronized: true, alpha: false });
+    const ctx = c.getContext('2d', { desynchronized: opts.lowLatency ?? true, alpha: false });
     if (!ctx) throw new Error('Canvas 2D недоступен');
     host.prepend(c);
     this.canvas = c;
@@ -365,30 +369,30 @@ export class Renderer {
       this.full = true;
       return;
     }
+    // Сдвигаем только на целое число пикселей устройства: дробный сдвиг пересэмплирует картинку,
+    // и за жест размытие копится кадр за кадром (на Windows с масштабом 125% сдвиг дробный почти
+    // всегда). Остаток меньше полупикселя не теряется: картинка считается нарисованной при камере,
+    // сдвинутой на этот остаток, — по ней же дорисовываются полосы и участки.
+    const ix = Math.round(dx);
+    const iy = Math.round(dy);
+    if (ix === 0 && iy === 0) return;
     const ctx = this.ctx;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.imageSmoothingEnabled = true;
     // Канва копируется сама на себя (браузер сначала снимает копию источника).
-    ctx.drawImage(this.canvas, dx, dy);
+    ctx.drawImage(this.canvas, ix, iy);
     ctx.restore();
-    if (dx !== Math.round(dx) || dy !== Math.round(dy)) this.approx = true;
     // Ранее отмеченные участки уехали вместе с картинкой.
     const old = this.rects;
     this.rects = [];
     for (const r of old) {
-      this.invalidate({
-        x0: Math.floor(r.x0 + dx),
-        y0: Math.floor(r.y0 + dy),
-        x1: Math.ceil(r.x1 + dx),
-        y1: Math.ceil(r.y1 + dy),
-      });
+      this.invalidate({ x0: r.x0 + ix, y0: r.y0 + iy, x1: r.x1 + ix, y1: r.y1 + iy });
     }
-    if (dx > 0) this.invalidate({ x0: 0, y0: 0, x1: Math.ceil(dx) + 2, y1: ch });
-    if (dx < 0) this.invalidate({ x0: Math.floor(cw + dx) - 2, y0: 0, x1: cw, y1: ch });
-    if (dy > 0) this.invalidate({ x0: 0, y0: 0, x1: cw, y1: Math.ceil(dy) + 2 });
-    if (dy < 0) this.invalidate({ x0: 0, y0: Math.floor(ch + dy) - 2, x1: cw, y1: ch });
-    this.paintedCam = { ...cam };
+    if (ix > 0) this.invalidate({ x0: 0, y0: 0, x1: ix + 2, y1: ch });
+    if (ix < 0) this.invalidate({ x0: cw + ix - 2, y0: 0, x1: cw, y1: ch });
+    if (iy > 0) this.invalidate({ x0: 0, y0: 0, x1: cw, y1: iy + 2 });
+    if (iy < 0) this.invalidate({ x0: 0, y0: ch + iy - 2, x1: cw, y1: ch });
+    this.paintedCam = snappedCamera(cam, (dx - ix) / this.dpr, (dy - iy) / this.dpr);
   }
 
   /** Матрица мир → пиксели устройства [a, b, c, d, e, f] (как у setTransform). */
@@ -476,6 +480,14 @@ export class Renderer {
       this.paintedCam = { ...cam };
       return 1;
     }
+    // Участки дорисовываем при камере картинки (после сдвига она отстаёт от камеры меньше
+    // чем на полпикселя), иначе на стыке с готовой картинкой был бы шов.
+    const at =
+      this.paintedCam && closeCamera(this.paintedCam, cam, this.dpr) ? this.paintedCam : null;
+    if (!at) {
+      this.full = true;
+      return this.paint(cam, scene, overlay);
+    }
     const rects = this.rects;
     this.rects = [];
     let area = 0;
@@ -485,10 +497,9 @@ export class Renderer {
       const w = Math.min(cw, r.x1) - x;
       const h = Math.min(ch, r.y1) - y;
       if (w <= 0 || h <= 0) continue;
-      this.paintRect(cam, scene, overlay, x, y, w, h, true);
+      this.paintRect(at, scene, overlay, x, y, w, h, true);
       area += w * h;
     }
-    this.paintedCam = { ...cam };
     return area / (cw * ch);
   }
 
@@ -1177,4 +1188,21 @@ export class Renderer {
     }
     ctx.fill();
   }
+}
+
+/**
+ * Камера, при которой нарисована картинка после сдвига на целое число пикселей:
+ * экран сдвинут на (rx, ry) CSS-пикселей относительно cam.
+ */
+export function snappedCamera(cam: Camera, rx: number, ry: number): Camera {
+  if (rx === 0 && ry === 0) return { ...cam };
+  const w = screenToWorld(cam, rx, ry);
+  return { ...cam, x: w.x, y: w.y };
+}
+
+/** Камеры совпадают с точностью до пикселя устройства (тот же масштаб и поворот). */
+export function closeCamera(a: Camera, b: Camera, dpr: number): boolean {
+  if (a.zoom !== b.zoom || (a.rotation ?? 0) !== (b.rotation ?? 0)) return false;
+  const k = a.zoom * dpr;
+  return Math.abs(a.x - b.x) * k <= 1 && Math.abs(a.y - b.y) * k <= 1;
 }
