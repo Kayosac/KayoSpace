@@ -359,18 +359,25 @@ ${error ? `<p class="bad">${esc(error)}</p>` : ''}
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.flush();
+      this.flush().catch((err) => console.error('[hub] не удалось сохранить OAuth', err));
     }, 200);
   }
 
-  async flush(): Promise<void> {
+  /** Записи на диск — строго по очереди: две одновременные делили бы один временный файл. */
+  private writing: Promise<void> = Promise.resolve();
+
+  flush(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    const tmp = `${this.file}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
-    await rename(tmp, this.file);
+    const run = async (): Promise<void> => {
+      const tmp = `${this.file}.tmp`;
+      await writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
+      await rename(tmp, this.file);
+    };
+    this.writing = this.writing.then(run, run);
+    return this.writing;
   }
 }
 
