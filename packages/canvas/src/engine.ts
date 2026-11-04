@@ -12,6 +12,11 @@ import {
   deleteElement,
   deleteElements,
   elementBounds,
+  elementText,
+  getBoardBackground,
+  setBoardBackground,
+  META,
+  type BoardBackground,
   elementsMap,
   getElement,
   isIdentity,
@@ -91,12 +96,20 @@ export const STICKY_COLORS = ['#ffe58a', '#ffc4d1', '#b8e3c9', '#bcd7ff', '#dccb
 /** Origin транзакций с этого устройства: только их отменяет «Отменить». */
 export const LOCAL_ORIGIN = 'kayospace:local';
 
+/** Цвет (null — чернила темы) и толщина в экранных пикселях. */
+export interface PenStyle {
+  color: string | null;
+  size: number;
+}
+
 export interface EngineState {
   tool: Tool;
   color: string | null;
   size: number;
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
+  /** Фон доски. */
+  background: BoardBackground;
   shapeKind: ShapeKind;
   /** Вид пера: перо, маркер, выделитель. */
   penKind: StrokeTool;
@@ -140,6 +153,8 @@ export interface EngineOptions {
   eraserSize?: number;
   shapeKind?: ShapeKind;
   penKind?: StrokeTool;
+  /** Свои цвет и толщина у ручки, маркера и выделителя (не заданы — color и size). */
+  penStyles?: Partial<Record<StrokeTool, Partial<PenStyle>>>;
   stickyColor?: string;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws?: boolean;
@@ -222,8 +237,8 @@ export class CanvasEngine {
 
   private camera: Camera;
   private tool: Tool;
-  private color: string | null;
-  private size: number;
+  /** Цвет и толщина у каждого вида пера свои; текст и фигуры берут стиль ручки. */
+  private readonly penStyles: Record<StrokeTool, PenStyle>;
   private eraserSize: number;
   private touchDraws: boolean;
   private draw: ActiveDraw | null = null;
@@ -263,8 +278,13 @@ export class CanvasEngine {
     this.camera = opts.camera ?? defaultCamera();
     this.hasCamera = Boolean(opts.camera);
     this.tool = opts.tool ?? 'pen';
-    this.color = opts.color ?? null;
-    this.size = opts.size ?? 3;
+    const base: PenStyle = { color: opts.color ?? null, size: opts.size ?? 3 };
+    this.penStyles = {
+      pen: { ...base, ...opts.penStyles?.pen },
+      marker: { ...base, ...opts.penStyles?.marker },
+      // Выделитель без своего цвета — жёлтый (HIGHLIGHTER_COLOR при рисовании).
+      highlighter: { color: null, size: base.size, ...opts.penStyles?.highlighter },
+    };
     this.eraserSize = opts.eraserSize ?? 28;
     this.shapeKind = opts.shapeKind ?? 'rect';
     this.penKind = opts.penKind ?? 'pen';
@@ -379,6 +399,20 @@ export class CanvasEngine {
     this.darkQuery?.addEventListener('change', onTheme);
     this.cleanups.push(() => this.darkQuery?.removeEventListener('change', onTheme));
 
+    // Фон доски — в её метаданных: меняется на любом устройстве — меняется у всех.
+    const meta = doc.getMap(META);
+    const onMeta = (): void => {
+      const bg = getBoardBackground(doc);
+      if (bg === this.renderer.background) return;
+      this.renderer.background = bg;
+      this.renderer.invalidateAll();
+      this.schedule();
+      this.emit();
+    };
+    this.renderer.background = getBoardBackground(doc);
+    meta.observe(onMeta);
+    this.cleanups.push(() => meta.unobserve(onMeta));
+
     this.cleanups.push(
       this.scene.onChange((dirty) => {
         if (this.selection.size > 0) {
@@ -442,20 +476,49 @@ export class CanvasEngine {
     this.emit();
   }
 
+  /** Фон доски для всех устройств: точки, клетка, линейка или чистый лист. */
+  setBackground(bg: BoardBackground): void {
+    setBoardBackground(this.doc, bg, LOCAL_ORIGIN);
+  }
+
+  /** Стиль, который сейчас в работе: вид пера у пера, у текста и фигур — ручка. */
+  private get style(): PenStyle {
+    return this.penStyles[this.tool === 'pen' ? this.penKind : 'pen'];
+  }
+
+  private get color(): string | null {
+    return this.style.color;
+  }
+
+  private get size(): number {
+    return this.style.size;
+  }
+
+  /** Стили видов пера — чтобы приложение их запомнило. */
+  getPenStyles(): Record<StrokeTool, PenStyle> {
+    return {
+      pen: { ...this.penStyles.pen },
+      marker: { ...this.penStyles.marker },
+      highlighter: { ...this.penStyles.highlighter },
+    };
+  }
+
   setColor(color: string | null): void {
     // Есть выделение — перекрашиваем выделенные штрихи, инструмент не меняем.
     if (this.tool === 'select' && this.selection.size > 0) {
       this.recolorSelection(color);
       return;
     }
-    this.color = color;
+    // Сначала инструмент: цвет записывается в стиль того вида пера, которым будут рисовать.
     if (this.tool !== 'pen' && this.tool !== 'text' && this.tool !== 'shape') this.setTool('pen');
+    this.style.color = color;
     this.emit();
   }
 
   setSize(size: number): void {
-    this.size = size;
+    if (!(size > 0) || !Number.isFinite(size)) return;
     if (this.tool !== 'pen' && this.tool !== 'shape') this.setTool('pen');
+    this.style.size = size;
     this.emit();
   }
 
@@ -768,6 +831,48 @@ export class CanvasEngine {
     this.setCamera(
       fitBounds(b, this.renderer.width, this.renderer.height, 48, this.camera.rotation ?? 0),
     );
+  }
+
+  /**
+   * Показать элемент (найденный поиском) и выделить его. Масштаб — прежний, если элемент
+   * помещается и читается; иначе — по размеру элемента, но не крупнее 150%. false — элемента нет.
+   */
+  focusElement(id: string): boolean {
+    const item = this.scene.items.get(id);
+    if (!item) return false;
+    const b = item.bounds;
+    const z = this.camera.zoom;
+    const fits =
+      (b.maxX - b.minX) * z < this.renderer.width * 0.8 &&
+      (b.maxY - b.minY) * z < this.renderer.height * 0.8;
+    if (fits && z >= 0.4) {
+      this.centerOn({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
+    } else {
+      this.zoomToBounds(b);
+      if (this.camera.zoom > 1.5) this.zoomBy(1.5 / this.camera.zoom);
+    }
+    if (this.tool !== 'select') this.setTool('select');
+    this.selection.clear();
+    this.selection.add(id);
+    this.selectionRev++;
+    this.renderer.invalidateAll();
+    this.schedule();
+    this.emit();
+    return true;
+  }
+
+  /** Найти текст на этой доске (без хаба): стикеры, тексты, подписи, названия фреймов. */
+  searchText(query: string, limit = 50): { id: string; type: string; text: string }[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const out: { id: string; type: string; text: string }[] = [];
+    for (const item of this.scene.items.values()) {
+      const t = elementText(item.element);
+      if (t && t.toLowerCase().includes(q))
+        out.push({ id: item.id, type: item.element.type, text: t });
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /** Перейти к фрейму и выделить его. */
@@ -1853,6 +1958,7 @@ export class CanvasEngine {
       shapeKind: this.shapeKind,
       penKind: this.penKind,
       stickyColor: this.stickyColor,
+      background: this.renderer.background,
       selectedFrame: this.singleFrame(),
       selectionHasFrame: this.hasFrameSelected(),
       editing: this.editing?.id ?? null,

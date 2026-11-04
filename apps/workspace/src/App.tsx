@@ -8,6 +8,7 @@ import {
   saveCamera,
   saveSettings,
   touchRecent,
+  pushRecentColor,
   type WorkspaceSettings,
 } from './settings';
 import { BoardsPanel } from './BoardsPanel';
@@ -217,6 +218,7 @@ export function App() {
       eraserSize: s.eraserSize,
       shapeKind: s.shapeKind,
       penKind: s.penKind,
+      penStyles: s.penStyles,
       stickyColor: s.stickyColor,
       touchDraws: s.touchDraws,
       rotateWithFingers: s.rotateWithFingers,
@@ -288,9 +290,10 @@ export function App() {
         shapeKind: engineState.shapeKind,
         penKind: engineState.penKind,
         stickyColor: engineState.stickyColor,
+        penStyles: engine?.getPenStyles() ?? s.penStyles,
       });
     }
-  }, [engineState, update]);
+  }, [engineState, update, engine]);
 
   // Недавние доски: открытая — наверх, с актуальным названием.
   const boardName = sessionState?.name ?? null;
@@ -511,6 +514,17 @@ export function App() {
     };
   }, [engine, insertImages]);
 
+  // Переход к найденному на другой доске: элемент показываем, когда доска откроется
+  // (или придёт с хаба, если на этом устройстве её ещё не было).
+  const pendingFocus = useRef<{ board: string; id: string } | null>(null);
+  const [focusTick, setFocusTick] = useState(0);
+  useEffect(() => {
+    const p = pendingFocus.current;
+    if (!p || !engine || p.board !== board || !(sessionState?.loaded ?? false)) return;
+    if (engine.focusElement(p.id)) pendingFocus.current = null;
+  }, [engine, board, sessionState, focusTick]);
+  const searchLocal = useCallback((q: string) => engine?.searchText(q) ?? [], [engine]);
+
   // «Поделиться» → Kayospace (Android): присланное ложится на доску «Входящие».
   const pendingShare = useRef<SharedPayload | null>(null);
   const [shareTick, setShareTick] = useState(0);
@@ -684,6 +698,10 @@ export function App() {
           onPaste={() => void pasteFromButton()}
           onAi={() => setAiPrompt((p) => !p)}
           aiOn={aiPrompt || (aiState?.kind ?? 'idle') !== 'idle'}
+          recentColors={settings.recentColors}
+          onRecentColor={(c) =>
+            update({ recentColors: pushRecentColor(settingsRef.current.recentColors, c) })
+          }
         />
       )}
       {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}
@@ -720,6 +738,16 @@ export function App() {
             update({ project: null });
           }}
           onMoveBoard={(project) => wsDoc && setBoardProject(wsDoc, board, project)}
+          background={engineState?.background ?? 'dots'}
+          onBackground={(bg) => engine?.setBackground(bg)}
+          searchLocal={searchLocal}
+          onFind={(id, elementId, name) => {
+            setPanel(null);
+            if (id === board && engine?.focusElement(elementId)) return;
+            pendingFocus.current = { board: id, id: elementId };
+            if (id !== board) openBoard(id, name, false);
+            else setFocusTick((t) => t + 1);
+          }}
           onClose={() => setPanel(null)}
         />
       )}

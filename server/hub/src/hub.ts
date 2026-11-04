@@ -24,12 +24,13 @@ import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset } from './assets';
 import { Backups, handleBackups } from './backups';
+import { handleSearch } from './search';
 import { OAuthServer, publicBase } from './oauth';
 import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.4.0';
+export const HUB_VERSION = '0.5.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -178,6 +179,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return json(res, 200, await store.list());
     }
     if (await handleBackups(req, res, url, backups, access)) return;
+    if (await handleSearch(req, res, url, store)) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });

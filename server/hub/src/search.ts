@@ -1,0 +1,58 @@
+/**
+ * Поиск текста по всем доскам (решение 0012): стикеры, тексты, подписи фигур и стрелок,
+ * названия фреймов, подписи картинок. Регистр не важен. Нужен и MCP (инструмент search),
+ * и приложению (GET /api/search?q=…).
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { elementText, listElements } from '@kayospace/board';
+import type * as Y from 'yjs';
+import { json } from './devices-api';
+
+export interface SearchHit {
+  board: string;
+  boardName: string | null;
+  id: string;
+  type: string;
+  text: string;
+}
+
+/** Совпадения: сначала те, где запрос — начало слова, потом остальные; не больше limit. */
+export async function searchBoards(
+  store: {
+    list(): Promise<{ id: string; name: string | null }[]>;
+    get(id: string): Promise<Y.Doc>;
+  },
+  query: string,
+  limit = 50,
+): Promise<SearchHit[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const word: SearchHit[] = [];
+  const rest: SearchHit[] = [];
+  for (const info of await store.list()) {
+    const doc = await store.get(info.id);
+    for (const el of listElements(doc)) {
+      const t = elementText(el);
+      const low = t.toLowerCase();
+      const at = low.indexOf(q);
+      if (at < 0) continue;
+      const hit = { board: info.id, boardName: info.name, id: el.id, type: el.type, text: t };
+      (at === 0 || /[\s.,;:!?()«»"'-]/.test(low[at - 1]!) ? word : rest).push(hit);
+    }
+  }
+  return [...word, ...rest].slice(0, limit);
+}
+
+/** GET /api/search?q=… — false, если адрес не наш. */
+export async function handleSearch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  store: Parameters<typeof searchBoards>[0],
+): Promise<boolean> {
+  if (url.pathname !== '/api/search' || req.method !== 'GET') return false;
+  const q = (url.searchParams.get('q') ?? '').slice(0, 200);
+  json(res, 200, { hits: q.trim().length >= 2 ? await searchBoards(store, q) : [] });
+  return true;
+}

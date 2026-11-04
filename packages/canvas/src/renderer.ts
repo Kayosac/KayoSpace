@@ -13,7 +13,13 @@ import {
   type Bounds,
   type Sample,
 } from '@kayospace/ink';
-import { STICKY_FONT_SIZE, applyTransform, fontSizeOf, type Transform } from '@kayospace/board';
+import {
+  STICKY_FONT_SIZE,
+  applyTransform,
+  fontSizeOf,
+  type BoardBackground,
+  type Transform,
+} from '@kayospace/board';
 import type { ArrowElement, CanvasElement, FrameElement, ShapeElement } from '@kayospace/model';
 import { frameTitleBand } from './frames';
 import { DEFAULT_LINE, arrowEnds, arrowHead } from './shapes';
@@ -1143,8 +1149,15 @@ export class Renderer {
   }
 
   /** Точки сетки в участке (x, y, w, h — пиксели устройства); квадратики по пиксельной сетке — чётче. */
+  /** Фон доски (решение 0012). */
+  background: BoardBackground = 'dots';
+
   private drawGrid(cam: Camera, x: number, y: number, w: number, h: number): void {
-    if (this.noGrid) return;
+    if (this.noGrid || this.background === 'plain') return;
+    if (this.background !== 'dots') {
+      this.drawLines(cam, x, y, w, h, this.background === 'grid');
+      return;
+    }
     const step = gridStepFor(cam.zoom);
     const k = this.dpr * cam.zoom;
     const size = Math.max(2, Math.round(this.dpr * 1.5));
@@ -1187,6 +1200,73 @@ export class Renderer {
       }
     }
     ctx.fill();
+  }
+
+  /** Линейка (горизонтальные линии) или клетка (и вертикальные) — линии по пиксельной сетке. */
+  private drawLines(
+    cam: Camera,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    vertical: boolean,
+  ): void {
+    const step = gridStepFor(cam.zoom);
+    const k = this.dpr * cam.zoom;
+    const ctx = this.ctx;
+    const lw = Math.max(1, Math.round(this.dpr));
+    ctx.strokeStyle = this.colors.dot;
+    ctx.beginPath();
+    if (cam.rotation) {
+      const v = this.deviceToWorldBounds(cam, x, y, w, h);
+      const j0 = Math.floor(v.minY / step);
+      const j1 = Math.ceil(v.maxY / step);
+      const i0 = Math.floor(v.minX / step);
+      const i1 = Math.ceil(v.maxX / step);
+      if (j1 - j0 + (vertical ? i1 - i0 : 0) > 4000) return;
+      ctx.save();
+      ctx.setTransform(...this.worldMatrix(cam));
+      ctx.lineWidth = lw / k;
+      for (let j = j0; j <= j1; j++) {
+        ctx.moveTo(v.minX, j * step);
+        ctx.lineTo(v.maxX, j * step);
+      }
+      if (vertical) {
+        for (let i = i0; i <= i1; i++) {
+          ctx.moveTo(i * step, v.minY);
+          ctx.lineTo(i * step, v.maxY);
+        }
+      }
+      // Сплошные линии заметнее точек — делаем их бледнее.
+      ctx.globalAlpha = 0.7;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      return;
+    }
+    const px = step * k;
+    const off = lw % 2 ? 0.5 : 0;
+    ctx.lineWidth = lw;
+    const j0 = Math.floor((y / k + cam.y) / step);
+    const j1 = Math.ceil(((y + h) / k + cam.y) / step);
+    if (j1 - j0 > 4000) return;
+    for (let j = j0; j <= j1; j++) {
+      const sy = Math.round(j * px - cam.y * k) + off;
+      ctx.moveTo(x, sy);
+      ctx.lineTo(x + w, sy);
+    }
+    if (vertical) {
+      const i0 = Math.floor((x / k + cam.x) / step);
+      const i1 = Math.ceil(((x + w) / k + cam.x) / step);
+      for (let i = i0; i <= Math.min(i1, i0 + 4000); i++) {
+        const sx = Math.round(i * px - cam.x * k) + off;
+        ctx.moveTo(sx, y);
+        ctx.lineTo(sx, y + h);
+      }
+    }
+    ctx.globalAlpha = 0.7;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 }
 

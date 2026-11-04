@@ -1326,6 +1326,227 @@ p.bad {
   margin: 16px 0 0;
 }
 
+/* Кнопки цвета и толщины на панели и их окна */
+.picker-btn .current-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 1px var(--line),
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--line);
+}
+
+.picker-btn .current-size {
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.picker-btn .current-size.hollow {
+  background: none;
+  border: 1.5px solid currentColor;
+}
+
+.picker-btn[aria-expanded='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.popover {
+  position: fixed;
+  z-index: 20;
+  padding: 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  touch-action: none;
+}
+
+.color-picker,
+.size-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: 220px;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px;
+}
+
+.swatches.recent {
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.swatch.small {
+  width: 26px;
+  height: 26px;
+}
+
+.swatch.small span {
+  width: 18px;
+  height: 18px;
+}
+
+.wheel {
+  position: relative;
+  justify-self: center;
+  touch-action: none;
+}
+
+.wheel canvas {
+  display: block;
+  border-radius: 50%;
+  cursor: crosshair;
+}
+
+.wheel-dot {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 1px 4px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.slider-row {
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.slider-row b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider-row input[type='range'] {
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--accent);
+  border-radius: 14px;
+}
+
+.hex-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hex-preview {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.hex-input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  font: inherit;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.size-preview {
+  display: grid;
+  place-items: center;
+  height: 64px;
+  border-radius: 10px;
+  background: var(--canvas-paper);
+}
+
+.size-preview span {
+  border-radius: 50%;
+}
+
+.size-presets {
+  display: flex;
+  gap: 6px;
+}
+
+.size-presets .secondary {
+  flex: 1;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+.size-presets .secondary[aria-checked='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+/* Фон доски: образцы */
+.backgrounds {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.bg-option {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bg-option[aria-checked='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.bg-option i {
+  width: 100%;
+  height: 28px;
+  border-radius: 5px;
+  background-color: var(--canvas-paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.bg-option[data-bg='dots'] i {
+  background-image: radial-gradient(var(--canvas-dot) 1.2px, transparent 1.4px);
+  background-size: 8px 8px;
+}
+
+.bg-option[data-bg='grid'] i {
+  background-image:
+    linear-gradient(var(--canvas-dot) 1px, transparent 1px),
+    linear-gradient(90deg, var(--canvas-dot) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
+.bg-option[data-bg='lines'] i {
+  background-image: linear-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
 /* Сенсорный экран: цели для пальца не меньше 40 пикселей, подсказки про клавиши не нужны. */
 @media (pointer: coarse) {
   .icon-btn {
@@ -1373,6 +1594,15 @@ p.bad {
   }
 
   .secondary {
+    height: 40px;
+  }
+
+  .hex-input {
+    height: 40px;
+    font-size: 16px;
+  }
+
+  .slider-row input[type='range'] {
     height: 40px;
   }
 

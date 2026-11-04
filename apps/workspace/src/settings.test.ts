@@ -7,6 +7,8 @@ import {
   saveCamera,
   saveSettings,
   touchRecent,
+  cleanPenStyles,
+  pushRecentColor,
   type KeyValue,
 } from './settings';
 
@@ -62,5 +64,26 @@ describe('недавние доски', () => {
     ]);
     for (let i = 0; i < 40; i++) list = touchRecent(list, `x${i}`, null);
     expect(list).toHaveLength(30);
+  });
+});
+
+describe('стили пера и недавние цвета', () => {
+  it('из сохранённого берём только корректные стили', () => {
+    expect(
+      cleanPenStyles({
+        pen: { color: null, size: 2 },
+        marker: { color: '#FF0000', size: 6 },
+        highlighter: { color: 'red', size: 6 },
+        extra: { color: '#000000', size: 1 },
+      }),
+    ).toEqual({ pen: { color: null, size: 2 }, marker: { color: '#FF0000', size: 6 } });
+    expect(cleanPenStyles('мусор')).toEqual({});
+  });
+
+  it('недавние: свежий — первым, без повторов, до 8', () => {
+    const list = ['#111111', '#222222'];
+    expect(pushRecentColor(list, '#222222')).toEqual(['#222222', '#111111']);
+    const many = Array.from({ length: 10 }, (_, i) => `#00000${i}`);
+    expect(pushRecentColor(many, '#abcdef')).toHaveLength(8);
   });
 });
