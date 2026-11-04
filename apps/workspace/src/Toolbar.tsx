@@ -1,6 +1,15 @@
 import type { ComponentType } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
-import { EraserIcon, HandIcon, PenIcon, RedoIcon, SettingsIcon, UndoIcon } from './icons';
+import {
+  EraserIcon,
+  HandIcon,
+  PasteIcon,
+  PenIcon,
+  RedoIcon,
+  SelectIcon,
+  SettingsIcon,
+  UndoIcon,
+} from './icons';
 
 /** Цвета пера. null — цвет чернил темы (тёмный на светлой бумаге, светлый на тёмной). */
 export const PEN_COLORS: { value: string | null; name: string }[] = [
@@ -27,6 +36,7 @@ export const ERASER_SIZES: { value: number; name: string; dot: number }[] = [
 ];
 
 const TOOLS: { value: Tool; name: string; key: string; Icon: ComponentType }[] = [
+  { value: 'select', name: 'Выделение', key: 'V', Icon: SelectIcon },
   { value: 'pen', name: 'Перо', key: 'P', Icon: PenIcon },
   { value: 'eraser', name: 'Ластик', key: 'E', Icon: EraserIcon },
   { value: 'hand', name: 'Рука', key: 'H', Icon: HandIcon },
@@ -121,6 +131,16 @@ export function Toolbar({
         >
           <RedoIcon />
         </button>
+        {state.canPaste && (
+          <button
+            className="tool"
+            aria-label="Вставить"
+            title={`Вставить (${mod}V)`}
+            onClick={() => engine.paste()}
+          >
+            <PasteIcon />
+          </button>
+        )}
         <button className="tool" aria-label="Настройки" title="Настройки" onClick={onSettings}>
           <SettingsIcon />
         </button>

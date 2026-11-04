@@ -85,3 +85,38 @@ export const CloseIcon = () => (
     <path d="M6 6l12 12M18 6L6 18" />
   </Svg>
 );
+
+export const SelectIcon = () => (
+  <Svg>
+    <path d="M5 4l13.5 6.2-5.6 1.9-1.9 5.6L5 4z" />
+    <path d="M13 13l5.5 5.5" />
+  </Svg>
+);
+
+export const DuplicateIcon = () => (
+  <Svg>
+    <rect x="8" y="8" width="12" height="12" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </Svg>
+);
+
+export const CopyIcon = () => (
+  <Svg>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V5a1 1 0 0 1 1-1h10" />
+  </Svg>
+);
+
+export const PasteIcon = () => (
+  <Svg>
+    <path d="M9 4h6v3H9z" />
+    <path d="M15 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+  </Svg>
+);
+
+export const TrashIcon = () => (
+  <Svg>
+    <path d="M4 7h16M10 11v6M14 11v6" />
+    <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </Svg>
+);

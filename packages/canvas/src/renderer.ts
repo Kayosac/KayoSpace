@@ -14,7 +14,9 @@ import {
   type Bounds,
   type Sample,
 } from '@kayospace/ink';
+import { STICKY_FONT_SIZE, fontSizeOf, type Transform } from '@kayospace/board';
 import type { Camera } from './camera';
+import { transformBounds } from './selection';
 import type { Scene, SceneItem } from './scene';
 
 export interface Rect {
@@ -37,6 +39,31 @@ export interface ActiveStroke {
   tail: readonly Sample[];
   color: string | null;
 }
+
+export interface SelectionOverlay {
+  /** Рамка выделения (мировые координаты, до преобразования жеста). */
+  bounds: Bounds;
+  ids: ReadonlySet<string>;
+  /** Показывать ручки масштаба. */
+  handles: boolean;
+}
+
+export interface PaintOverlay {
+  active?: ActiveStroke | null;
+  /** Кольцо ластика (мировые координаты). */
+  ring?: { x: number; y: number; r: number } | null;
+  /** Элементы, которые сейчас двигают или масштабируют: рисуются с преобразованием жеста. */
+  preview?: { ids: ReadonlySet<string>; t: Transform } | null;
+  selection?: SelectionOverlay | null;
+  /** Контур лассо (мировые координаты). */
+  lasso?: readonly { x: number; y: number }[] | null;
+  /** Рамка выделения мышью (мировые координаты). */
+  marquee?: Bounds | null;
+}
+
+/** Отступ рамки выделения от элементов и размер ручек, CSS-пиксели. */
+export const SELECTION_PAD = 6;
+export const HANDLE_SIZE = 10;
 
 /** Шаг сетки в мировых единицах при зуме 1. */
 export const GRID_STEP = 24;
@@ -193,13 +220,8 @@ export class Renderer {
   }
 
   /** Нарисовать накопившиеся изменения. Возвращает долю перерисованной площади. */
-  paint(
-    cam: Camera,
-    scene: Scene,
-    active: ActiveStroke | null,
-    /** Кольцо ластика (мировые координаты). */
-    ring: { x: number; y: number; r: number } | null = null,
-  ): number {
+  paint(cam: Camera, scene: Scene, overlay: PaintOverlay = {}): number {
+    const { active = null, ring = null, preview = null, selection = null } = overlay;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     let x = 0;
@@ -246,8 +268,23 @@ export class Renderer {
         if (c !== fill) ctx.fillStyle = fill = c;
       };
       for (const item of scene.query(view)) {
+        if (preview?.ids.has(item.id)) continue;
         setFill(item.color);
         this.drawItem(item, cam.zoom);
+        if (item.element.type !== 'stroke') fill = ''; // стикер сам меняет fillStyle
+      }
+      if (preview) {
+        // Перетаскиваемые элементы — поверх остальных, с преобразованием жеста.
+        const t = preview.t;
+        ctx.transform(t.s, 0, 0, t.s, t.tx, t.ty);
+        for (const id of preview.ids) {
+          const item = scene.items.get(id);
+          if (!item) continue;
+          setFill(item.color);
+          this.drawItem(item, cam.zoom * t.s);
+          if (item.element.type !== 'stroke') fill = '';
+        }
+        ctx.setTransform(k, 0, 0, k, -cam.x * k, -cam.y * k);
       }
       if (active) {
         setFill(active.color);
@@ -267,6 +304,38 @@ export class Renderer {
         ctx.lineWidth = 1.5 / cam.zoom;
         ctx.strokeStyle = this.colors.accent;
         ctx.stroke();
+      }
+      // Рамки выделения, лассо — в экранных координатах: толщина линий не зависит от зума.
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      const toScreen = (wx: number, wy: number): [number, number] => [
+        (wx - cam.x) * cam.zoom,
+        (wy - cam.y) * cam.zoom,
+      ];
+      if (selection) this.drawSelection(selection, scene, toScreen, preview?.t ?? null);
+      if (overlay.lasso && overlay.lasso.length > 1) {
+        ctx.beginPath();
+        overlay.lasso.forEach((p, i) => {
+          const [sx, sy] = toScreen(p.x, p.y);
+          if (i === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        });
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = this.colors.accent;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (overlay.marquee) {
+        const m = overlay.marquee;
+        const [x0, y0] = toScreen(m.minX, m.minY);
+        const [x1, y1] = toScreen(m.maxX, m.maxY);
+        ctx.globalAlpha = 0.08;
+        ctx.fillStyle = this.colors.accent;
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = this.colors.accent;
+        ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0, y1 - y0);
       }
     } finally {
       ctx.restore();
@@ -292,13 +361,59 @@ export class Renderer {
     ctx.fill(item.path, 'nonzero');
   }
 
+  private drawSelection(
+    sel: SelectionOverlay,
+    scene: Scene,
+    toScreen: (x: number, y: number) => [number, number],
+    t: Transform | null,
+  ): void {
+    const ctx = this.ctx;
+    const map = (b: Bounds): Bounds => (t ? transformBounds(b, t) : b);
+    ctx.strokeStyle = this.colors.accent;
+    // Рамки отдельных элементов — видно, что именно попало в выделение.
+    if (sel.ids.size > 1 && sel.ids.size <= 200) {
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = 1;
+      for (const id of sel.ids) {
+        const item = scene.items.get(id);
+        if (!item) continue;
+        const b = map(item.bounds);
+        const [x0, y0] = toScreen(b.minX, b.minY);
+        const [x1, y1] = toScreen(b.maxX, b.maxY);
+        ctx.strokeRect(x0 - 2.5, y0 - 2.5, x1 - x0 + 5, y1 - y0 + 5);
+      }
+      ctx.globalAlpha = 1;
+    }
+    const b = map(sel.bounds);
+    const [x0, y0] = toScreen(b.minX, b.minY);
+    const [x1, y1] = toScreen(b.maxX, b.maxY);
+    const p = SELECTION_PAD;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(x0 - p, y0 - p, x1 - x0 + 2 * p, y1 - y0 + 2 * p);
+    ctx.setLineDash([]);
+    if (!sel.handles) return;
+    const hs = HANDLE_SIZE;
+    for (const [hx, hy] of [
+      [x0 - p, y0 - p],
+      [x1 + p, y0 - p],
+      [x1 + p, y1 + p],
+      [x0 - p, y1 + p],
+    ] as const) {
+      ctx.fillStyle = this.colors.paper;
+      ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
+    }
+  }
+
   /** Стикер или текст (пока только показ). */
   private drawNote(item: SceneItem, zoom: number): void {
     const ctx = this.ctx;
     const b = item.bounds;
     const sticky = item.element.type === 'sticky';
-    const pad = sticky ? 16 : 0;
-    const size = sticky ? 18 : 20;
+    const size = fontSizeOf(item.element);
+    const pad = sticky ? size * (16 / STICKY_FONT_SIZE) : 0;
     if (sticky) {
       ctx.fillStyle = item.color ?? STICKY_COLOR;
       ctx.beginPath();
