@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
-import { createServer as createTcpServer, type AddressInfo } from 'node:net';
+import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -282,7 +282,8 @@ describe('доступ по токену', () => {
 describe('клиент синхронизации', () => {
   it('не висит вечно, если хаб не отвечает', async () => {
     // TCP-сервер, который принимает соединение и молчит — как файрвол, глотающий пакеты.
-    const silent = createTcpServer(() => {});
+    const sockets: Socket[] = [];
+    const silent = createTcpServer((socket) => sockets.push(socket));
     await new Promise<void>((r) => silent.listen(0, '127.0.0.1', () => r()));
     const port = (silent.address() as AddressInfo).port;
     const client = new SyncClient(createBoardDoc(), {
@@ -295,6 +296,7 @@ describe('клиент синхронизации', () => {
     await client.waitFor('offline', 3000);
     expect(client.lastError).toBe('timeout');
     client.destroy();
+    for (const socket of sockets) socket.destroy();
     await new Promise<void>((r) => silent.close(() => r()));
   });
 });
