@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "app.kayospace.share"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         // Как у приложения.
