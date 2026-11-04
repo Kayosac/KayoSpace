@@ -678,7 +678,7 @@ test.describe('ИИ в доске', () => {
     browser,
     request,
   }) => {
-    const board = 'e2e-ai';
+    const board = `e2e-ai-${Date.now()}`;
     const page = await openDevice(browser, { ...synced, board });
     await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
     await page.keyboard.press('n');
@@ -689,7 +689,7 @@ test.describe('ИИ в доске', () => {
 
     // Выделить стикер → «✦ ИИ» → «Резюме».
     await page.keyboard.press('v');
-    await page.mouse.click(300, 300);
+    await page.keyboard.press('Control+a');
     await page.getByTestId('selection-menu').getByRole('button', { name: 'ИИ' }).click();
     await page.getByRole('menuitem', { name: 'Резюме' }).click();
     const bar = page.getByTestId('ai-bar');
@@ -713,7 +713,7 @@ test.describe('ИИ в доске', () => {
   });
 
   test('свой запрос (Ctrl+J): результат можно не вставлять', async ({ browser }) => {
-    const board = 'e2e-ai-prompt';
+    const board = `e2e-ai-prompt-${Date.now()}`;
     const page = await openDevice(browser, { ...synced, board });
     await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
     await page.keyboard.press('Control+j');

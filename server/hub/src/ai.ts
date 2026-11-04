@@ -128,28 +128,37 @@ export class AiQueue {
       stopObserving,
     };
     this.tasks.set(task.id, task);
+    console.log(`[hub] ИИ: задача ${task.id} (${task.action}, доска ${task.board})`);
     this.dispatch();
     return task;
   }
 
-  /** Исполнитель просит работу: сразу, если есть, иначе ждём до POLL_MS. */
-  next(name: string, waitMs = POLL_MS): Promise<AiTask | null> {
+  /**
+   * Исполнитель просит работу: сразу, если есть, иначе ждём до waitMs.
+   * signal — запрос исполнителя оборвался (перезапуск, сеть): ждать за него больше не нужно.
+   */
+  next(name: string, waitMs = POLL_MS, signal?: AbortSignal): Promise<AiTask | null> {
     this.workers.set(name, Date.now());
+    // Исполнитель берёт задачи по одной: раз он просит новую, «его» незаконченная задача
+    // осталась от прошлого запуска (перезапуск, обрыв) — возвращаем её в очередь.
+    for (const t of this.tasks.values()) {
+      if (t.status === 'running' && t.worker === name) this.requeue(t);
+    }
     const ready = this.takeQueued(name);
     if (ready) return Promise.resolve(ready);
+    if (signal?.aborted) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const entry = {
-        name,
-        resolve: (t: AiTask | null) => {
-          clearTimeout(timer);
-          resolve(t);
-        },
-      };
-      const timer = setTimeout(() => {
+      const done = (t: AiTask | null): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         const i = this.waiting.indexOf(entry);
         if (i >= 0) this.waiting.splice(i, 1);
-        resolve(null);
-      }, waitMs);
+        resolve(t);
+      };
+      const entry = { name, resolve: done };
+      const onAbort = (): void => done(null);
+      const timer = setTimeout(() => done(null), waitMs);
+      signal?.addEventListener('abort', onAbort);
       this.waiting.push(entry);
     });
   }
@@ -218,13 +227,20 @@ export class AiQueue {
     return t;
   }
 
+  /** Вернуть задачу в очередь (исполнитель пропал) и отдать свободному. */
+  requeue(t: AiTask): void {
+    if (t.status !== 'running') return;
+    t.status = 'queued';
+    delete t.worker;
+    delete t.startedAt;
+    this.dispatch();
+  }
+
   private dispatch(): void {
-    while (this.waiting.length > 0) {
-      const w = this.waiting[0]!;
+    // Ждущие — по порядку; занятый исполнитель задачу не получает, следующий — может.
+    for (const w of [...this.waiting]) {
       const t = this.takeQueued(w.name);
-      if (!t) return;
-      this.waiting.shift();
-      w.resolve(t);
+      if (t) w.resolve(t); // сам убирает себя из очереди ожидания
     }
   }
 
@@ -413,7 +429,16 @@ export async function handleAi(
       const name = String(body.name ?? 'исполнитель').slice(0, 60);
       const wait =
         typeof body.wait === 'number' ? Math.min(Math.max(body.wait, 0), 30_000) : POLL_MS;
-      const t = await ai.next(name, wait);
+      // Исполнитель оборвал запрос — не отдавать задачу в пустоту.
+      const gone = new AbortController();
+      res.on('close', () => {
+        if (!res.writableEnded) gone.abort();
+      });
+      const t = await ai.next(name, wait, gone.signal);
+      if (gone.signal.aborted) {
+        if (t) ai.requeue(t);
+        return true;
+      }
       if (!t) {
         res.writeHead(204);
         res.end();
