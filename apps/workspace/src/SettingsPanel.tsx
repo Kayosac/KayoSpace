@@ -118,7 +118,7 @@ export function SettingsPanel({
         <dt>Инструменты</dt>
         <dd>P перо · E ластик · H рука</dd>
         <dt>Отмена</dt>
-        <dd>Ctrl/⌘ Z, Shift — повтор</dd>
+        <dd>Ctrl/⌘ Z, Shift — повтор; тап двумя пальцами — отмена, тремя — повтор</dd>
         <dt>Вид</dt>
         <dd>Shift 1 — всё, Shift 0 — 100%</dd>
       </dl>

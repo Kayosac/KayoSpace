@@ -16,6 +16,8 @@ export interface WorkspaceSettings {
   /** null — цвет чернил темы. */
   color: string | null;
   size: number;
+  /** Диаметр ластика в экранных пикселях. */
+  eraserSize: number;
 }
 
 export const defaultSettings: WorkspaceSettings = {
@@ -27,6 +29,7 @@ export const defaultSettings: WorkspaceSettings = {
   tool: 'pen',
   color: null,
   size: 3,
+  eraserSize: 28,
 };
 
 export const SETTINGS_KEY = 'kayospace.workspace.v1';
@@ -54,6 +57,9 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     const s = { ...defaultSettings, ...parsed };
     if (!['pen', 'eraser', 'hand'].includes(s.tool)) s.tool = 'pen';
     if (!(typeof s.size === 'number' && s.size > 0 && s.size <= 64)) s.size = defaultSettings.size;
+    if (!(typeof s.eraserSize === 'number' && s.eraserSize >= 4 && s.eraserSize <= 200)) {
+      s.eraserSize = defaultSettings.eraserSize;
+    }
     if (typeof s.board !== 'string' || !s.board) s.board = defaultSettings.board;
     return s;
   } catch {

@@ -335,6 +335,11 @@ input:focus-visible {
   background: currentColor;
 }
 
+.sizes[data-eraser] .size span {
+  background: none;
+  border: 1.5px solid currentColor;
+}
+
 .size[aria-checked='true'] {
   background: var(--accent-soft);
   color: var(--accent);
