@@ -1,11 +1,15 @@
 import { useRef, type ComponentType } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
+import type { StrokeTool } from '@kayospace/model';
 import { STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
 import {
   ArrowIcon,
   EllipseIcon,
   EraserIcon,
+  FrameIcon,
   HandIcon,
+  HighlighterIcon,
+  MarkerIcon,
   ImageIcon,
   LineIcon,
   PasteIcon,
@@ -52,7 +56,14 @@ const TOOLS: { value: Tool; name: string; key: string; Icon: ComponentType }[] =
   { value: 'sticky', name: 'Стикер', key: 'N', Icon: StickyIcon },
   { value: 'text', name: 'Текст', key: 'T', Icon: TextIcon },
   { value: 'shape', name: 'Фигуры', key: 'R, O, L, A', Icon: ShapesIcon },
+  { value: 'frame', name: 'Фрейм', key: 'F', Icon: FrameIcon },
   { value: 'hand', name: 'Рука', key: 'H', Icon: HandIcon },
+];
+
+const PEN_KINDS: { value: StrokeTool; name: string; key: string; Icon: ComponentType }[] = [
+  { value: 'pen', name: 'Ручка', key: 'P', Icon: PenIcon },
+  { value: 'marker', name: 'Маркер', key: 'M', Icon: MarkerIcon },
+  { value: 'highlighter', name: 'Выделитель', key: 'I', Icon: HighlighterIcon },
 ];
 
 const SHAPES: { value: ShapeKind; name: string; key: string; Icon: ComponentType }[] = [
@@ -96,7 +107,7 @@ export function Toolbar({
     tool === 'sticky' || (tool === 'select' && state.selectionKind === 'sticky');
   // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
   const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
-  const showSizes = !stickyPalette && tool !== 'text';
+  const showSizes = !stickyPalette && tool !== 'text' && tool !== 'frame';
   return (
     <nav className="toolbar" aria-label="Инструменты">
       <div className="group" role="radiogroup" aria-label="Инструмент">
@@ -136,6 +147,26 @@ export function Toolbar({
           }}
         />
       </div>
+      {tool === 'pen' && (
+        <>
+          <span className="sep" />
+          <div className="group" role="radiogroup" aria-label="Вид пера">
+            {PEN_KINDS.map(({ value, name, key, Icon }) => (
+              <button
+                key={value}
+                className="tool"
+                role="radio"
+                aria-checked={state.penKind === value}
+                aria-label={name}
+                title={`${name} (${key})`}
+                onClick={() => engine.setPenKind(value)}
+              >
+                <Icon />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {tool === 'shape' && (
         <>
           <span className="sep" />

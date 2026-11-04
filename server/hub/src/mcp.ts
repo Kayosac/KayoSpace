@@ -19,6 +19,7 @@ import {
   getElement,
   listElements,
   makeArrow,
+  makeFrame,
   makeShape,
   makeSticky,
   makeText,
@@ -40,10 +41,11 @@ export const MCP_ORIGIN = 'mcp';
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
 
+// Служебные документы (воркспейс с проектами) начинаются с «_» — агентам они не доски.
 const boardId = z
   .string()
-  .regex(/^[A-Za-z0-9_-]{1,64}$/)
-  .describe('id доски: латиница, цифры, «-» и «_»');
+  .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+  .describe('id доски: латиница, цифры, «-» и «_» (не в начале)');
 
 export function createMcp(store: BoardSource, opts: { actorName?: string } = {}) {
   const agent: Actor = { kind: 'agent', name: opts.actorName ?? 'mcp' };
@@ -52,7 +54,10 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
 
     server.registerTool(
       'list_boards',
-      { description: 'Список досок Kayospace: id, название и число элементов на каждой.' },
+      {
+        description:
+          'Список досок Kayospace: id, название, число элементов и проект, в котором доска лежит.',
+      },
       async () => text(JSON.stringify(await store.list(), null, 2)),
     );
 
@@ -152,6 +157,30 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       },
     );
 
+    server.registerTool(
+      'add_frame',
+      {
+        description:
+          'Добавить фрейм — именованную область (например, «Неделя 1», «Идеи»). Фрейм лежит под ' +
+          'элементами; всё, что внутри него, человек переносит и экспортирует вместе с фреймом. ' +
+          'Удобно раскладывать схемы и группы стикеров по фреймам.',
+        inputSchema: z.object({
+          board: boardId,
+          name: z.string().min(1).max(100),
+          x: z.number(),
+          y: z.number(),
+          w: z.number().positive(),
+          h: z.number().positive(),
+        }),
+      },
+      async ({ board, name, x, y, w, h }) => {
+        const doc = await store.get(board);
+        const el = makeFrame(name, { x, y, w, h }, { actor: agent });
+        addElement(doc, el, MCP_ORIGIN);
+        return text(`Фрейм добавлен: ${el.id}.`);
+      },
+    );
+
     const endSchema = z
       .union([z.string().describe('id элемента'), z.object({ x: z.number(), y: z.number() })])
       .describe('id элемента (стрелка будет тянуться за ним) или точка {x, y}');
@@ -199,7 +228,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       'update_element',
       {
         description:
-          'Изменить элемент: текст стикера или надписи, положение (x, y), цвет. ' +
+          'Изменить элемент: текст стикера или надписи (у фрейма — его название), положение (x, y), цвет. ' +
           'id — из read_board в формате json.',
         inputSchema: z.object({
           board: boardId,
@@ -230,9 +259,11 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
           }
         }
         if (color !== undefined) next = { ...next, style: { ...next.style, color } };
-        if (content !== undefined) {
+        if (content !== undefined && next.type === 'frame') {
+          next = { ...next, props: { ...next.props, name: content.slice(0, 100) } };
+        } else if (content !== undefined) {
           if (next.type !== 'sticky' && next.type !== 'text') {
-            return fail('Текст есть только у стикеров и надписей.');
+            return fail('Текст есть только у стикеров, надписей и фреймов (название).');
           }
           // Стикер не растёт (шрифт подбирается сам), надпись — по объёму текста.
           const h =

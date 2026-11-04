@@ -19,7 +19,9 @@ pub fn run() {
 
     builder = builder
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_secure_store::init());
+        .plugin(tauri_plugin_secure_store::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init());
 
     #[cfg(mobile)]
     {

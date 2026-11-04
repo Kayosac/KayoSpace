@@ -4,6 +4,8 @@
   --canvas-paper: #f6f5f1;
   --canvas-ink: #1c1f26;
   --canvas-dot: #dcd9d0;
+  --canvas-frame: #ffffff;
+  --canvas-frame-line: rgba(28, 31, 38, 0.16);
   --surface: #ffffff;
   --surface-2: #f1efe9;
   /* QR всегда чёрным по белому — иначе не все камеры его прочитают (в тёмной теме тоже). */
@@ -33,6 +35,8 @@
     --canvas-paper: #16181d;
     --canvas-ink: #e9e7e2;
     --canvas-dot: #2b2e36;
+    --canvas-frame: #1c1f25;
+    --canvas-frame-line: rgba(233, 231, 226, 0.14);
     --surface: #20232a;
     --surface-2: #282b33;
     --text: #e9e7e2;
@@ -54,6 +58,8 @@
   --canvas-paper: #16181d;
   --canvas-ink: #e9e7e2;
   --canvas-dot: #2b2e36;
+  --canvas-frame: #1c1f25;
+  --canvas-frame-line: rgba(233, 231, 226, 0.14);
   --surface: #20232a;
   --surface-2: #282b33;
   --text: #e9e7e2;
@@ -145,6 +151,31 @@ input:focus-visible {
 
 .top-right {
   right: var(--gutter-r);
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* ---------- Мини-карта ---------- */
+
+.minimap {
+  display: block;
+  pointer-events: auto;
+  background: var(--canvas-paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.zoom button[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+@media (max-width: 560px) {
+  .minimap {
+    display: none;
+  }
 }
 
 .chip {
@@ -1076,4 +1107,155 @@ p.bad {
 .center {
   text-align: center;
   justify-content: center;
+}
+
+/* ---------- Фреймы, порядок, экспорт ---------- */
+
+.selection-menu .frame-name {
+  width: 150px;
+  height: 30px;
+  margin: 0 4px 0 2px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.more-actions hr {
+  margin: 4px 6px;
+}
+
+.more-actions {
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+}
+
+.selection-menu .more-actions button:disabled {
+  opacity: 0.4;
+}
+
+.section-title {
+  margin: 16px 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.export-row {
+  margin-top: 12px;
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.secondary svg {
+  width: 18px;
+  height: 18px;
+}
+
+.secondary:hover {
+  background: var(--surface-2);
+}
+
+/* ---------- Проекты ---------- */
+
+.field select {
+  height: 38px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.project-chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.project-chip[aria-selected='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.project-chip.add {
+  padding: 0 6px;
+  color: var(--muted);
+}
+
+.project-chip.add svg {
+  width: 16px;
+  height: 16px;
+}
+
+.project-input {
+  height: 30px;
+  width: 160px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 15px;
+}
+
+.project-edit {
+  margin-bottom: 10px;
+}
+
+.project-edit input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.danger-link {
+  color: var(--bad);
+}
+
+.board-list .empty {
+  padding: 8px 10px;
 }

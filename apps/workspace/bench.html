@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kayospace — замер</title>
+    <style>
+      :root {
+        --canvas-paper: #f6f5f1;
+        --canvas-ink: #1c1f26;
+        --canvas-dot: #dcd9d0;
+        --accent: #3e63dd;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--canvas-paper);
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      #stage {
+        position: absolute;
+        inset: 0;
+      }
+      #out {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        margin: 0;
+        padding: 8px;
+        background: #fff;
+        border: 1px solid #ccc;
+        white-space: pre;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <pre id="out">Открываю доску…</pre>
+    <script type="module" src="/src/bench.ts"></script>
+  </body>
+</html>

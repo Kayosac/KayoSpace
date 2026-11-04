@@ -12,7 +12,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type * as Y from 'yjs';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { addElement, createBoardDoc, listElements, makeSticky } from '@kayospace/board';
+import {
+  WORKSPACE_ID,
+  addElement,
+  addProject,
+  createBoardDoc,
+  listElements,
+  makeSticky,
+  setBoardProject,
+} from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
 import { SyncClient, type WebSocketCtor } from '@kayospace/sync';
 import { startHub, type Hub } from './hub';
@@ -131,6 +139,34 @@ describe('синхронизация', () => {
   });
 });
 
+describe('проекты', () => {
+  it('список досок: проект у каждой доски, служебного документа воркспейса в списке нет', async () => {
+    // Устройство создаёт проект и кладёт в него доску — через синхронизацию документа воркспейса.
+    const ws = createBoardDoc();
+    const c = new SyncClient(ws, {
+      url: `ws://127.0.0.1:${hub.port}/sync/${WORKSPACE_ID}`,
+      WebSocket: WebSocket as unknown as WebSocketCtor,
+      minDelayMs: 30,
+    });
+    clients.push(c);
+    await c.waitFor('synced');
+    const pid = addProject(ws, 'Работа');
+    setBoardProject(ws, 'plan', pid);
+    addElement(await hub.store.get('plan'), makeSticky('x', { x: 0, y: 0, actor: me }));
+    addElement(await hub.store.get('free'), makeSticky('y', { x: 0, y: 0, actor: me }));
+    let list: { id: string; project: { name: string } | null }[] = [];
+    await until(() => {
+      void fetch(`http://127.0.0.1:${hub.port}/api/boards`)
+        .then((r) => r.json())
+        .then((j) => (list = j as typeof list));
+      return list.some((b) => b.id === 'plan' && b.project?.name === 'Работа');
+    }, 'проект в списке досок');
+    expect(list.map((b) => b.id)).toEqual(['free', 'plan']);
+    expect(list.find((b) => b.id === 'free')!.project).toBeNull();
+    await hub.store.flush();
+  });
+});
+
 describe('MCP', () => {
   async function mcp(): Promise<Client> {
     const client = new Client({ name: 'hub-test', version: '1.0.0' });
@@ -150,6 +186,7 @@ describe('MCP', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_arrow',
+      'add_frame',
       'add_shape',
       'add_sticky',
       'add_text',
@@ -357,6 +394,21 @@ describe('MCP: схемы для агентов', () => {
     });
     expect((del as { content: { text: string }[] }).content[0]!.text).toContain('1 из 2');
     expect(listElements(doc)).toHaveLength(4);
+
+    // Фрейм: под всеми элементами, название меняется тем же update_element.
+    const frame = idOf(
+      await client.callTool({
+        name: 'add_frame',
+        arguments: { board: 'flow', name: 'Схема процесса', x: -60, y: -120, w: 760, h: 400 },
+      }),
+    );
+    await client.callTool({
+      name: 'update_element',
+      arguments: { board: 'flow', id: frame, text: 'Процесс' },
+    });
+    const f = listElements(doc).find((e) => e.id === frame)!;
+    expect(f.type === 'frame' && f.props.name).toBe('Процесс');
+    expect(listElements(doc).every((e) => e.id === frame || e.z > f.z)).toBe(true);
     await client.close();
     await hub.store.flush(); // дождаться записи на диск, пока папка теста ещё на месте
   });
@@ -426,7 +478,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(9);
+    expect(tools.length).toBe(10);
     await client.close();
   });
 

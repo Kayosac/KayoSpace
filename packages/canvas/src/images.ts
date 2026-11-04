@@ -33,6 +33,19 @@ export class ImageCache implements ImageSource {
     return null;
   }
 
+  /** Дождаться загрузки картинок (для экспорта): готовые и недоступные — сразу. */
+  async ready(assetIds: Iterable<string>, timeoutMs = 8000): Promise<void> {
+    const pending = [...new Set(assetIds)].filter((id) => {
+      this.get(id);
+      return this.entries.get(id)?.state === 'loading';
+    });
+    const t0 = performance.now();
+    while (pending.some((id) => this.entries.get(id)?.state === 'loading')) {
+      if (performance.now() - t0 > timeoutMs || this.destroyed) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   /** Положить уже декодированную картинку (только что вставленную) — без повторной загрузки. */
   async put(assetId: string, blob: Blob): Promise<void> {
     const image = await decode(blob);

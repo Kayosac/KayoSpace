@@ -1,6 +1,6 @@
 import type { CanvasEngine } from '@kayospace/canvas';
 import type { SessionState } from './session';
-import { CompassIcon, FitIcon, MinusIcon, PlusIcon } from './icons';
+import { CompassIcon, FitIcon, MapIcon, MinusIcon, PlusIcon } from './icons';
 
 export const SYNC_TEXT: Record<string, string> = {
   off: 'Только на этом устройстве',
@@ -61,10 +61,14 @@ export function ZoomControls({
   engine,
   zoom,
   rotation,
+  minimap,
+  onMinimap,
 }: {
   engine: CanvasEngine;
   zoom: number;
   rotation: number;
+  minimap: boolean;
+  onMinimap: () => void;
 }) {
   const deg = Math.round((rotation * 180) / Math.PI);
   return (
@@ -106,6 +110,15 @@ export function ZoomControls({
         onClick={() => engine.zoomToFit()}
       >
         <FitIcon />
+      </button>
+      <button
+        aria-label="Мини-карта"
+        aria-pressed={minimap}
+        title={minimap ? 'Скрыть мини-карту' : 'Показать мини-карту'}
+        data-testid="minimap-toggle"
+        onClick={onMinimap}
+      >
+        <MapIcon />
       </button>
     </div>
   );

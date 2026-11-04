@@ -7,7 +7,8 @@
   "scripts": {
     "e2e": "playwright test",
     "typecheck": "tsc -p tsconfig.json",
-    "e2e:dev": "playwright test -c playwright.dev.config.ts"
+    "e2e:dev": "playwright test -c playwright.dev.config.ts",
+    "e2e:bench": "playwright test -c playwright.bench.config.ts"
   },
   "devDependencies": {
     "@kayospace/hub": "workspace:*",

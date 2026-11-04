@@ -1,6 +1,7 @@
 /** Настройки приложения: хранятся только на этом устройстве (localStorage). */
 
 import type { Camera, ShapeKind, Tool } from '@kayospace/canvas';
+import type { StrokeTool } from '@kayospace/model';
 import { STORAGE_NS } from './config';
 
 export interface WorkspaceSettings {
@@ -27,7 +28,13 @@ export interface WorkspaceSettings {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
   shapeKind: ShapeKind;
+  /** Вид пера: перо, маркер, выделитель. */
+  penKind: StrokeTool;
   stickyColor: string;
+  /** Показывать мини-карту. */
+  minimap: boolean;
+  /** Проект, выбранный в списке досок (null — все доски). */
+  project: string | null;
   /** Недавние доски на этом устройстве (свежие — первыми). */
   recentBoards: RecentBoard[];
 }
@@ -61,6 +68,9 @@ export const defaultSettings: WorkspaceSettings = {
   size: 3,
   eraserSize: 28,
   shapeKind: 'rect',
+  penKind: 'pen',
+  minimap: true,
+  project: null,
   stickyColor: '#ffe58a',
   recentBoards: [],
 };
@@ -88,9 +98,11 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     if (!raw) return { ...defaultSettings };
     const parsed = JSON.parse(raw) as Partial<WorkspaceSettings>;
     const s = { ...defaultSettings, ...parsed };
-    if (!['select', 'pen', 'eraser', 'hand', 'sticky', 'text', 'shape'].includes(s.tool))
-      s.tool = 'pen';
     if (!['rect', 'ellipse', 'line', 'arrow'].includes(s.shapeKind)) s.shapeKind = 'rect';
+    if (!['pen', 'marker', 'highlighter'].includes(s.penKind)) s.penKind = 'pen';
+    if (!['select', 'pen', 'eraser', 'hand', 'sticky', 'text', 'shape', 'frame'].includes(s.tool)) {
+      s.tool = 'pen';
+    }
     if (!Array.isArray(s.recentBoards)) s.recentBoards = [];
     s.recentBoards = s.recentBoards.filter((b) => b && typeof b.id === 'string');
     if (!(typeof s.size === 'number' && s.size > 0 && s.size <= 64)) s.size = defaultSettings.size;
@@ -98,6 +110,7 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
       s.eraserSize = defaultSettings.eraserSize;
     }
     if (typeof s.board !== 'string' || !s.board) s.board = defaultSettings.board;
+    if (typeof s.project !== 'string') s.project = null;
     return s;
   } catch {
     return { ...defaultSettings };

@@ -6,13 +6,22 @@
 import { mkdir, readFile, readdir, rename, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as Y from 'yjs';
-import { getBoardName, listElements } from '@kayospace/board';
+import {
+  WORKSPACE_ID,
+  boardProjects,
+  getBoardName,
+  isServiceDoc,
+  listElements,
+  listProjects,
+} from '@kayospace/board';
 import { isValidBoardId } from '@kayospace/sync';
 
 export interface BoardInfo {
   id: string;
   name: string | null;
   elements: number;
+  /** Проект доски (id и название); null — без проекта. */
+  project: { id: string; name: string } | null;
 }
 
 export class BoardStore {
@@ -83,10 +92,21 @@ export class BoardStore {
         if (isValidBoardId(id)) ids.add(id);
       }
     }
+    // Проекты — из служебного документа воркспейса (его самого в списке досок нет).
+    const ws = await this.get(WORKSPACE_ID);
+    const names = new Map(listProjects(ws).map((p) => [p.id, p.name]));
+    const membership = boardProjects(ws);
     const out: BoardInfo[] = [];
     for (const id of [...ids].sort()) {
+      if (isServiceDoc(id)) continue;
       const doc = await this.get(id);
-      out.push({ id, name: getBoardName(doc) ?? null, elements: listElements(doc).length });
+      const pid = membership.get(id);
+      out.push({
+        id,
+        name: getBoardName(doc) ?? null,
+        elements: listElements(doc).length,
+        project: pid ? { id: pid, name: names.get(pid) ?? '' } : null,
+      });
     }
     return out;
   }

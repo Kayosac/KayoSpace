@@ -5,6 +5,7 @@ import {
   strokeBounds,
   type Actor,
   type ArrowElement,
+  type FrameElement,
   type ImageElement,
   type ShapeElement,
   type StickyElement,
@@ -188,5 +189,32 @@ export function makeImage(
       naturalH: opts.naturalH,
       ...(opts.alt ? { alt: opts.alt } : {}),
     },
+  };
+}
+
+/** Размер шрифта заголовка фрейма при масштабе 100%. */
+export const FRAME_TITLE_SIZE = 14;
+
+/**
+ * Слой фреймов — ниже всех остальных элементов: '!' меньше любой цифры и буквы,
+ * а среди фреймов порядок — по времени создания.
+ */
+export const FRAME_Z_PREFIX = '!';
+
+/** Фрейм: именованная область, внутри которой лежат элементы. title — размер шрифта заголовка. */
+export function makeFrame(
+  name: string,
+  box: { x: number; y: number; w: number; h: number },
+  opts: { actor: Actor; now?: number; titleSize?: number },
+): FrameElement {
+  const now = opts.now ?? Date.now();
+  const b = base(opts.actor, now);
+  return {
+    ...b,
+    z: FRAME_Z_PREFIX + b.z,
+    type: 'frame',
+    ...box,
+    style: { size: opts.titleSize ?? FRAME_TITLE_SIZE },
+    props: { name },
   };
 }

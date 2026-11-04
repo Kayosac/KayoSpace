@@ -1,7 +1,24 @@
 import { useEffect, useReducer, useState } from 'react';
-import { worldToScreen, type CanvasEngine, type EngineState } from '@kayospace/canvas';
+import {
+  worldToScreen,
+  type CanvasEngine,
+  type EngineState,
+  type ExportTarget,
+} from '@kayospace/canvas';
+import type { AlignMode } from '@kayospace/board';
 import { AI_MENU, type AiAction } from './ai';
-import { CopyIcon, DuplicateIcon, SparkleIcon, TrashIcon } from './icons';
+import { CopyIcon, DuplicateIcon, MoreIcon, SparkleIcon, TrashIcon } from './icons';
+
+const ALIGN: { mode: AlignMode; name: string; min: number }[] = [
+  { mode: 'left', name: 'По левому краю', min: 2 },
+  { mode: 'center', name: 'По центру', min: 2 },
+  { mode: 'right', name: 'По правому краю', min: 2 },
+  { mode: 'top', name: 'По верху', min: 2 },
+  { mode: 'middle', name: 'По середине', min: 2 },
+  { mode: 'bottom', name: 'По низу', min: 2 },
+  { mode: 'distribute-x', name: 'Равные промежутки по горизонтали', min: 3 },
+  { mode: 'distribute-y', name: 'Равные промежутки по вертикали', min: 3 },
+];
 
 const MENU_GAP = 14;
 
@@ -31,6 +48,7 @@ export function SelectionMenu({
   ai,
   onAi,
   onAiPrompt,
+  onExport,
 }: {
   engine: CanvasEngine;
   state: EngineState;
@@ -38,16 +56,25 @@ export function SelectionMenu({
   ai: string | null;
   onAi: (action: AiAction) => void;
   onAiPrompt: () => void;
+  onExport: (target: ExportTarget) => void;
 }) {
   // Меню привязано к холсту: перерисовываем при движении камеры.
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => engine.onCamera(bump), [engine]);
   const [aiOpen, setAiOpen] = useState(false);
-  // Выделение сняли — список действий закрывается.
+  const [moreOpen, setMoreOpen] = useState(false);
+  // Выделение сняли — списки действий закрываются.
   const none = state.selected === 0;
   useEffect(() => {
-    if (none) setAiOpen(false);
+    if (none) {
+      setAiOpen(false);
+      setMoreOpen(false);
+    }
   }, [none]);
+  const frame = state.selectedFrame;
+  const frameName = frame ? frameNameOf(engine, frame) : '';
+  const [name, setName] = useState(frameName);
+  useEffect(() => setName(frameName), [frameName, frame]);
 
   if (
     state.selected === 0 ||
@@ -85,13 +112,35 @@ export function SelectionMenu({
       data-testid="selection-menu"
       data-rev={state.selectionRev}
     >
-      <span className="count">{state.selected}</span>
+      {frame ? (
+        <input
+          className="frame-name"
+          value={name}
+          aria-label="Название фрейма"
+          data-testid="frame-name"
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => engine.renameFrame(frame, name)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') {
+              setName(frameName);
+              e.currentTarget.blur();
+            }
+          }}
+        />
+      ) : (
+        <span className="count">{state.selected}</span>
+      )}
       <button
         className="ai"
         title={ai ?? 'ИИ: распознать, сгруппировать, резюме, схема…'}
         disabled={ai !== null}
         aria-expanded={aiOpen}
-        onClick={() => setAiOpen((o) => !o)}
+        onClick={() => {
+          setMoreOpen(false);
+          setAiOpen((o) => !o);
+        }}
       >
         <SparkleIcon />
         <span>ИИ</span>
@@ -108,6 +157,65 @@ export function SelectionMenu({
         <TrashIcon />
         <span>Удалить</span>
       </button>
+      <button
+        title="Порядок, выравнивание, экспорт"
+        aria-label="Ещё"
+        aria-expanded={moreOpen}
+        data-testid="selection-more"
+        onClick={() => {
+          setAiOpen(false);
+          setMoreOpen((o) => !o);
+        }}
+      >
+        <MoreIcon />
+      </button>
+      {moreOpen && (
+        <div className="ai-actions more-actions" role="menu" aria-label="Ещё">
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMoreOpen(false);
+              engine.arrange('front');
+            }}
+            disabled={!!frame}
+          >
+            На передний план <kbd>{mod}]</kbd>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMoreOpen(false);
+              engine.arrange('back');
+            }}
+            disabled={!!frame}
+          >
+            На задний план <kbd>{mod}[</kbd>
+          </button>
+          {state.selected >= 2 && <hr />}
+          {ALIGN.filter((a) => state.selected >= a.min).map(({ mode, name: label }) => (
+            <button
+              key={mode}
+              role="menuitem"
+              onClick={() => {
+                setMoreOpen(false);
+                engine.align(mode);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <hr />
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMoreOpen(false);
+              onExport(frame ? { frame } : 'selection');
+            }}
+          >
+            {frame ? 'Сохранить фрейм как PNG' : 'Сохранить выделенное как PNG'}
+          </button>
+        </div>
+      )}
       {aiOpen && (
         <div className="ai-actions" role="menu" aria-label="Действия ИИ">
           {aiActionsFor(engine).map(({ action, name }) => (
@@ -135,4 +243,9 @@ export function SelectionMenu({
       )}
     </div>
   );
+}
+
+function frameNameOf(engine: CanvasEngine, id: string): string {
+  const el = engine.scene.items.get(id)?.element;
+  return el?.type === 'frame' ? el.props.name : '';
 }

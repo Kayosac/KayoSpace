@@ -23,13 +23,24 @@ import {
   STICKY_FONT_SIZE,
   STICKY_SIZE,
   TEXT_FONT_SIZE,
+  FRAME_TITLE_SIZE,
+  alignDeltas,
+  makeFrame,
+  reorder,
   rotateAbout,
+  type AlignMode,
   scaleAbout,
   transformElement,
   type Transform,
 } from '@kayospace/board';
 import { PenInput, StrokeBuilder, type InkPoint, type PressurePoint } from '@kayospace/ink';
-import { decodeStroke, type Actor, type CanvasElement, type StrokePoint } from '@kayospace/model';
+import {
+  decodeStroke,
+  type Actor,
+  type CanvasElement,
+  type StrokePoint,
+  type StrokeTool,
+} from '@kayospace/model';
 import {
   defaultCamera,
   fitBounds,
@@ -45,6 +56,7 @@ import { ImageCache } from './images';
 import { boxFromDrag, insideBox, snapAngle } from './shapes';
 import { Navigation } from './navigation';
 import {
+  EXPORT_COLORS,
   HANDLE_SIZE,
   Renderer,
   rotateHandleWorld,
@@ -64,9 +76,12 @@ import {
   unionBounds,
   type Pt,
 } from './selection';
-import { Scene, STROKE_STREAMLINE, STROKE_THINNING } from './scene';
+import { HIGHLIGHTER_COLOR, PEN_KINDS, Scene, STROKE_STREAMLINE } from './scene';
+import { isFrame, nextFrameName } from './frames';
+import { buildPdf, type PdfPage } from './pdf';
+import type { Bounds } from '@kayospace/ink';
 
-export type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'sticky' | 'text' | 'shape';
+export type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'sticky' | 'text' | 'shape' | 'frame';
 export type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow';
 
 /** Цвета стикеров — светлые, текст на них тёмный в любой теме. */
@@ -82,7 +97,13 @@ export interface EngineState {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
   shapeKind: ShapeKind;
+  /** Вид пера: перо, маркер, выделитель. */
+  penKind: StrokeTool;
   stickyColor: string;
+  /** Выделен ровно один фрейм — его id (для переименования). */
+  selectedFrame: string | null;
+  /** В выделении есть фрейм: поворот выключен. */
+  selectionHasFrame: boolean;
   /** id стикера или текста, который сейчас редактируют. */
   editing: string | null;
   /** Поворот вида, радианы. */
@@ -117,6 +138,7 @@ export interface EngineOptions {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize?: number;
   shapeKind?: ShapeKind;
+  penKind?: StrokeTool;
   stickyColor?: string;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws?: boolean;
@@ -135,6 +157,7 @@ interface ActiveDraw {
   builder: StrokeBuilder;
   points: StrokePoint[];
   predicted: PressurePoint[];
+  kind: StrokeTool;
   color: string | null;
   size: number;
   unit: number;
@@ -150,7 +173,11 @@ type SelectGesture =
   | { kind: 'lasso'; points: Pt[] }
   | { kind: 'marquee'; start: Pt; end: Pt }
   | { kind: 'shape'; start: Pt; end: Pt }
+  | { kind: 'frame'; start: Pt; end: Pt }
   | { kind: 'place'; start: Pt; moved: boolean };
+
+/** Что экспортировать: выделение, фрейм или всю доску. */
+export type ExportTarget = 'board' | 'selection' | { frame: string };
 
 /** Буфер обмена — общий для всех досок в окне приложения. */
 let clipboard: CanvasElement[] = [];
@@ -202,6 +229,7 @@ export class CanvasEngine {
   /** Shift зажат во время жеста (квадрат, угол 45°). */
   private gestureShift = false;
   private shapeKind: ShapeKind;
+  private penKind: StrokeTool;
   private stickyColor: string;
   /** Редактируемый стикер или текст; новый ещё не в доске — появится, когда в нём будет текст. */
   private editing: { id: string; draft: CanvasElement | null } | null = null;
@@ -219,6 +247,10 @@ export class CanvasEngine {
   /** Время последней отрисовки, мс — для отладки и e2e-проверок. */
   lastPaintMs = 0;
   paints = 0;
+  /** Камера сменилась после последнего кадра. */
+  private cameraMoved = false;
+  /** Таймер чистовой перерисовки после того, как вид перестал меняться. */
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly host: HTMLElement,
@@ -232,6 +264,7 @@ export class CanvasEngine {
     this.size = opts.size ?? 3;
     this.eraserSize = opts.eraserSize ?? 28;
     this.shapeKind = opts.shapeKind ?? 'rect';
+    this.penKind = opts.penKind ?? 'pen';
     this.stickyColor = opts.stickyColor ?? STICKY_COLORS[0]!;
     this.touchDraws = opts.touchDraws ?? false;
 
@@ -296,6 +329,9 @@ export class CanvasEngine {
           } else if (this.tool === 'shape') {
             this.gestureShift = info.event.shiftKey;
             this.gesture = { kind: 'shape', start: p, end: p };
+          } else if (this.tool === 'frame') {
+            this.gestureShift = info.event.shiftKey;
+            this.gesture = { kind: 'frame', start: p, end: p };
           } else if (this.tool === 'sticky' || this.tool === 'text') {
             this.gesture = { kind: 'place', start: p, moved: false };
           } else {
@@ -426,6 +462,13 @@ export class CanvasEngine {
     this.emit();
   }
 
+  /** Вид пера: перо, маркер или выделитель. */
+  setPenKind(kind: StrokeTool): void {
+    this.penKind = kind;
+    if (this.tool !== 'pen') this.setTool('pen');
+    this.emit();
+  }
+
   /** Цвет стикера: перекрашивает выделенные стикеры или задаёт цвет новых. */
   setStickyColor(color: string): void {
     if (this.tool === 'select' && this.selection.size > 0) {
@@ -503,7 +546,7 @@ export class CanvasEngine {
   deleteSelection(): void {
     if (this.selection.size === 0 || this.gesture) return;
     this.undoManager.stopCapturing();
-    deleteElements(this.doc, [...this.withChildren(this.selection)], LOCAL_ORIGIN);
+    deleteElements(this.doc, [...this.withContents(this.selection)], LOCAL_ORIGIN);
     this.undoManager.stopCapturing();
     this.clearSelection();
   }
@@ -514,7 +557,7 @@ export class CanvasEngine {
    * По этому тексту вставка понимает, что в системном буфере — наши элементы.
    */
   copySelection(): string | null {
-    const els = this.selectedElements();
+    const els = this.selectedElements(true);
     if (els.length === 0) return null;
     clipboard = els.map((el) => structuredClone(el));
     const texts = els
@@ -561,7 +604,7 @@ export class CanvasEngine {
 
   /** Копия выделенного рядом с оригиналом. */
   duplicateSelection(): void {
-    const els = this.selectedElements();
+    const els = this.selectedElements(true);
     if (els.length === 0 || this.gesture) return;
     const d = 24 / this.camera.zoom;
     this.insert(cloneElements(els, d, d, this.opts.actor));
@@ -624,7 +667,92 @@ export class CanvasEngine {
   /** Сдвинуть выделенное на экранные пиксели (стрелки). */
   nudgeSelection(dx: number, dy: number): void {
     if (this.selection.size === 0 || this.gesture) return;
-    this.commitTransform({ s: 1, tx: dx / this.camera.zoom, ty: dy / this.camera.zoom });
+    this.commitTransform({ s: 1, tx: dx / this.camera.zoom, ty: dy / this.camera.zoom }, true);
+  }
+
+  // ---------- Порядок слоёв и выравнивание ----------
+
+  /** Выделенное — поверх всего (front) или под всё (back). Фреймы остаются под элементами. */
+  arrange(where: 'front' | 'back'): void {
+    const els = this.selectedElements();
+    if (els.length === 0 || this.gesture) return;
+    const all = [...this.scene.items.values()].map((it) => it.element);
+    const z = reorder(els, all, where);
+    if (z.size === 0) return;
+    const map = elementsMap(this.doc);
+    const now = Date.now();
+    this.undoManager.stopCapturing();
+    this.doc.transact(() => {
+      for (const el of els) {
+        const next = z.get(el.id);
+        if (next) map.set(el.id, { ...el, z: next, updatedBy: this.opts.actor, updatedAt: now });
+      }
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+  }
+
+  /** Выровнять или распределить выделенное (по рамкам; рисунки на стикерах едут со стикером). */
+  align(mode: AlignMode): void {
+    if (this.selection.size < 2 || this.gesture) return;
+    const boxes = [...this.selection].flatMap((id) => {
+      const item = this.scene.items.get(id);
+      return item ? [{ id, ...item.bounds }] : [];
+    });
+    const deltas = alignDeltas(boxes, mode);
+    if (deltas.size === 0) return;
+    const map = elementsMap(this.doc);
+    const now = Date.now();
+    this.undoManager.stopCapturing();
+    this.doc.transact(() => {
+      for (const [id, d] of deltas) {
+        // Фрейм едет вместе с содержимым.
+        for (const eid of this.withContents([id])) {
+          const el = getElement(this.doc, eid);
+          if (el)
+            map.set(eid, transformElement(el, { s: 1, tx: d.dx, ty: d.dy }, this.opts.actor, now));
+        }
+      }
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+  }
+
+  // ---------- Фреймы ----------
+
+  /** Фреймы доски — для списка и экспорта. */
+  getFrames(): {
+    id: string;
+    name: string;
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  }[] {
+    return this.scene.frames();
+  }
+
+  /** Переименовать фрейм. */
+  renameFrame(id: string, name: string): void {
+    const el = getElement(this.doc, id);
+    const n = name.trim();
+    if (!isFrame(el) || !n || n === el.props.name) return;
+    this.undoManager.stopCapturing();
+    addElement(
+      this.doc,
+      { ...el, props: { ...el.props, name: n }, updatedBy: this.opts.actor, updatedAt: Date.now() },
+      LOCAL_ORIGIN,
+    );
+    this.undoManager.stopCapturing();
+  }
+
+  /** Показать область (мировые координаты) целиком, с полями. */
+  zoomToBounds(b: { minX: number; minY: number; maxX: number; maxY: number }): void {
+    this.setCamera(
+      fitBounds(b, this.renderer.width, this.renderer.height, 48, this.camera.rotation ?? 0),
+    );
+  }
+
+  /** Перейти к фрейму и выделить его. */
+  goToFrame(id: string): void {
+    const f = this.scene.frames().find((fr) => fr.id === id);
+    if (!f) return;
+    this.zoomToBounds(f.bounds);
   }
 
   // ---------- ИИ: предпросмотр черновика ----------
@@ -750,6 +878,67 @@ export class CanvasEngine {
     return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
   }
 
+  // ---------- Экспорт ----------
+
+  /** Область экспорта: выделение, фрейм (без заголовка) или вся доска; null — нечего экспортировать. */
+  exportArea(target: ExportTarget): Bounds | null {
+    if (typeof target === 'object') {
+      const el = this.scene.items.get(target.frame)?.element;
+      return isFrame(el) ? { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h } : null;
+    }
+    const b = target === 'selection' ? this.getSelectionBounds() : this.scene.contentBounds();
+    if (!b) return null;
+    const pad = 32;
+    return { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad };
+  }
+
+  /**
+   * Нарисовать область для экспорта: светлая тема, без сетки и рамок выделения.
+   * Чёткость — до 2 пикселей на единицу мира, но не больше 8192 по стороне и ~16 Мп всего.
+   */
+  async renderExport(area: Bounds, scale = 2): Promise<HTMLCanvasElement | null> {
+    const w = area.maxX - area.minX;
+    const h = area.maxY - area.minY;
+    if (!(w > 0 && h > 0)) return null;
+    const k = Math.min(scale, 8192 / Math.max(w, h), Math.sqrt(16_000_000 / (w * h)));
+    // Картинки — дождаться загрузки, иначе в файле будут серые заглушки.
+    const assets: string[] = [];
+    for (const item of this.scene.query(area)) {
+      if (item.element.type === 'image') assets.push(item.element.props.assetId);
+    }
+    await this.images.ready(assets);
+    return this.renderer.exportRegion(this.scene, area, k, EXPORT_COLORS);
+  }
+
+  /** PNG выделения, фрейма или всей доски. */
+  async exportPng(target: ExportTarget): Promise<Blob | null> {
+    const area = this.exportArea(target);
+    const canvas = area ? await this.renderExport(area) : null;
+    if (!canvas) return null;
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
+  }
+
+  /** PDF: по странице на фрейм (сверху вниз, слева направо); фреймов нет — вся доска одной страницей. */
+  async exportPdf(title: string): Promise<Uint8Array | null> {
+    const frames = this.scene.frames();
+    const areas = frames.length > 0 ? frames.map((f) => f.bounds) : [this.exportArea('board')];
+    const pages: PdfPage[] = [];
+    for (const area of areas) {
+      if (!area) continue;
+      const canvas = await this.renderExport(area);
+      if (!canvas) continue;
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
+      if (!blob) continue;
+      pages.push({
+        jpeg: new Uint8Array(await blob.arrayBuffer()),
+        width: canvas.width,
+        height: canvas.height,
+        density: canvas.width / (area.maxX - area.minX),
+      });
+    }
+    return pages.length > 0 ? buildPdf(pages, title) : null;
+  }
+
   private insert(els: CanvasElement[]): void {
     this.undoManager.stopCapturing();
     addElements(this.doc, els, LOCAL_ORIGIN);
@@ -767,8 +956,29 @@ export class CanvasEngine {
     return out;
   }
 
-  private selectedElements(): CanvasElement[] {
-    return [...this.withChildren(this.selection)].flatMap((id) => {
+  /** Как withChildren, а у фреймов — ещё и всё, что лежит внутри (с вложенными фреймами). */
+  private withContents(ids: Iterable<string>): Set<string> {
+    const owners = new Set<string>();
+    const visit = (id: string): void => {
+      if (owners.has(id)) return;
+      owners.add(id);
+      if (isFrame(this.scene.items.get(id)?.element)) {
+        for (const inner of this.scene.frameContents(id)) visit(inner);
+      }
+    };
+    for (const id of ids) visit(id);
+    return this.withChildren(owners);
+  }
+
+  private hasFrameSelected(): boolean {
+    for (const id of this.selection) if (isFrame(this.scene.items.get(id)?.element)) return true;
+    return false;
+  }
+
+  /** Элементы выделения; contents — с содержимым фреймов (перенос, копия, удаление). */
+  private selectedElements(contents = false): CanvasElement[] {
+    const ids = contents ? this.withContents(this.selection) : this.withChildren(this.selection);
+    return [...ids].flatMap((id) => {
       const el = getElement(this.doc, id);
       return el ? [el] : [];
     });
@@ -949,6 +1159,26 @@ export class CanvasEngine {
     return { ...makeShape(this.shapeKind, rect, opts), rotation };
   }
 
+  /** Фрейм по жесту: протянули — по рамке, тап — 960 × 600 экранных пикселей с центром в точке. */
+  private draftFrame(g: { start: Pt; end: Pt }): CanvasElement {
+    const z = this.camera.zoom;
+    const tiny = Math.hypot(g.end.x - g.start.x, g.end.y - g.start.y) * z < 8;
+    let box: { x: number; y: number; w: number; h: number };
+    if (tiny) {
+      const w = 960 / z;
+      const h = 600 / z;
+      box = { x: g.start.x - w / 2, y: g.start.y - h / 2, w, h };
+    } else {
+      const b = boxFromDrag(g.start, g.end, this.gestureShift);
+      box = { x: b.x, y: b.y, w: b.w, h: b.h };
+    }
+    const names = this.scene.frames().map((f) => f.name);
+    return makeFrame(nextFrameName(names), box, {
+      actor: this.opts.actor,
+      titleSize: FRAME_TITLE_SIZE / z,
+    });
+  }
+
   /**
    * Рамка, ровная относительно экрана: центр — в точке anchor плюс смещение (ox, oy) в осях экрана
    * (мировые единицы), размер w × h. При повёрнутом виде элемент получает обратный поворот.
@@ -968,13 +1198,14 @@ export class CanvasEngine {
     return { x: cx - w / 2, y: cy - h / 2, w, h, rotation: r ? -r : 0 };
   }
 
-  private commitTransform(t: Transform): void {
+  /** Применить преобразование к выделению; contents — вместе с содержимым фреймов (перенос). */
+  private commitTransform(t: Transform, contents = false): void {
     if (isIdentity(t)) return;
     const map = elementsMap(this.doc);
     const now = Date.now();
     this.undoManager.stopCapturing();
     this.doc.transact(() => {
-      for (const el of this.selectedElements()) {
+      for (const el of this.selectedElements(contents)) {
         map.set(el.id, transformElement(el, t, this.opts.actor, now));
       }
     }, LOCAL_ORIGIN);
@@ -985,8 +1216,9 @@ export class CanvasEngine {
     let sticky = false;
     let ink = false;
     for (const id of this.selection) {
-      if (this.scene.items.get(id)?.element.type === 'sticky') sticky = true;
-      else ink = true;
+      const type = this.scene.items.get(id)?.element.type;
+      if (type === 'sticky') sticky = true;
+      else if (type !== 'frame') ink = true;
     }
     return sticky && ink ? 'mixed' : sticky ? 'sticky' : ink ? 'ink' : null;
   }
@@ -1005,7 +1237,7 @@ export class CanvasEngine {
     if (b && !additive) {
       const grabR = (pointerType === 'mouse' ? HANDLE_SIZE : HANDLE_SIZE * 1.8) / z;
       const [, rot] = rotateHandleWorld(b, z);
-      if (Math.hypot(p.x - rot.x, p.y - rot.y) <= grabR) {
+      if (!this.hasFrameSelected() && Math.hypot(p.x - rot.x, p.y - rot.y) <= grabR) {
         const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
         const start = Math.atan2(p.y - center.y, p.x - center.x);
         this.gesture = { kind: 'rotate', center, start, t: IDENTITY, moved: false };
@@ -1103,7 +1335,7 @@ export class CanvasEngine {
     } else if (g.kind === 'scale') {
       g.moved = true;
       g.t = scaleAbout(g.anchor.x, g.anchor.y, scaleFromHandle(g.anchor, g.corner, p));
-    } else if (g.kind === 'shape') {
+    } else if (g.kind === 'shape' || g.kind === 'frame') {
       g.end = p;
     } else if (g.kind === 'place') {
       if (Math.hypot(p.x - g.start.x, p.y - g.start.y) * z > 8) g.moved = true;
@@ -1125,7 +1357,8 @@ export class CanvasEngine {
     if (!g) return;
     if (!cancel) {
       if ((g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
-        this.commitTransform(g.t);
+        // Перенос фрейма везёт содержимое; размер фрейма меняется без него.
+        this.commitTransform(g.t, g.kind === 'move');
       } else if (g.kind === 'move' && g.editOnTap) {
         this.startEditing(g.editOnTap);
         return;
@@ -1145,6 +1378,16 @@ export class CanvasEngine {
           };
         }
         if (el) addElement(this.doc, el, LOCAL_ORIGIN);
+      } else if (g.kind === 'frame') {
+        const frame = this.draftFrame(g);
+        addElement(this.doc, frame, LOCAL_ORIGIN);
+        this.undoManager.stopCapturing();
+        // Дальше — выделение: фрейм выбран, его можно сразу переименовать.
+        this.tool = 'select';
+        this.nav.handTool = false;
+        this.updateCursor();
+        this.selection.clear();
+        this.selection.add(frame.id);
       } else if (g.kind === 'place' && !g.moved) {
         const kind = this.tool === 'text' ? 'text' : 'sticky';
         const z = this.camera.zoom;
@@ -1189,10 +1432,17 @@ export class CanvasEngine {
       c.zoom !== this.camera.zoom || (c.rotation ?? 0) !== (this.camera.rotation ?? 0);
     this.camera = c;
     this.hasCamera = true;
-    this.renderer.invalidateAll();
+    // Картинку переносит кадр (renderer.moveTo): сдвиг — без перерисовки всего экрана.
+    this.cameraMoved = true;
     this.schedule();
     for (const cb of [...this.cameraListeners]) cb(c);
     if (zoomChanged) this.emit();
+  }
+
+  /** Поставить мировую точку в центр экрана (масштаб и поворот — прежние). */
+  centerOn(p: Pt): void {
+    const c = screenToWorld(this.camera, this.renderer.width / 2, this.renderer.height / 2);
+    this.setCamera({ ...this.camera, x: this.camera.x + p.x - c.x, y: this.camera.y + p.y - c.y });
   }
 
   /** Масштабировать вокруг центра экрана. */
@@ -1251,6 +1501,7 @@ export class CanvasEngine {
 
   destroy(): void {
     cancelAnimationFrame(this.raf);
+    if (this.settleTimer) clearTimeout(this.settleTimer);
     this.input.destroy();
     this.nav.destroy();
     this.resizeObserver.disconnect();
@@ -1278,13 +1529,15 @@ export class CanvasEngine {
 
   private startDraw(p: StrokePoint, hasPressure: boolean): void {
     const unit = 1 / this.camera.zoom;
-    const size = this.size * unit;
+    const kind = this.penKind;
+    const spec = PEN_KINDS[kind];
+    const size = this.size * spec.scale * unit;
     const builder = new StrokeBuilder({
       color: '',
       size,
-      thinning: STROKE_THINNING,
+      thinning: spec.thinning,
       streamline: STROKE_STREAMLINE,
-      simulatePressure: !hasPressure,
+      simulatePressure: kind === 'pen' ? !hasPressure : false,
       unit,
     });
     builder.add(p);
@@ -1292,7 +1545,9 @@ export class CanvasEngine {
       builder,
       points: [p],
       predicted: [],
-      color: this.color,
+      kind,
+      // Выделитель без выбранного цвета — жёлтый: полупрозрачные «чернила» выглядели бы серыми.
+      color: kind === 'highlighter' ? (this.color ?? HIGHLIGHTER_COLOR) : this.color,
       size,
       unit,
       hasPressure,
@@ -1369,6 +1624,7 @@ export class CanvasEngine {
       this.renderer.invalidateWorld(this.camera, samplesWorldBounds(finished));
       if (!cancel && d.points.length > 0) {
         const el = makeStroke(d.points, {
+          tool: d.kind,
           hasPressure: d.hasPressure,
           style: { size: d.size, ...(d.color ? { color: d.color } : {}) },
           actor: this.opts.actor,
@@ -1435,7 +1691,7 @@ export class CanvasEngine {
         this.renderer.invalidate(d.prevTail);
         this.renderer.invalidate(tailRect);
         d.prevTail = tailRect;
-        active = { samples: b.samples, tail, color: d.color };
+        active = { samples: b.samples, tail, color: d.color, alpha: PEN_KINDS[d.kind].alpha };
       }
       let ring: { x: number; y: number; r: number } | null = null;
       const er = this.erase;
@@ -1455,16 +1711,28 @@ export class CanvasEngine {
         this.renderer.invalidate(rect);
         er.ringRect = rect;
       }
+      if (this.cameraMoved) {
+        this.cameraMoved = false;
+        // Тяжёлая доска (полная перерисовка дольше 12 мс): при зуме растягиваем готовую картинку,
+        // а чисто перерисовываем не чаще раза в 120 мс и когда зум остановится.
+        const r = this.renderer;
+        const heavy = r.lastFullMs > 12;
+        const due = performance.now() - r.lastFullAt > 120;
+        r.moveTo(this.camera, heavy && !due && !this.draw && !this.gesture);
+        this.settleSoon();
+      }
       if (this.renderer.needsPaint) {
         const overlay: PaintOverlay = { active, ring, editing: this.editing?.id ?? null };
         const g = this.gesture;
         if (g?.kind === 'shape') overlay.draft = this.draftShape(g);
+        if (g?.kind === 'frame') overlay.draft = this.draftFrame(g);
         if (this.selection.size > 0) {
           const bounds = this.getSelectionBounds();
           if (bounds) {
             overlay.selection = {
               bounds,
               ids: this.selection,
+              rotatable: !this.hasFrameSelected(),
               handles:
                 this.tool === 'select' &&
                 !this.editing &&
@@ -1473,7 +1741,13 @@ export class CanvasEngine {
           }
         }
         if (g && (g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
-          overlay.preview = { ids: this.withChildren(this.selection), t: g.t };
+          overlay.preview = {
+            ids:
+              g.kind === 'move'
+                ? this.withContents(this.selection)
+                : this.withChildren(this.selection),
+            t: g.t,
+          };
         } else if (g?.kind === 'lasso') {
           overlay.lasso = g.points;
         } else if (g?.kind === 'marquee') {
@@ -1500,6 +1774,18 @@ export class CanvasEngine {
     }
   };
 
+  /** Картинка приблизительная (сдвиг на дробные пиксели, растяжение) — перерисовать начисто, когда вид устоится. */
+  private settleSoon(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      if (this.renderer.approx) {
+        this.renderer.invalidateAll();
+        this.schedule();
+      }
+    }, 140);
+  }
+
   private resize(): void {
     const r = this.host.getBoundingClientRect();
     this.renderer.resize(r.width, r.height, window.devicePixelRatio || 1);
@@ -1520,6 +1806,8 @@ export class CanvasEngine {
       ink: v('--canvas-ink', c.ink),
       dot: v('--canvas-dot', c.dot),
       accent: v('--accent', c.accent),
+      frame: v('--canvas-frame', c.frame),
+      frameLine: v('--canvas-frame-line', c.frameLine),
     };
   }
 
@@ -1538,7 +1826,10 @@ export class CanvasEngine {
       size: this.size,
       eraserSize: this.eraserSize,
       shapeKind: this.shapeKind,
+      penKind: this.penKind,
       stickyColor: this.stickyColor,
+      selectedFrame: this.singleFrame(),
+      selectionHasFrame: this.hasFrameSelected(),
       editing: this.editing?.id ?? null,
       rotation: this.camera.rotation ?? 0,
       selectionKind: this.selectionKind(),
@@ -1553,6 +1844,12 @@ export class CanvasEngine {
       canPaste: clipboard.length > 0,
       aiPreview: this.ai !== null,
     };
+  }
+
+  private singleFrame(): string | null {
+    if (this.selection.size !== 1) return null;
+    const id = [...this.selection][0]!;
+    return isFrame(this.scene.items.get(id)?.element) ? id : null;
   }
 
   private emit(): void {
@@ -1630,6 +1927,12 @@ export class CanvasEngine {
       this.redo();
       return;
     }
+    // Ctrl/⌘ ] — на передний план, Ctrl/⌘ [ — на задний.
+    if (mod && (e.code === 'BracketRight' || e.code === 'BracketLeft') && this.selection.size > 0) {
+      e.preventDefault();
+      this.arrange(e.code === 'BracketRight' ? 'front' : 'back');
+      return;
+    }
     if (mod && (e.code === 'Equal' || e.code === 'NumpadAdd')) {
       e.preventDefault();
       this.zoomBy(1.25);
@@ -1650,11 +1953,14 @@ export class CanvasEngine {
     else if (e.code === 'KeyV') this.setTool('select');
     else if (e.code === 'KeyN') this.setTool('sticky');
     else if (e.code === 'KeyT') this.setTool('text');
+    else if (e.code === 'KeyF') this.setTool('frame');
+    else if (e.code === 'KeyM') this.setPenKind('marker');
+    else if (e.code === 'KeyI') this.setPenKind('highlighter');
     else if (e.code === 'KeyR') this.setShapeKind('rect');
     else if (e.code === 'KeyO') this.setShapeKind('ellipse');
     else if (e.code === 'KeyL') this.setShapeKind('line');
     else if (e.code === 'KeyA') this.setShapeKind('arrow');
-    else if (e.code === 'KeyP' || e.code === 'KeyB') this.setTool('pen');
+    else if (e.code === 'KeyP' || e.code === 'KeyB') this.setPenKind('pen');
     else if (e.code === 'KeyE') this.setTool('eraser');
     else if (e.code === 'KeyH') this.setTool('hand');
   };

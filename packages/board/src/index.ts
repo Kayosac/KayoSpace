@@ -4,3 +4,6 @@ export * from './factory';
 export * from './ids';
 export * from './transform';
 export * from './wire';
+export * from './align';
+export * from './order';
+export * from './workspace';
