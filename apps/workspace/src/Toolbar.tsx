@@ -63,6 +63,9 @@ const SHAPES: { value: ShapeKind; name: string; key: string; Icon: ComponentType
 
 const STICKY_NAMES = ['Жёлтый', 'Розовый', 'Мятный', 'Голубой', 'Лавандовый', 'Персиковый'];
 
+/** Можно ли прочитать системный буфер кнопкой (без клавиатуры). */
+const canReadClipboard = typeof navigator !== 'undefined' && typeof navigator.clipboard?.read === 'function';
+
 const mod =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
 
@@ -71,11 +74,13 @@ export function Toolbar({
   state,
   onSettings,
   onImages,
+  onPaste,
 }: {
   engine: CanvasEngine;
   state: EngineState;
   onSettings: () => void;
   onImages: (files: File[]) => void;
+  onPaste: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const tool = state.tool;
@@ -228,12 +233,12 @@ export function Toolbar({
         >
           <RedoIcon />
         </button>
-        {state.canPaste && (
+        {(state.canPaste || canReadClipboard) && (
           <button
             className="tool"
             aria-label="Вставить"
-            title={`Вставить (${mod}V)`}
-            onClick={() => engine.paste()}
+            title={`Вставить из буфера: текст, картинку или скопированное (${mod}V)`}
+            onClick={onPaste}
           >
             <PasteIcon />
           </button>

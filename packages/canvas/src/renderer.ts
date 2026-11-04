@@ -671,6 +671,12 @@ export class Renderer {
     return { size: lo, lines: best, pad };
   }
 
+  /** Ширина самой длинной строки текста шрифтом size (мировые единицы). */
+  textWidth(content: string, size: number): number {
+    const measure = this.measurer(400);
+    return Math.max(0, ...content.split('\n').map((l) => (measure(l) * size) / 100));
+  }
+
   /** Ширина строки шрифтом 100 px (кэш): ширина при другом размере — пропорциональна. */
   private measurer(weight: number): (s: string) => number {
     const cache = this.widths[weight] ?? (this.widths[weight] = new Map());

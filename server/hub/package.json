@@ -1,6 +1,6 @@
 {
   "name": "@kayospace/hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Хаб Kayospace: синхронизация досок, хранение, MCP для агентов",
@@ -13,7 +13,8 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ai-worker": "tsx src/worker-main.ts"
   },
   "dependencies": {
     "@kayospace/board": "workspace:*",

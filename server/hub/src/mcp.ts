@@ -25,10 +25,17 @@ import {
   setBoardName,
 } from '@kayospace/board';
 import type { ArrowEnd, CanvasElement } from '@kayospace/model';
-import type { BoardStore } from './store';
+import type { BoardInfo } from './store';
+import type * as Y from 'yjs';
+
+/** Откуда инструменты берут доски: хранилище хаба или черновик задачи ИИ. */
+export interface BoardSource {
+  get(board: string): Promise<Y.Doc>;
+  has(board: string): Promise<boolean>;
+  list(): Promise<BoardInfo[]>;
+}
 
 export const MCP_ORIGIN = 'mcp';
-const agent: Actor = { kind: 'agent', name: 'mcp' };
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -38,7 +45,8 @@ const boardId = z
   .regex(/^[A-Za-z0-9_-]{1,64}$/)
   .describe('id доски: латиница, цифры, «-» и «_»');
 
-export function createMcp(store: BoardStore) {
+export function createMcp(store: BoardSource, opts: { actorName?: string } = {}) {
+  const agent: Actor = { kind: 'agent', name: opts.actorName ?? 'mcp' };
   return createMcpHandler(() => {
     const server = new McpServer({ name: 'kayospace', version: '0.1.0' });
 

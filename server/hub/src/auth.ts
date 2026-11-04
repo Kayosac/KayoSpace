@@ -43,11 +43,19 @@ function hostnameOf(hostHeader: string): string {
 }
 
 /** Host — локальный или публичный домен хаба. */
-export function hostAllowed(req: IncomingMessage, publicHost?: string): boolean {
+export function hostAllowed(
+  req: IncomingMessage,
+  publicHost?: string,
+  internal: string[] = [],
+): boolean {
   const host = req.headers.host;
   if (!host) return false;
   const name = hostnameOf(host);
-  return LOCAL_HOSTS.has(name) || (!!publicHost && name === publicHost.toLowerCase());
+  return (
+    LOCAL_HOSTS.has(name) ||
+    (!!publicHost && name === publicHost.toLowerCase()) ||
+    internal.includes(name)
+  );
 }
 
 /** Origin отсутствует (не браузер) или совпадает с локальным/публичным адресом хаба. */

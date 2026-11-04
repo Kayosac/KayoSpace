@@ -237,19 +237,73 @@ export function App() {
     [engine],
   );
 
-  // Вставка из буфера обмена (Ctrl/⌘ V) и перетаскивание файлов на холст.
+  // Буфер обмена (Ctrl/⌘ C, X, V): элементы доски, текст и картинки из других программ.
   useEffect(() => {
-    const onPaste = (e: ClipboardEvent): void => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-      const files = imageFiles(e.clipboardData?.files);
-      if (files.length === 0) return;
-      e.preventDefault();
-      void insertImages(files);
+    const typing = (t: EventTarget | null): boolean => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     };
+    const onCopy = (e: ClipboardEvent, cut: boolean): void => {
+      if (!engine || typing(e.target) || engine.getState().selected === 0) return;
+      e.preventDefault();
+      const text = engine.copySelection();
+      if (text) e.clipboardData?.setData('text/plain', text);
+      if (cut) engine.deleteSelection();
+    };
+    const copy = (e: ClipboardEvent): void => onCopy(e, false);
+    const cut = (e: ClipboardEvent): void => onCopy(e, true);
+    const onPaste = (e: ClipboardEvent): void => {
+      if (!engine || typing(e.target)) return;
+      e.preventDefault();
+      const files = imageFiles(e.clipboardData?.files);
+      if (files.length > 0) {
+        void insertImages(files);
+        return;
+      }
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      // Если там наш же текст, скопированный с доски, — вставляем сами элементы.
+      if (engine.isOwnClipboardText(text) || (!text.trim() && engine.getState().canPaste)) {
+        engine.paste();
+      } else if (text.trim()) {
+        engine.insertText(text);
+      }
+    };
+    window.addEventListener('copy', copy);
+    window.addEventListener('cut', cut);
     window.addEventListener('paste', onPaste);
-    return () => window.removeEventListener('paste', onPaste);
-  }, [insertImages]);
+    return () => {
+      window.removeEventListener('copy', copy);
+      window.removeEventListener('cut', cut);
+      window.removeEventListener('paste', onPaste);
+    };
+  }, [engine, insertImages]);
+
+  /** Кнопка «Вставить» (планшет без клавиатуры): системный буфер, если доступен, иначе — свой. */
+  const pasteFromButton = useCallback(async () => {
+    if (!engine) return;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith('image/') && t !== 'image/svg+xml');
+        if (type) {
+          const blob = await item.getType(type);
+          await insertImages([new File([blob], 'Картинка из буфера', { type })]);
+          return;
+        }
+      }
+      for (const item of items) {
+        if (item.types.includes('text/plain')) {
+          const text = await (await item.getType('text/plain')).text();
+          if (engine.isOwnClipboardText(text)) engine.paste();
+          else if (!engine.insertText(text) && engine.getState().canPaste) engine.paste();
+          return;
+        }
+      }
+    } catch {
+      /* системный буфер недоступен (нет разрешения) — вставляем своё */
+    }
+    if (engine.getState().canPaste) engine.paste();
+  }, [engine, insertImages]);
 
   // Вернулись в приложение (после сна, из фона) — переподключиться сразу, не дожидаясь паузы.
   useEffect(() => {
@@ -308,6 +362,7 @@ export function App() {
           state={engineState}
           onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
           onImages={(files) => void insertImages(files)}
+          onPaste={() => void pasteFromButton()}
         />
       )}
       {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}

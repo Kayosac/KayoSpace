@@ -1,5 +1,8 @@
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { buildPrompt } from './ai';
+import { claudeArgs, parseClaudeOutput, workLoop } from './worker';
 import { request as httpRequest } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -193,6 +196,92 @@ describe('MCP', () => {
   });
 });
 
+describe('ИИ: очередь, исполнитель, черновик', () => {
+  it('задача уходит исполнителю, ИИ пишет в черновик, доска не меняется до «Вставить»', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    const board = 'ai-board';
+    const real = await hub.store.get(board);
+    addElement(real, makeSticky('Исходный', { x: 0, y: 0, actor: me }));
+
+    const fake = fileURLToPath(new URL('../test/fake-claude.mjs', import.meta.url));
+    await chmod(fake, 0o755);
+    const ctrl = new AbortController();
+    const loop = workLoop({
+      hubUrl: base,
+      token: '',
+      name: 'тест',
+      claudeBin: fake,
+      signal: ctrl.signal,
+      log: () => {},
+    });
+
+    const created = await fetch(`${base}/api/ai/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        board,
+        action: 'brainstorm',
+        area: { minX: 0, minY: 0, maxX: 200, maxY: 200 },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+
+    let task: {
+      status: string;
+      message: string | null;
+      draft?: { elements: { type: string; props: { content?: string } }[]; deleted: string[] };
+    } = { status: '', message: null };
+    for (let i = 0; i < 100 && task.status !== 'done' && task.status !== 'error'; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      task = (await (await fetch(`${base}/api/ai/tasks/${id}`)).json()) as typeof task;
+    }
+    expect(task.status).toBe('done');
+    expect(task.message).toBe('Добавил стикер.');
+    expect(task.draft!.elements.map((e) => e.props.content)).toEqual(['Черновик от ИИ']);
+    expect(task.draft!.deleted).toEqual([]);
+    // В настоящей доске — только исходный стикер: черновик изолирован.
+    expect(listElements(real).map((e) => (e.type === 'sticky' ? e.props.content : ''))).toEqual([
+      'Исходный',
+    ]);
+
+    const status = (await (await fetch(`${base}/api/ai/status`)).json()) as {
+      workers: { name: string }[];
+    };
+    expect(status.workers.map((w) => w.name)).toContain('тест');
+    expect((await fetch(`${base}/api/ai/tasks/${id}`, { method: 'DELETE' })).status).toBe(200);
+    ctrl.abort();
+    await loop.catch(() => {});
+  });
+
+  it('задание для Claude называет доску, выделение и место для новых элементов', () => {
+    const text = buildPrompt({
+      board: 'b1',
+      action: 'recognize',
+      prompt: '',
+      selection: ['A', 'B'],
+      area: { minX: 0, minY: 10, maxX: 100, maxY: 50 },
+      image: Buffer.from([1]),
+    });
+    expect(text).toContain('Доска: b1.');
+    expect(text).toContain('A, B');
+    expect(text).toContain('x = 160');
+    expect(text).toContain('selection.png');
+  });
+
+  it('аргументы Claude Code и разбор ответа', () => {
+    const args = claudeArgs('привет', '/tmp/mcp.json', 'sonnet');
+    expect(args.slice(0, 2)).toEqual(['-p', 'привет']);
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).toContain('mcp__kayospace');
+    expect(parseClaudeOutput('{"result":"ok","is_error":false,"subtype":"success"}')).toEqual({
+      message: 'ok',
+    });
+    expect(parseClaudeOutput('{"result":"нет","is_error":true}').error).toBe('нет');
+    expect(parseClaudeOutput('').error).toBeTruthy();
+  });
+});
+
 describe('файлы (картинки)', () => {
   it('сохраняет по SHA-256, отдаёт обратно, проверяет содержимое', async () => {
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
@@ -326,6 +415,8 @@ describe('доступ по токену', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
     });
     expect(res.status).toBe(401);
+    // По этому указателю приложение Claude находит вход по OAuth.
+    expect(res.headers.get('www-authenticate')).toContain('resource_metadata=');
 
     const client = new Client({ name: 'auth-test', version: '1.0.0' });
     await client.connect(
@@ -335,6 +426,51 @@ describe('доступ по токену', () => {
     );
     const { tools } = await client.listTools();
     expect(tools.length).toBe(9);
+    await client.close();
+  });
+
+  it('коннектор входит по OAuth и получает доступ к MCP', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    const reg = await fetch(`${base}/oauth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }),
+    });
+    const { client_id } = (await reg.json()) as { client_id: string };
+    const verifier = 'v'.repeat(50);
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    const params = {
+      response_type: 'code',
+      client_id,
+      redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    };
+    const allow = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      body: new URLSearchParams({ ...params, hub_token: TOKEN, decision: 'allow' }),
+      redirect: 'manual',
+    });
+    const code = new URL(allow.headers.get('location')!).searchParams.get('code')!;
+    const tok = (await (
+      await fetch(`${base}/oauth/token`, {
+        method: 'POST',
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          client_id,
+          redirect_uri: params.redirect_uri,
+          code_verifier: verifier,
+        }),
+      })
+    ).json()) as { access_token: string };
+    const client = new Client({ name: 'oauth-test', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: { headers: { Authorization: `Bearer ${tok.access_token}` } },
+      }),
+    );
+    expect((await client.listTools()).tools.length).toBeGreaterThan(5);
     await client.close();
   });
 

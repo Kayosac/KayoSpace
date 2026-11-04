@@ -152,6 +152,7 @@ type SelectGesture =
 
 /** Буфер обмена — общий для всех досок в окне приложения. */
 let clipboard: CanvasElement[] = [];
+let clipboardText = '';
 
 interface ActiveErase {
   last: { x: number; y: number };
@@ -487,11 +488,50 @@ export class CanvasEngine {
     this.clearSelection();
   }
 
-  copySelection(): void {
+  /**
+   * Скопировать выделенное во внутренний буфер. Возвращает текст для системного буфера:
+   * тексты стикеров и надписей (их можно вставить в другую программу) или подпись «Kayospace: …».
+   * По этому тексту вставка понимает, что в системном буфере — наши элементы.
+   */
+  copySelection(): string | null {
     const els = this.selectedElements();
-    if (els.length === 0) return;
+    if (els.length === 0) return null;
     clipboard = els.map((el) => structuredClone(el));
+    const texts = els
+      .map((el) => (el.type === 'sticky' || el.type === 'text' ? el.props.content.trim() : ''))
+      .filter(Boolean);
+    clipboardText = texts.length ? texts.join('\n\n') : `Kayospace: элементов — ${els.length}`;
     this.emit();
+    return clipboardText;
+  }
+
+  /** Текст в системном буфере — это наши скопированные элементы? */
+  isOwnClipboardText(text: string): boolean {
+    return clipboard.length > 0 && text === clipboardText;
+  }
+
+  /** Вставить текст надписью: под указатель или в центр экрана. */
+  insertText(text: string): string | null {
+    const content = text.replace(/\r\n?/g, '\n').trim();
+    if (!content) return null;
+    const z = this.camera.zoom;
+    const size = TEXT_FONT_SIZE / z;
+    // Ширина — по самой длинной строке, но не шире 560 экранных пикселей.
+    const probe = makeText(content, { x: 0, y: 0, w: 1e6, actor: this.opts.actor });
+    const sized = { ...probe, style: { ...probe.style, size } };
+    const w = Math.min(560 / z, Math.max(80 / z, this.renderer.textWidth(content, size) + 4 / z));
+    const { height } = this.renderer.measureNote({ ...sized, w }, content);
+    const r = this.host.getBoundingClientRect();
+    const at = this.pointer
+      ? screenToWorld(this.camera, this.pointer.x - r.left, this.pointer.y - r.top)
+      : screenToWorld(this.camera, this.renderer.width / 2, this.renderer.height / 2);
+    const el = {
+      ...sized,
+      ...this.viewBox(at, 0, 0, w, height),
+      ...(this.color ? { style: { ...sized.style, color: this.color } } : {}),
+    };
+    this.insert([el]);
+    return el.id;
   }
 
   cutSelection(): void {
@@ -1395,24 +1435,8 @@ export class CanvasEngine {
       this.selectAll();
       return;
     }
-    if (mod && e.code === 'KeyC') {
-      if (this.selection.size === 0) return; // пусть работает обычное копирование
-      e.preventDefault();
-      this.copySelection();
-      return;
-    }
-    if (mod && e.code === 'KeyX') {
-      if (this.selection.size === 0) return;
-      e.preventDefault();
-      this.cutSelection();
-      return;
-    }
-    if (mod && e.code === 'KeyV') {
-      if (clipboard.length === 0) return;
-      e.preventDefault();
-      this.paste();
-      return;
-    }
+    // Ctrl/⌘ C, X, V — через события copy/cut/paste (их слушает приложение): так работает
+    // системный буфер обмена — текст и картинки из других программ и обратно.
     if (mod && e.code === 'KeyD') {
       e.preventDefault();
       this.duplicateSelection();
