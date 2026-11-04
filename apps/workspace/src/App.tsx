@@ -19,6 +19,11 @@ import { SyncChip, ZoomControls } from './Chips';
 import { SelectionMenu } from './SelectionMenu';
 import { AiController, type AiAction, type AiState } from './ai';
 import { AiBar } from './AiBar';
+import { Connection, type ConnectionState } from './connection';
+import { ConnectScreen, type ConnectReason } from './ConnectScreen';
+import { parseConnectLink } from './devices';
+import { DEFAULT_HUB } from './config';
+import { createSecretStore } from './secrets';
 
 declare global {
   interface Window {
@@ -31,11 +36,20 @@ declare global {
 /** Картинки — одно хранилище на всё приложение (общее для досок). */
 const assets = new AssetStore();
 
+const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+
 const actor: Actor = {
   kind: 'human',
   name: 'kayos',
-  device: typeof window !== 'undefined' && window.__TAURI_INTERNALS__ ? 'app' : 'browser',
+  device: isTauri ? 'app' : 'browser',
 };
+
+/** Экран подключения: почему открыт и что подставить. */
+interface ConnectUi {
+  reason: ConnectReason;
+  hub?: string;
+  code?: string | null;
+}
 
 function useStore<T>(
   store: { subscribe(cb: () => void): () => void; getState(): T } | null,
@@ -71,13 +85,78 @@ export function App() {
     });
   }, []);
 
-  // Доска: пересоздаётся при смене доски или подключения к хабу.
-  const { board, syncOn, hubUrl, hubToken } = settings;
+  // Подключение к хабу: адрес — в настройках, токен устройства — в хранилище ОС.
+  const connection = useMemo(
+    () =>
+      new Connection({
+        secrets: createSecretStore(),
+        settings: settingsRef.current,
+        updateSettings: update,
+        tauri: isTauri,
+      }),
+    [update],
+  );
+  const conn = useStore<ConnectionState>(connection)!;
+  const [connectUi, setConnectUi] = useState<ConnectUi | null>(null);
   useEffect(() => {
-    const s = new BoardSession(
-      board,
-      syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null,
-    );
+    void connection.init();
+  }, [connection]);
+  useEffect(() => {
+    connection.settingsChanged(settings);
+  }, [connection, settings]);
+
+  // Первый запуск сборки с адресом хаба по умолчанию — сразу предложить подключиться.
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (conn.loading || !firstRun.current) return;
+    firstRun.current = false;
+    const s = settingsRef.current;
+    if (!conn.hub && !conn.dev && !s.connectSkipped && DEFAULT_HUB) {
+      setConnectUi((c) => c ?? { reason: 'first' });
+    }
+  }, [conn.loading, conn.hub, conn.dev]);
+
+  // Устройство отключили на хабе (или старый ключ больше не подходит) — подключать заново.
+  useEffect(() => {
+    if (conn.revoked) setConnectUi({ reason: 'revoked' });
+  }, [conn.revoked]);
+
+  // Ссылка kayospace://connect?hub=…&code=… — из QR системной камерой или из другого приложения.
+  useEffect(() => {
+    if (!isTauri) return;
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    const handle = (urls: string[] | null): void => {
+      for (const u of urls ?? []) {
+        const link = parseConnectLink(u);
+        if (!link) continue;
+        // Уже подключено — не переподключаем молча, а показываем экран с подставленным кодом.
+        const reason: ConnectReason = connection.getState().hub ? 'manual' : 'link';
+        setConnectUi({ reason, hub: link.hub, code: link.code });
+        return;
+      }
+    };
+    void (async () => {
+      const dl = await import('@tauri-apps/plugin-deep-link');
+      handle(await dl.getCurrent());
+      const unlisten = await dl.onOpenUrl(handle);
+      if (cancelled) unlisten();
+      else off = unlisten;
+    })().catch((err: unknown) => console.warn('[kayospace] ссылки kayospace:// недоступны', err));
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [connection]);
+
+  const hub = conn.hub;
+  const hubUrl = hub?.url ?? '';
+  const hubToken = hub?.token ?? '';
+
+  // Доска: пересоздаётся при смене доски или подключения к хабу.
+  const { board } = settings;
+  useEffect(() => {
+    const s = new BoardSession(board, hubUrl ? { url: hubUrl, token: hubToken } : null);
     setSession(s);
     const pending = pendingName.current;
     const nameNewBoard = (): void => {
@@ -94,7 +173,7 @@ export function App() {
       setSession(null);
       s.destroy();
     };
-  }, [board, syncOn, hubUrl, hubToken]);
+  }, [board, hubUrl, hubToken]);
 
   // Холст для открытой доски.
   useEffect(() => {
@@ -150,6 +229,12 @@ export function App() {
 
   const engineState = useStore<EngineState>(engine);
   const sessionState = useStore<SessionState>(session);
+
+  // Хаб закрыл соединение кодом «не пускаю» — токен этого устройства больше не действует.
+  const syncNow = sessionState?.sync;
+  useEffect(() => {
+    if (syncNow === 'unauthorized') void connection.markRevoked();
+  }, [syncNow, connection]);
 
   // Инструмент, цвет и толщину запоминаем (их можно сменить и с клавиатуры).
   useEffect(() => {
@@ -208,8 +293,8 @@ export function App() {
 
   // Картинки ходят на тот же хаб, что и доска; при «синхронизировано» — догрузить очередь.
   useEffect(() => {
-    assets.setHub(syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null);
-  }, [syncOn, hubUrl, hubToken]);
+    assets.setHub(hubUrl ? { url: hubUrl, token: hubToken } : null);
+  }, [hubUrl, hubToken]);
   const syncState = sessionState?.sync;
   useEffect(() => {
     if (syncState === 'synced') void assets.uploadPending();
@@ -217,8 +302,8 @@ export function App() {
 
   // ИИ ходит на тот же хаб.
   useEffect(() => {
-    ai.setHub(syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null);
-  }, [ai, syncOn, hubUrl, hubToken]);
+    ai.setHub(hubUrl ? { url: hubUrl, token: hubToken } : null);
+  }, [ai, hubUrl, hubToken]);
   useEffect(() => () => ai.destroy(), [ai]);
   const aiState = useStore<AiState>(ai);
   // Результат готов — предпросмотр на холсте; результат убрали — убрать и предпросмотр.
@@ -229,8 +314,8 @@ export function App() {
   useEffect(() => () => ai.cancel(), [ai, board]);
 
   /** Почему ИИ недоступен (null — доступен). */
-  const aiBlocked: string | null = !(syncOn && hubUrl.trim())
-    ? 'ИИ работает через хаб: включите синхронизацию в настройках'
+  const aiBlocked: string | null = !hubUrl
+    ? 'ИИ работает через хаб: подключите устройство к хабу в настройках'
     : null;
 
   const runAi = useCallback(
@@ -479,7 +564,7 @@ export function App() {
           current={board}
           currentName={boardName}
           recent={settings.recentBoards}
-          hub={syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null}
+          hub={hubUrl ? { url: hubUrl, token: hubToken } : null}
           onOpen={openBoard}
           onRename={(n) => session?.rename(n)}
           onClose={() => setPanel(null)}
@@ -489,7 +574,16 @@ export function App() {
         <SettingsPanel
           settings={settings}
           state={sessionState}
+          connection={conn}
           onApply={(patch) => update(patch)}
+          onConnect={() => {
+            setPanel(null);
+            setConnectUi({ reason: 'manual' });
+          }}
+          onSelfRevoked={() => {
+            setPanel(null);
+            void connection.forget();
+          }}
           onTouchDraws={(on) => {
             update({ touchDraws: on });
             engine?.setTouchDraws(on);
@@ -499,6 +593,23 @@ export function App() {
             engine?.setRotateWithFingers(on);
           }}
           onClose={() => setPanel(null)}
+        />
+      )}
+      {connectUi && !conn.dev && (
+        <ConnectScreen
+          key={`${connectUi.reason}:${connectUi.hub ?? ''}:${connectUi.code ?? ''}`}
+          connection={connection}
+          reason={connectUi.reason}
+          initialHub={connectUi.hub ?? (settings.hubUrl || DEFAULT_HUB)}
+          initialCode={connectUi.code ?? null}
+          onDone={() => {
+            setConnectUi(null);
+            update({ connectSkipped: false });
+          }}
+          onSkip={() => {
+            if (connectUi.reason === 'first') update({ connectSkipped: true });
+            setConnectUi(null);
+          }}
         />
       )}
     </div>

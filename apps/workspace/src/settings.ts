@@ -1,15 +1,21 @@
 /** Настройки приложения: хранятся только на этом устройстве (localStorage). */
 
 import type { Camera, ShapeKind, Tool } from '@kayospace/canvas';
+import { STORAGE_NS } from './config';
 
 export interface WorkspaceSettings {
   /** Адрес хаба, например x.sslip.io:8443 или 192.168.1.10:4000. */
   hubUrl: string;
-  /** Токен доступа к хабу. */
+  /**
+   * Устаревшее: общий токен хаба из старых версий. При запуске меняется на токен устройства
+   * (хранится в хранилище ОС, не здесь) и стирается.
+   */
   hubToken: string;
   board: string;
   /** Синхронизировать доску через хаб. */
   syncOn: boolean;
+  /** Человек выбрал «Пока без хаба» — не показывать экран подключения при запуске. */
+  connectSkipped: boolean;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws: boolean;
   /** Поворачивать холст двумя пальцами. */
@@ -47,6 +53,7 @@ export const defaultSettings: WorkspaceSettings = {
   hubToken: '',
   board: 'main',
   syncOn: false,
+  connectSkipped: false,
   touchDraws: false,
   rotateWithFingers: true,
   tool: 'pen',
@@ -58,8 +65,8 @@ export const defaultSettings: WorkspaceSettings = {
   recentBoards: [],
 };
 
-export const SETTINGS_KEY = 'kayospace.workspace.v1';
-const CAMERA_KEY = 'kayospace.camera.v1:';
+export const SETTINGS_KEY = `${STORAGE_NS}.workspace.v1`;
+const CAMERA_KEY = `${STORAGE_NS}.camera.v1:`;
 
 /** Хранилище: в тестах подменяется. Любая ошибка доступа — как будто хранилища нет. */
 export interface KeyValue {

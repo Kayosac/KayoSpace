@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { buildPrompt } from './ai';
@@ -497,6 +498,235 @@ describe('доступ по токену', () => {
       req.end('{}');
     });
     expect(status).toBe(403);
+  });
+});
+
+describe('устройства: подключение по коду', () => {
+  const TOKEN = 'admin-token-xyz';
+  let base: string;
+
+  beforeEach(async () => {
+    await hub.close();
+    hub = await startHub({
+      dataDir: dir,
+      port: 0,
+      host: '127.0.0.1',
+      saveDelayMs: 20,
+      token: TOKEN,
+      publicUrl: 'https://hub.example.com:8443',
+    });
+    base = `http://127.0.0.1:${hub.port}`;
+  });
+
+  afterEach(async () => {
+    await hub.devices.flush();
+  });
+
+  const post = (path: string, body: unknown, token?: string) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+  async function pair(token: string): Promise<{ code: string; link: string; hub: string }> {
+    const res = await post('/api/devices/pair', {}, token);
+    expect(res.status).toBe(200);
+    return (await res.json()) as { code: string; link: string; hub: string };
+  }
+
+  async function claim(code: string, name: string): Promise<{ token: string; id: string }> {
+    const res = await post('/api/devices/claim', { code, name, platform: 'android' });
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { token: string; device: { id: string } };
+    return { token: j.token, id: j.device.id };
+  }
+
+  function syncWith(board: string, token: string): { doc: Y.Doc; client: SyncClient } {
+    const doc = createBoardDoc();
+    const client = new SyncClient(doc, {
+      url: `ws://127.0.0.1:${hub.port}/sync/${board}?token=${encodeURIComponent(token)}`,
+      WebSocket: WebSocket as unknown as WebSocketCtor,
+      minDelayMs: 30,
+    });
+    clients.push(client);
+    return { doc, client };
+  }
+
+  it('код без токена не выдаётся; ссылка несёт внешний адрес хаба и код', async () => {
+    expect((await post('/api/devices/pair', {})).status).toBe(401);
+    const p = await pair(TOKEN);
+    expect(p.code).toMatch(/^\d{6}$/);
+    expect(p.hub).toBe('https://hub.example.com:8443');
+    const link = new URL(p.link);
+    expect(link.protocol).toBe('kayospace:');
+    expect(link.searchParams.get('hub')).toBe('https://hub.example.com:8443');
+    expect(link.searchParams.get('code')).toBe(p.code);
+  });
+
+  it('подключение по коду: токен устройства открывает синхронизацию и REST', async () => {
+    const { code } = await pair(TOKEN);
+    const tablet = await claim(code, 'Планшет');
+    expect(tablet.token.startsWith('kd_')).toBe(true);
+
+    const boards = await fetch(`${base}/api/boards`, {
+      headers: { Authorization: `Bearer ${tablet.token}` },
+    });
+    expect(boards.status).toBe(200);
+
+    const a = syncWith('paired', tablet.token);
+    const b = syncWith('paired', TOKEN);
+    await a.client.waitFor('synced');
+    await b.client.waitFor('synced');
+    addElement(a.doc, makeSticky('с планшета', { x: 0, y: 0, actor: me }));
+    await until(() => texts(b.doc).includes('с планшета'), 'правка с планшета');
+
+    // Подключённое устройство само выдаёт коды для следующих.
+    const next = await pair(tablet.token);
+    const mac = await claim(next.code, 'Mac');
+    const list = (await (
+      await fetch(`${base}/api/devices`, { headers: { Authorization: `Bearer ${mac.token}` } })
+    ).json()) as { devices: { id: string; name: string; addedBy: string }[]; current: string };
+    expect(list.current).toBe(mac.id);
+    expect(list.devices.map((d) => d.name)).toEqual(['Планшет', 'Mac']);
+    expect(list.devices[1]!.addedBy).toBe(tablet.id);
+  });
+
+  it('повторно использованный код получает отказ', async () => {
+    const { code } = await pair(TOKEN);
+    await claim(code, 'Первое');
+    const again = await post('/api/devices/claim', { code, name: 'Второе' });
+    expect(again.status).toBe(400);
+    expect(((await again.json()) as { error: string }).error).toContain('не подошёл');
+  });
+
+  it('истёкший код получает отказ', async () => {
+    const { code } = await pair(TOKEN);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 5 * 60 * 1000 + 1;
+    try {
+      const res = await post('/api/devices/claim', { code, name: 'Опоздавшее' });
+      expect(res.status).toBe(400);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('перебор кода упирается в ограничение', async () => {
+    let status = 0;
+    for (let i = 0; i < 12; i++) {
+      status = (await post('/api/devices/claim', { code: '000000' })).status;
+    }
+    expect(status).toBe(429);
+  });
+
+  it('отключение: открытое соединение закрывается, REST отвечает 401, остальные работают', async () => {
+    const tablet = await claim((await pair(TOKEN)).code, 'Планшет');
+    const mac = await claim((await pair(TOKEN)).code, 'Mac');
+    const t = syncWith('revoke', tablet.token);
+    const m = syncWith('revoke', mac.token);
+    await t.client.waitFor('synced');
+    await m.client.waitFor('synced');
+
+    const del = await fetch(`${base}/api/devices/${tablet.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${mac.token}` },
+    });
+    expect(del.status).toBe(204);
+    await t.client.waitFor('unauthorized');
+    expect(t.client.lastError).toBe('unauthorized');
+
+    const rest = await fetch(`${base}/api/boards`, {
+      headers: { Authorization: `Bearer ${tablet.token}` },
+    });
+    expect(rest.status).toBe(401);
+    const again = syncWith('revoke', tablet.token);
+    await again.client.waitFor('unauthorized');
+
+    // Mac на месте и синхронизируется дальше.
+    expect(m.client.status).toBe('synced');
+    addElement(m.doc, makeSticky('жив', { x: 0, y: 0, actor: me }));
+    const check = syncWith('revoke', TOKEN);
+    await until(() => texts(check.doc).includes('жив'), 'правка с мака');
+  });
+
+  it('переход со старых настроек: HUB_TOKEN меняется на токен устройства', async () => {
+    const res = await post('/api/devices/register', { name: 'Старый планшет' }, TOKEN);
+    expect(res.status).toBe(200);
+    const { token } = (await res.json()) as { token: string };
+    expect(token.startsWith('kd_')).toBe(true);
+    // Токен устройства так не может — только ключ администратора.
+    expect((await post('/api/devices/register', {}, token)).status).toBe(403);
+  });
+
+  it('устройства переживают перезапуск хаба', async () => {
+    const tablet = await claim((await pair(TOKEN)).code, 'Планшет');
+    await hub.close();
+    hub = await startHub({ dataDir: dir, port: 0, host: '127.0.0.1', token: TOKEN });
+    base = `http://127.0.0.1:${hub.port}`;
+    const res = await fetch(`${base}/api/boards`, {
+      headers: { Authorization: `Bearer ${tablet.token}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('pnpm pair печатает QR и код, который принимает хаб', async () => {
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'src/pair-main.ts'], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...process.env, HUB_LOCAL_URL: base, HUB_TOKEN: TOKEN },
+      });
+      let text = '';
+      child.stdout.on('data', (d: Buffer) => (text += d.toString()));
+      child.stderr.on('data', (d: Buffer) => (text += d.toString()));
+      child.on('error', reject);
+      child.on('exit', (code) =>
+        code === 0 ? resolve(text) : reject(new Error(`pair: ${code}\n${text}`)),
+      );
+    });
+    expect(out).toContain('▀');
+    expect(out).toContain('https://hub.example.com:8443');
+    const code = /Код:\s+(\d{3}) (\d{3})/.exec(out);
+    expect(code).not.toBeNull();
+    await claim(code![1]! + code![2]!, 'Из терминала');
+  });
+
+  it('pnpm pair без ключа администратора — понятная ошибка', async () => {
+    const out = await new Promise<{ code: number | null; text: string }>((resolve) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'src/pair-main.ts'], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...process.env, HUB_LOCAL_URL: base, HUB_TOKEN: 'wrong' },
+      });
+      let text = '';
+      child.stderr.on('data', (d: Buffer) => (text += d.toString()));
+      child.on('exit', (code) => resolve({ code, text }));
+    });
+    expect(out.code).toBe(1);
+    expect(out.text).toContain('HUB_TOKEN');
+  });
+});
+
+describe('устройства на открытом хабе (разработка)', () => {
+  it('без токена всё открыто, но отозванный токен устройства не проходит', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    expect((await fetch(`${base}/api/boards`)).status).toBe(200);
+    const p = (await (await fetch(`${base}/api/devices/pair`, { method: 'POST' })).json()) as {
+      code: string;
+    };
+    const r = (await (
+      await fetch(`${base}/api/devices/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ code: p.code, platform: 'macos' }),
+      })
+    ).json()) as { token: string; device: { id: string } };
+    const auth = { Authorization: `Bearer ${r.token}` };
+    expect((await fetch(`${base}/api/boards`, { headers: auth })).status).toBe(200);
+    await fetch(`${base}/api/devices/${r.device.id}`, { method: 'DELETE' });
+    expect((await fetch(`${base}/api/boards`, { headers: auth })).status).toBe(401);
+    await hub.devices.flush();
   });
 });
 

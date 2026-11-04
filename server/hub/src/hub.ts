@@ -2,10 +2,12 @@
  * HTTP-сервер хаба:
  *   GET  /health        — жив ли хаб (без авторизации)
  *   GET  /api/boards    — список досок
+ *   …    /api/devices   — подключение устройств по коду, список, отключение (devices-api.ts)
  *   POST /mcp           — MCP (Streamable HTTP) для агентов
  *   WS   /sync/<id>     — синхронизация доски
  *
  * Доступ — см. auth.ts: без токена только локально, с токеном можно выставлять в интернет за HTTPS.
+ * Устройства входят своими токенами (devices.ts), HUB_TOKEN — ключ администратора и исполнителя ИИ.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -17,6 +19,8 @@ import {
 } from '@modelcontextprotocol/node';
 import { bearerToken, hostAllowed, originAllowed, requestToken, tokenMatches } from './auth';
 import { createMcp } from './mcp';
+import { DeviceRegistry, isDeviceToken } from './devices';
+import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset } from './assets';
 import { OAuthServer, publicBase } from './oauth';
@@ -24,7 +28,7 @@ import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.2.0';
+export const HUB_VERSION = '0.3.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -38,12 +42,18 @@ export interface HubOptions {
   publicHost?: string;
   /** Внутренние имена хаба (например, «hub» в сети Docker) — для исполнителя ИИ на том же сервере. */
   internalHosts?: string[];
+  /**
+   * Внешний адрес хаба для ссылок подключения (QR), например https://1-2-3-4.sslip.io:8443.
+   * Без него — адрес, по которому пришёл запрос.
+   */
+  publicUrl?: string;
 }
 
 export interface Hub {
   port: number;
   store: BoardStore;
   ai: AiQueue;
+  devices: DeviceRegistry;
   sync: SyncServer;
   close(): Promise<void>;
 }
@@ -56,6 +66,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   // Вход по OAuth — только когда хаб закрыт токеном (в интернете); локально MCP открыт и так.
   const oauth = opts.token ? new OAuthServer(join(opts.dataDir, 'oauth.json'), opts.token) : null;
   await oauth?.init();
+  const devices = new DeviceRegistry(join(opts.dataDir, 'devices.json'));
+  await devices.init();
   const ai = new AiQueue(store);
   /** MCP черновиков ИИ: по обработчику на задачу. */
   const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
@@ -74,6 +86,19 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
 
   const token = opts.token || undefined;
 
+  /**
+   * Кто обращается: HUB_TOKEN — администратор, токен устройства — устройство. null — доступа нет.
+   * Хаб без токена открыт всем (локальная разработка), но отозванный токен устройства и там не проходит —
+   * чтобы отключённое устройство узнало, что его отключили.
+   */
+  function identify(given: string | undefined): Access | null {
+    if (token && tokenMatches(given, token)) return { admin: true, device: null };
+    const device = devices.verify(given);
+    if (device) return { admin: false, device };
+    if (!token && !isDeviceToken(given)) return { admin: true, device: null };
+    return null;
+  }
+
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (oauth && (await oauth.handle(req, res, url))) return;
@@ -87,7 +112,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
           return json(res, 403, { error: 'Недопустимый Host или Origin' });
         }
         const given = bearerToken(req);
-        if (!tokenMatches(given, token) && !oauth?.validAccessToken(given)) {
+        if (!identify(given) && !oauth?.validAccessToken(given)) {
           // Указатель на метаданные — по нему приложение Claude находит вход по OAuth.
           res.setHeader(
             'WWW-Authenticate',
@@ -124,9 +149,21 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return;
     }
     if (url.pathname === '/health') {
-      return json(res, 200, { ok: true, version: HUB_VERSION, auth: Boolean(token) });
+      return json(res, 200, {
+        ok: true,
+        version: HUB_VERSION,
+        auth: Boolean(token),
+        devices: true,
+      });
     }
-    if (token && !tokenMatches(requestToken(req, url), token)) return unauthorized(res);
+    if (url.pathname === '/api/devices/claim' && req.method === 'POST') {
+      return handleClaim(req, res, devices);
+    }
+    const access = identify(requestToken(req, url));
+    if (!access) return unauthorized(res);
+    if (await handleDevices(req, res, url, devices, access, opts.publicUrl ?? publicBase(req))) {
+      return;
+    }
     if (await handleAi(req, res, url, ai)) {
       for (const id of draftMcp.keys()) if (!ai.tasks.has(id)) draftMcp.delete(id);
       return;
@@ -139,7 +176,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     json(res, 404, { error: 'Не найдено' });
   }
 
-  const sync = attachSync(server, store, { token });
+  const sync = attachSync(server, store, {
+    authorize: (given) => {
+      const a = identify(given);
+      return a ? { device: a.device?.id ?? null } : null;
+    },
+  });
+  // Отключили устройство — его открытые соединения закрываются сразу.
+  devices.onRevoke((id) => sync.dropDevice(id));
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -151,6 +195,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     port,
     store,
     ai,
+    devices,
     sync,
     async close() {
       ai.close();
@@ -160,6 +205,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       await mcp.close?.();
       await store.close();
       await oauth?.flush();
+      await devices.flush();
     },
   };
 }

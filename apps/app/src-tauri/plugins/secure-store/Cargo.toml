@@ -1,0 +1,20 @@
+[package]
+name = "tauri-plugin-secure-store"
+version = "0.1.0"
+description = "Kayospace: секреты устройства в хранилище ОС (Keychain, Credential Manager, Android Keystore)"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+# Нужно Tauri, чтобы подключить Android-часть плагина к сборке приложения.
+links = "tauri-plugin-secure-store"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+# macOS — Keychain, Windows — Credential Manager. На Android работает Kotlin-часть (android/).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

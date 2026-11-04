@@ -21,18 +21,22 @@
 - `packages/sync` — протокол синхронизации и клиент (браузер и Node).
 - `packages/canvas` — движок холста без React: камера, сцена, отрисовка, навигация, инструменты (решение 0006).
 - `server/hub` — хаб: WebSocket-синк, хранение досок на диске, REST, MCP, OAuth для коннектора Claude,
-  очередь задач ИИ и исполнитель (`pnpm ai-worker` — Claude Code на подписке, решение 0007).
+  очередь задач ИИ и исполнитель (`pnpm ai-worker` — Claude Code на подписке, решение 0007),
+  устройства и коды подключения (`devices.ts`, `pnpm pair` — решение 0008).
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк.
-- `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`.
+- `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
+  single-instance, barcode-scanner (Android), свой `plugins/secure-store` (токен устройства в хранилище ОС).
 - `e2e` — проверки в настоящем браузере (Playwright) вместе с хабом; скриншоты из CI — в ветке `ci-previews`.
 
 ## Команды
 
 - `pnpm install`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm format`
-- `pnpm dev` — приложение на http://localhost:5180; `pnpm pen-lab` — Pen Lab на http://localhost:5173
+- `pnpm dev` — приложение на http://localhost:5180 вместе с локальным хабом на 127.0.0.1:4000 (подключено само);
+  `pnpm pen-lab` — Pen Lab на http://localhost:5173
 - `pnpm e2e` — собрать приложения и прогнать проверки в браузере (нужен `pnpm exec playwright install chromium` в `e2e`)
-- `pnpm hub` — хаб на http://localhost:4000 (MCP: `/mcp`, синк: `/sync/<доска>`)
+- `pnpm hub` — хаб на http://localhost:4000 (MCP: `/mcp`, синк: `/sync/<доска>`); `pnpm pair` — QR и код
+  подключения устройства; `pnpm e2e:dev` — проверка режима разработки
 - `pnpm app:dev`, `pnpm app:android:dev` — приложение
 
 ## Соглашения
@@ -42,6 +46,9 @@
 - Новая зависимость — только если она делает существенную работу; крупные решения записываем в `docs/decisions/NNNN-*.md`.
 - Тесты рядом с кодом: `*.test.ts`, Vitest. Геометрию и форматы данных покрываем тестами обязательно.
 - Цвета в UI — только через CSS-переменные; у каждой страницы есть светлая и тёмная тема.
+- Токены устройств — только в хранилище секретов (`apps/workspace/src/secrets.ts`), не в настройках и не в логах.
+  `HUB_TOKEN` — ключ администратора; устройствам он не нужен.
+- Режим разработки (`DEV_HUB` в `config.ts`) не должен попадать в сборку — это проверяет `build.test.ts`.
 
 ## Правила для кода пера и холста
 
