@@ -38,6 +38,20 @@ export function setBoardName(doc: Y.Doc, name: string, origin?: Origin): void {
   }, origin);
 }
 
+/** Фон доски: точки (по умолчанию), клетка, линейка или чистый лист. Общий для всех устройств. */
+export type BoardBackground = 'dots' | 'grid' | 'lines' | 'plain';
+export const BOARD_BACKGROUNDS: readonly BoardBackground[] = ['dots', 'grid', 'lines', 'plain'];
+
+export function getBoardBackground(doc: Y.Doc): BoardBackground {
+  const v = doc.getMap<unknown>(META).get('background');
+  return BOARD_BACKGROUNDS.includes(v as BoardBackground) ? (v as BoardBackground) : 'dots';
+}
+
+export function setBoardBackground(doc: Y.Doc, bg: BoardBackground, origin?: Origin): void {
+  if (!BOARD_BACKGROUNDS.includes(bg)) return;
+  doc.transact(() => doc.getMap<unknown>(META).set('background', bg), origin);
+}
+
 export function getBoardName(doc: Y.Doc): string | undefined {
   const name = doc.getMap<unknown>(META).get('name');
   return typeof name === 'string' ? name : undefined;

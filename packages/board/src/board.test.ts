@@ -9,6 +9,9 @@ import {
   deleteElement,
   freeSpot,
   getBoardName,
+  getBoardBackground,
+  setBoardBackground,
+  META,
   listElements,
   makeSticky,
   makeStroke,
@@ -140,5 +143,18 @@ describe('экспорт для агентов', () => {
     expect(freeSpot(doc)).toEqual({ x: 100, y: 100 });
     addElement(doc, makeSticky('a', { x: 0, y: 50, actor: me }));
     expect(freeSpot(doc)).toEqual({ x: 240, y: 50 });
+  });
+});
+
+describe('фон доски', () => {
+  it('по умолчанию точки; чужое значение — тоже точки; сливается с другого устройства', () => {
+    const a = createBoardDoc();
+    expect(getBoardBackground(a)).toBe('dots');
+    setBoardBackground(a, 'lines');
+    const b = createBoardDoc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(getBoardBackground(b)).toBe('lines');
+    b.getMap(META).set('background', 'обои');
+    expect(getBoardBackground(b)).toBe('dots');
   });
 });

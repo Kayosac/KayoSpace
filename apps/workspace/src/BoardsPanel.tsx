@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { boardIdFromName, hubHttpUrl } from '@kayospace/sync';
 import type { Project } from '@kayospace/model';
+import type { BoardBackground } from '@kayospace/board';
+
+const BACKGROUNDS: { value: BoardBackground; name: string }[] = [
+  { value: 'dots', name: 'Точки' },
+  { value: 'grid', name: 'Клетка' },
+  { value: 'lines', name: 'Линейка' },
+  { value: 'plain', name: 'Чистый' },
+];
 import type { RecentBoard } from './settings';
 import { matchesQuery, mergeBoards } from './boards';
 import { inProject } from './projects';
 import { CommitInput } from './CommitInput';
+import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
 import { CloseIcon, ExportIcon, PlusIcon, SearchIcon } from './icons';
 
@@ -26,6 +35,10 @@ export function BoardsPanel({
   onRenameProject,
   onDeleteProject,
   onMoveBoard,
+  background,
+  onBackground,
+  searchLocal,
+  onFind,
   onClose,
 }: {
   current: string;
@@ -51,6 +64,12 @@ export function BoardsPanel({
   onDeleteProject: (id: string) => void;
   /** Переложить открытую доску в проект (null — без проекта). */
   onMoveBoard: (project: string | null) => void;
+  background: BoardBackground;
+  onBackground: (bg: BoardBackground) => void;
+  /** Поиск по открытой доске (когда хаба нет). */
+  searchLocal: (query: string) => { id: string; type: string; text: string }[];
+  /** Перейти к найденному элементу (на этой или другой доске). */
+  onFind: (board: string, id: string, boardName: string | null) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -97,6 +116,34 @@ export function BoardsPanel({
   );
   useEffect(() => setActive(0), [query]);
 
+  // Поиск по содержимому: на хабе — по всем доскам, без хаба — по открытой.
+  const [found, setFound] = useState<SearchHit[] | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setFound(null);
+      return;
+    }
+    if (!hub) {
+      setFound(searchLocal(q).map((h) => ({ ...h, board: current, boardName: currentName })));
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      searchHub(hub, q, ctrl.signal)
+        .then(setFound)
+        .catch(() => {
+          if (ctrl.signal.aborted) return;
+          // Хаб недоступен — ищем хотя бы на открытой доске.
+          setFound(searchLocal(q).map((h) => ({ ...h, board: current, boardName: currentName })));
+        });
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [query, hub?.url, hub?.token, current, currentName, searchLocal]);
+
   const create = (): void => {
     const title = query.trim() || 'Новая доска';
     onOpen(boardIdFromName(title), title, true);
@@ -134,6 +181,25 @@ export function BoardsPanel({
           ))}
         </select>
       </label>
+      <div className="field">
+        <span>Фон этой доски</span>
+        <div className="backgrounds" role="radiogroup" aria-label="Фон доски">
+          {BACKGROUNDS.map((b) => (
+            <button
+              key={b.value}
+              className="bg-option"
+              role="radio"
+              aria-checked={background === b.value}
+              aria-label={b.name}
+              data-bg={b.value}
+              onClick={() => onBackground(b.value)}
+            >
+              <i />
+              <span>{b.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="projects" role="tablist" aria-label="Проекты" data-testid="projects">
         <button
           role="tab"
@@ -291,6 +357,27 @@ export function BoardsPanel({
           </button>
         </li>
       </ul>
+      {found && (
+        <>
+          <h3 className="section-title">
+            {found.length > 0
+              ? `Найдено на досках: ${found.length}`
+              : 'На досках ничего не нашлось'}
+          </h3>
+          {found.length > 0 && (
+            <ul className="board-list found-list" aria-label="Найдено" data-testid="found">
+              {found.map((h) => (
+                <li key={`${h.board}:${h.id}`}>
+                  <button onClick={() => onFind(h.board, h.id, h.boardName)}>
+                    <span className="board-title">{snippet(h.text, query)}</span>
+                    <span className="board-meta">{h.boardName ?? h.board}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
       {frames.length > 0 && (
         <>
           <h3 className="section-title">Фреймы этой доски</h3>

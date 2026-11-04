@@ -39,6 +39,12 @@ async function openDevice(
 }
 
 const synced = { hubUrl: HUB_ADDRESS, hubToken: HUB_TOKEN, syncOn: true };
+/** Цвет или толщина: кнопка на панели → заготовка в окне (окно закрывается само). */
+async function pick(page: Page, what: 'color' | 'size', name: string): Promise<void> {
+  await page.getByTestId(`${what}-button`).click();
+  await page.getByTestId(`${what}-popover`).getByRole('radio', { name }).click();
+  await expect(page.getByTestId(`${what}-popover`)).toHaveCount(0);
+}
 const elements = (page: Page) => page.evaluate(() => window.__kayospace!.engine.scene.size);
 const camera = (page: Page) => page.evaluate(() => window.__kayospace!.engine.getCamera());
 
@@ -65,8 +71,8 @@ test('два устройства: штрихи и отмена синхрони
   await expect.poll(() => elements(b)).toBe(1);
   await expect.poll(() => hubElements(request, board)).toBe(1);
 
-  await b.getByRole('radio', { name: 'Красный' }).click();
-  await b.getByRole('radio', { name: 'Толстое' }).click();
+  await pick(b, 'color', 'Красный');
+  await pick(b, 'size', 'Толстое');
   await drawWave(b, 400, 450);
   await expect.poll(() => elements(a)).toBe(2);
 
@@ -310,7 +316,7 @@ test('ластик стирает часть штриха, как кисть; о
   browser,
 }) => {
   const page = await openDevice(browser, { board: 'e2e-eraser' });
-  await page.getByRole('radio', { name: 'Толстое' }).click();
+  await pick(page, 'size', 'Толстое');
   await page.mouse.move(300, 300);
   await page.mouse.down();
   for (let i = 1; i <= 30; i++) await page.mouse.move(300 + i * 20, 300);
@@ -318,7 +324,7 @@ test('ластик стирает часть штриха, как кисть; о
   await expect.poll(() => elements(page)).toBe(1);
 
   await page.getByRole('radio', { name: 'Ластик', exact: true }).click();
-  await page.getByRole('radio', { name: 'Большой ластик' }).click();
+  await pick(page, 'size', 'Большой ластик');
   await page.mouse.move(600, 220);
   await page.mouse.down();
   await page.mouse.move(600, 380, { steps: 12 });
@@ -390,7 +396,7 @@ test('выделение: рамка, перемещение, масштаб, к
   // Копия рядом, перекраска, удаление через меню.
   await page.keyboard.press('Control+d');
   await expect.poll(() => elements(page)).toBe(5);
-  await page.getByRole('radio', { name: 'Синий' }).click();
+  await pick(page, 'color', 'Синий');
   await page.getByTestId('selection-menu').getByRole('button', { name: 'Удалить' }).click();
   await expect.poll(() => elements(page)).toBe(3);
   await expect.poll(() => hubElements(request, board)).toBe(3);
@@ -1195,4 +1201,118 @@ test('обновление на компьютере: «Проверить об�
       expect.arrayContaining(['plugin:updater|download_and_install', 'plugin:process|restart']),
     );
   await context.close();
+});
+
+test('палитра и толщина касанием: круг, ползунок, недавние; у маркера свой цвет', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ board: 'e2e-palette' }),
+  ] as const);
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  const st = () =>
+    page.evaluate(() => {
+      const engine = window.__kayospace!.engine as unknown as {
+        getState(): { color: string | null; size: number; penKind: string };
+      };
+      const s = engine.getState();
+      return { color: s.color, size: s.size, penKind: s.penKind };
+    });
+
+  // На панели — одна кнопка цвета и одна толщины вместо рядов кружков.
+  await expect(page.getByRole('radio', { name: 'Красный' })).toHaveCount(0);
+  await page.getByTestId('color-button').tap();
+  const pop = page.getByTestId('color-popover');
+  await expect(pop).toBeVisible();
+  // Касание правого края круга — красный тон, полная насыщенность.
+  const wheel = pop.getByTestId('color-wheel');
+  const box = (await wheel.boundingBox())!;
+  await wheel.tap({ position: { x: box.width - 6, y: box.height / 2 } });
+  await expect.poll(async () => (await st()).color).toMatch(/^#[0-9a-f]{6}$/);
+  const custom = (await st()).color!;
+  expect(Number.parseInt(custom.slice(1, 3), 16)).toBeGreaterThan(180); // красный канал
+  await page.screenshot({ path: shot('palette.png') });
+  // Касание холста закрывает окно и ничего не рисует.
+  await page.getByTestId('stage').tap({ position: { x: 900, y: 300 } });
+  await expect(pop).toHaveCount(0);
+  expect(await elements(page)).toBe(0);
+  // Свой цвет — в недавних.
+  await page.getByTestId('color-button').tap();
+  await expect(pop.getByRole('radio', { name: `Недавний ${custom}` })).toBeVisible();
+  await pop.getByRole('radio', { name: 'Синий' }).tap();
+  await expect(pop).toHaveCount(0);
+  expect((await st()).color).toBe('#3e63dd');
+
+  // Толщина — ползунком.
+  await page.getByTestId('size-button').tap();
+  const sizePop = page.getByTestId('size-popover');
+  await sizePop.getByTestId('size-slider').fill('1000');
+  await expect.poll(async () => (await st()).size).toBe(48);
+  await expect(sizePop.getByTestId('size-value')).toHaveText('48 px');
+  await page.screenshot({ path: shot('size.png') });
+  await sizePop.getByRole('radio', { name: 'Среднее' }).tap();
+  expect((await st()).size).toBe(3);
+
+  // У маркера свои цвет и толщина; ручка свои помнит.
+  await page.getByRole('radio', { name: 'Маркер' }).tap();
+  await page.getByTestId('color-button').tap();
+  await pop.getByRole('radio', { name: 'Зелёный' }).tap();
+  expect(await st()).toEqual({ color: '#30a46c', size: 3, penKind: 'marker' });
+  await page.getByRole('radio', { name: 'Ручка' }).tap();
+  expect(await st()).toEqual({ color: '#3e63dd', size: 3, penKind: 'pen' });
+  await context.close();
+});
+
+test('поиск по всем доскам ведёт к стикеру; фон доски общий для устройств', async ({
+  browser,
+  request,
+}) => {
+  const a = await openDevice(browser, { ...synced, board: 'e2e-find-a' });
+  await expect(a.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await a.keyboard.press('n');
+  await a.mouse.click(700, 500);
+  await a.keyboard.type('Квартальный отчёт');
+  await a.keyboard.press('Escape');
+  await expect.poll(() => hubElements(request, 'e2e-find-a')).toBe(1);
+  // Фон — в панели досок.
+  await a.getByTestId('board-title').click();
+  await a.getByRole('radio', { name: 'Клетка' }).click();
+  await expect
+    .poll(() =>
+      a.evaluate(
+        () =>
+          (
+            window.__kayospace!.engine as unknown as { getState(): { background: string } }
+          ).getState().background,
+      ),
+    )
+    .toBe('grid');
+  await a.screenshot({ path: shot('background-grid.png') });
+
+  // Другое устройство, другая доска: ищем — находим — переходим.
+  const b = await openDevice(browser, { ...synced, board: 'e2e-find-b' });
+  await expect(b.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await b.getByTestId('board-title').click();
+  await b.getByLabel('Найти или создать доску').fill('квартал');
+  const found = b.getByTestId('found');
+  await expect(found.getByRole('button')).toHaveCount(1);
+  await expect(found).toContainText('Квартальный отчёт');
+  await b.screenshot({ path: shot('search.png') });
+  await found.getByRole('button').click();
+  await expect(b.getByTestId('board-title')).toHaveText('e2e-find-a');
+  await expect(b.getByTestId('selection-menu').locator('.count')).toHaveText('1');
+  const bg = await b.evaluate(
+    () =>
+      (window.__kayospace!.engine as unknown as { getState(): { background: string } }).getState()
+        .background,
+  );
+  expect(bg).toBe('grid');
 });

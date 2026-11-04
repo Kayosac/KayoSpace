@@ -1,6 +1,6 @@
 /** Настройки приложения: хранятся только на этом устройстве (localStorage). */
 
-import type { Camera, ShapeKind, Tool } from '@kayospace/canvas';
+import type { Camera, PenStyle, ShapeKind, Tool } from '@kayospace/canvas';
 import type { StrokeTool } from '@kayospace/model';
 import { STORAGE_NS } from './config';
 
@@ -32,6 +32,10 @@ export interface WorkspaceSettings {
   shapeKind: ShapeKind;
   /** Вид пера: перо, маркер, выделитель. */
   penKind: StrokeTool;
+  /** Свои цвет и толщина у каждого вида пера (color и size выше — у того, что выбран сейчас). */
+  penStyles: Partial<Record<StrokeTool, PenStyle>>;
+  /** Свои цвета из палитры, свежие — первыми (до 8). */
+  recentColors: string[];
   stickyColor: string;
   /** Показывать мини-карту. */
   minimap: boolean;
@@ -72,6 +76,8 @@ export const defaultSettings: WorkspaceSettings = {
   eraserSize: 28,
   shapeKind: 'rect',
   penKind: 'pen',
+  penStyles: {},
+  recentColors: [],
   minimap: true,
   project: null,
   stickyColor: '#ffe58a',
@@ -114,10 +120,36 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     }
     if (typeof s.board !== 'string' || !s.board) s.board = defaultSettings.board;
     if (typeof s.project !== 'string') s.project = null;
+    s.penStyles = cleanPenStyles(s.penStyles);
+    s.recentColors = Array.isArray(s.recentColors)
+      ? s.recentColors.filter((c) => typeof c === 'string' && HEX.test(c)).slice(0, 8)
+      : [];
     return s;
   } catch {
     return { ...defaultSettings };
   }
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Стили видов пера из сохранённых настроек: только корректные цвет и толщина. */
+export function cleanPenStyles(v: unknown): Partial<Record<StrokeTool, PenStyle>> {
+  const out: Partial<Record<StrokeTool, PenStyle>> = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const kind of ['pen', 'marker', 'highlighter'] as const) {
+    const st = (v as Record<string, unknown>)[kind] as Partial<PenStyle> | undefined;
+    if (!st || typeof st !== 'object') continue;
+    const color = st.color === null || (typeof st.color === 'string' && HEX.test(st.color));
+    const size = typeof st.size === 'number' && st.size > 0 && st.size <= 64;
+    if (color && size) out[kind] = { color: st.color ?? null, size: st.size! };
+  }
+  return out;
+}
+
+/** Свой цвет — в начало списка недавних, без повторов, не больше 8. */
+export function pushRecentColor(list: readonly string[], color: string): string[] {
+  const c = color.toLowerCase();
+  return [c, ...list.filter((x) => x.toLowerCase() !== c)].slice(0, 8);
 }
 
 export function saveSettings(s: WorkspaceSettings, kv: KeyValue | null = storage()): void {

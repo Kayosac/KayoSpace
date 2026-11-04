@@ -11,13 +11,11 @@ import {
   boardToJSON,
   boardToMarkdown,
   deleteElements,
-  elementText,
   elementsMap,
   estimateNoteHeight,
   freeSpot,
   getBoardName,
   getElement,
-  listElements,
   makeArrow,
   makeFrame,
   makeShape,
@@ -26,6 +24,7 @@ import {
   setBoardName,
 } from '@kayospace/board';
 import type { ArrowEnd, CanvasElement } from '@kayospace/model';
+import { searchBoards } from './search';
 import type { BoardInfo } from './store';
 import type * as Y from 'yjs';
 
@@ -306,16 +305,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
         inputSchema: z.object({ query: z.string().min(1) }),
       },
       async ({ query }) => {
-        const q = query.toLowerCase();
-        const hits: { board: string; id: string; type: string; text: string }[] = [];
-        for (const info of await store.list()) {
-          const doc = await store.get(info.id);
-          for (const el of listElements(doc)) {
-            const t = elementText(el);
-            if (t.toLowerCase().includes(q))
-              hits.push({ board: info.id, id: el.id, type: el.type, text: t });
-          }
-        }
+        const hits = await searchBoards(store, query, 200);
         return text(hits.length ? JSON.stringify(hits, null, 2) : 'Ничего не найдено.');
       },
     );

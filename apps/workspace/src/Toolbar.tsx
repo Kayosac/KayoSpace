@@ -1,7 +1,11 @@
-import { useRef, type ComponentType } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
 import type { StrokeTool } from '@kayospace/model';
-import { STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
+import { HIGHLIGHTER_COLOR, STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
+import { ColorPicker } from './ColorPicker';
+import { sizeToSlider } from './colors';
+import { Popover } from './Popover';
+import { SizePicker } from './SizePicker';
 import {
   ArrowIcon,
   EllipseIcon,
@@ -90,6 +94,8 @@ export function Toolbar({
   onPaste,
   onAi,
   aiOn,
+  recentColors,
+  onRecentColor,
 }: {
   engine: CanvasEngine;
   state: EngineState;
@@ -98,6 +104,9 @@ export function Toolbar({
   onPaste: () => void;
   onAi: () => void;
   aiOn: boolean;
+  /** Свои цвета из палитры, свежие — первыми. */
+  recentColors: string[];
+  onRecentColor: (color: string) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const tool = state.tool;
@@ -108,6 +117,22 @@ export function Toolbar({
   // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
   const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
   const showSizes = !stickyPalette && tool !== 'text' && tool !== 'frame';
+  const [open, setOpen] = useState<'color' | 'size' | null>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const colorBtn = useRef<HTMLButtonElement>(null);
+  const sizeBtn = useRef<HTMLButtonElement>(null);
+  // Сменили инструмент (в том числе с клавиатуры) — окно о прежнем инструменте закрываем.
+  useEffect(() => setOpen(null), [tool, stickyPalette]);
+  const inkColor = inkTool ? state.color : null;
+  const shownColor = stickyPalette
+    ? state.stickyColor
+    : tool === 'pen' && state.penKind === 'highlighter' && !state.color
+      ? HIGHLIGHTER_COLOR
+      : (inkColor ?? 'var(--canvas-ink)');
+  // Кружок на кнопке — от 4 до 18 пикселей, растёт вместе с толщиной.
+  const sizeDot = eraser
+    ? Math.round(6 + 12 * sizeToSlider(state.eraserSize, 6, 160))
+    : Math.round(4 + 14 * sizeToSlider(state.size, 0.5, 48));
   return (
     <nav className="toolbar" aria-label="Инструменты">
       <div className="group" role="radiogroup" aria-label="Инструмент">
@@ -188,67 +213,85 @@ export function Toolbar({
         </>
       )}
       <span className="sep" />
-      {stickyPalette ? (
-        <div className="group colors" role="radiogroup" aria-label="Цвет стикера">
-          {STICKY_COLORS.map((value, i) => (
-            <button
-              key={value}
-              className="swatch sticky-swatch"
-              role="radio"
-              aria-checked={tool === 'sticky' && state.stickyColor === value}
-              aria-label={`Стикер: ${STICKY_NAMES[i] ?? value}`}
-              title={STICKY_NAMES[i] ?? value}
-              onClick={() => engine.setStickyColor(value)}
-            >
-              <span style={{ background: value }} />
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="group colors" role="radiogroup" aria-label="Цвет">
-          {PEN_COLORS.map(({ value, name }) => (
-            <button
-              key={name}
-              className="swatch"
-              role="radio"
-              aria-checked={inkTool && state.color === value}
-              aria-label={name}
-              title={name}
-              onClick={() => engine.setColor(value)}
-            >
-              <span style={{ background: value ?? 'var(--canvas-ink)' }} />
-            </button>
-          ))}
-        </div>
-      )}
-      {showSizes && (
-        <>
-          <span className="sep" />
-          <div
-            className="group sizes"
-            role="radiogroup"
+      <div className="group">
+        <button
+          ref={colorBtn}
+          className="tool picker-btn"
+          aria-label={stickyPalette ? 'Цвет стикера' : 'Цвет'}
+          title={stickyPalette ? 'Цвет стикера' : 'Цвет'}
+          aria-haspopup="dialog"
+          aria-expanded={open === 'color'}
+          data-testid="color-button"
+          onClick={() => setOpen((o) => (o === 'color' ? null : 'color'))}
+        >
+          <span className="current-swatch" style={{ background: shownColor }} />
+        </button>
+        {showSizes && (
+          <button
+            ref={sizeBtn}
+            className="tool picker-btn"
             aria-label={eraser ? 'Размер ластика' : 'Толщина'}
-            data-eraser={eraser || undefined}
+            title={eraser ? 'Размер ластика' : 'Толщина'}
+            aria-haspopup="dialog"
+            aria-expanded={open === 'size'}
+            data-testid="size-button"
+            onClick={() => setOpen((o) => (o === 'size' ? null : 'size'))}
           >
-            {(eraser ? ERASER_SIZES : PEN_SIZES).map(({ value, name, dot }) => (
-              <button
-                key={name}
-                className="size"
-                role="radio"
-                aria-checked={
-                  eraser
-                    ? state.eraserSize === value
-                    : (tool === 'pen' || tool === 'shape') && state.size === value
-                }
-                aria-label={name}
-                title={name}
-                onClick={() => (eraser ? engine.setEraserSize(value) : engine.setSize(value))}
-              >
-                <span style={{ width: dot, height: dot }} />
-              </button>
-            ))}
-          </div>
-        </>
+            <span
+              className={eraser ? 'current-size hollow' : 'current-size'}
+              style={{ width: sizeDot, height: sizeDot }}
+            />
+          </button>
+        )}
+      </div>
+      {open === 'color' && (
+        <Popover anchor={colorBtn} label="Цвет" onClose={close} testId="color-popover">
+          {stickyPalette ? (
+            <ColorPicker
+              pastel
+              value={state.stickyColor}
+              presets={STICKY_COLORS.map((value, i) => ({
+                value,
+                name: `Стикер: ${STICKY_NAMES[i] ?? value}`,
+              }))}
+              recent={[]}
+              onPick={(c, o) => {
+                if (c) engine.setStickyColor(c);
+                if (o.close) close();
+              }}
+            />
+          ) : (
+            <ColorPicker
+              value={inkColor}
+              presets={PEN_COLORS}
+              recent={recentColors}
+              onPick={(c, o) => {
+                engine.setColor(c);
+                if (o.custom && c) onRecentColor(c);
+                if (o.close) close();
+              }}
+            />
+          )}
+        </Popover>
+      )}
+      {open === 'size' && showSizes && (
+        <Popover anchor={sizeBtn} label="Толщина" onClose={close} testId="size-popover">
+          <SizePicker
+            label={eraser ? 'Ластик' : 'Толщина'}
+            value={eraser ? state.eraserSize : state.size}
+            min={eraser ? 6 : 0.5}
+            max={eraser ? 160 : 48}
+            presets={eraser ? ERASER_SIZES : PEN_SIZES}
+            hollow={eraser}
+            color={shownColor}
+            onChange={(v) => (eraser ? engine.setEraserSize(v) : engine.setSize(v))}
+            onPreset={(v) => {
+              if (eraser) engine.setEraserSize(v);
+              else engine.setSize(v);
+              close();
+            }}
+          />
+        </Popover>
       )}
       <span className="sep" />
       <div className="group">
