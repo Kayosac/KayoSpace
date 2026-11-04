@@ -59,8 +59,12 @@ function describe(el: CanvasElement): string | null {
       return `- Фрейм ${quote(el.props.name)} ${pos} [frame:${el.id}]`;
     case 'shape':
       return `- Фигура ${el.props.shape}${el.props.label ? ' ' + quote(el.props.label) : ''} ${pos} [shape:${el.id}]`;
-    case 'arrow':
-      return `- Стрелка${el.props.label ? ' ' + quote(el.props.label) : ''} [arrow:${el.id}]`;
+    case 'arrow': {
+      const end = (e: (typeof el.props)['start']): string =>
+        e.kind === 'element' ? e.id : `(${round(e.x)}, ${round(e.y)})`;
+      const kind = el.props.heads === 'none' ? 'Линия' : 'Стрелка';
+      return `- ${kind} ${end(el.props.start)} → ${end(el.props.end)}${el.props.label ? ' ' + quote(el.props.label) : ''} [arrow:${el.id}]`;
+    }
     case 'stroke':
       return null; // штрихи описываются сводкой
   }

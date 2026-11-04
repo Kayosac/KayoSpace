@@ -4,8 +4,10 @@ import {
   addElement,
   createBoardDoc,
   deleteElement,
+  makeArrow,
   makeSticky,
   makeStroke,
+  updateElement,
 } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
 import { Scene } from './scene';
@@ -89,5 +91,29 @@ describe('сцена', () => {
     const b = scene.contentBounds()!;
     expect(b.minX).toBeLessThan(1);
     expect(b.maxY).toBeGreaterThan(300);
+  });
+});
+
+describe('стрелки в сцене', () => {
+  it('привязанная стрелка тянется за элементом и пересчитывается при загрузке', () => {
+    const doc = createBoardDoc();
+    const a = makeSticky('a', { x: 0, y: 0, actor: me });
+    const b = makeSticky('b', { x: 400, y: 0, actor: me });
+    const arrow = makeArrow({ x: 0, y: 0 }, { x: 1, y: 1 }, { size: 2, actor: me });
+    arrow.props.start = { kind: 'element', id: a.id };
+    arrow.props.end = { kind: 'element', id: b.id };
+    // Стрелка — раньше элементов: при загрузке её концы всё равно на краях стикеров.
+    addElement(doc, arrow);
+    addElement(doc, a);
+    addElement(doc, b);
+    const scene = new Scene(doc);
+    expect(scene.items.get(arrow.id)!.ends![0].x).toBeCloseTo(206, 6);
+    expect(scene.items.get(arrow.id)!.ends![1].x).toBeCloseTo(394, 6);
+    let dirty = 0;
+    scene.onChange((d) => (dirty += d.length));
+    updateElement(doc, b.id, { x: 800 }, me);
+    expect(scene.items.get(arrow.id)!.ends![1].x).toBeCloseTo(794, 6);
+    expect(dirty).toBeGreaterThanOrEqual(4); // стикер (было/стало) + стрелка (было/стало)
+    expect(scene.pick(500, 100, 3)).toBe(arrow.id);
   });
 });

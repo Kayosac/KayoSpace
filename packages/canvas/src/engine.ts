@@ -14,7 +14,14 @@ import {
   elementsMap,
   getElement,
   isIdentity,
+  makeArrow,
+  makeShape,
+  makeSticky,
   makeStroke,
+  makeText,
+  STICKY_FONT_SIZE,
+  STICKY_SIZE,
+  TEXT_FONT_SIZE,
   scaleAbout,
   transformElement,
   type Transform,
@@ -23,6 +30,7 @@ import { PenInput, StrokeBuilder, type InkPoint, type PressurePoint } from '@kay
 import { decodeStroke, type Actor, type CanvasElement, type StrokePoint } from '@kayospace/model';
 import { defaultCamera, fitBounds, screenToWorld, viewBounds, zoomAt, type Camera } from './camera';
 import { eraseFromPoints } from './erase';
+import { boxFromDrag, snapAngle } from './shapes';
 import { Navigation } from './navigation';
 import {
   HANDLE_SIZE,
@@ -45,7 +53,11 @@ import {
 } from './selection';
 import { Scene, STROKE_STREAMLINE, STROKE_THINNING } from './scene';
 
-export type Tool = 'select' | 'pen' | 'eraser' | 'hand';
+export type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'sticky' | 'text' | 'shape';
+export type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow';
+
+/** Цвета стикеров — светлые, текст на них тёмный в любой теме. */
+export const STICKY_COLORS = ['#ffe58a', '#ffc4d1', '#b8e3c9', '#bcd7ff', '#dccbff', '#ffd3a8'];
 
 /** Origin транзакций с этого устройства: только их отменяет «Отменить». */
 export const LOCAL_ORIGIN = 'kayospace:local';
@@ -56,6 +68,12 @@ export interface EngineState {
   size: number;
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
+  shapeKind: ShapeKind;
+  stickyColor: string;
+  /** id стикера или текста, который сейчас редактируют. */
+  editing: string | null;
+  /** Что выделено: только стикеры, только «чернила» (линии, фигуры, текст), смесь. */
+  selectionKind: 'sticky' | 'ink' | 'mixed' | null;
   zoom: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -81,6 +99,8 @@ export interface EngineOptions {
   size?: number;
   /** Диаметр ластика в экранных пикселях. */
   eraserSize?: number;
+  shapeKind?: ShapeKind;
+  stickyColor?: string;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws?: boolean;
 }
@@ -98,10 +118,12 @@ interface ActiveDraw {
 }
 
 type SelectGesture =
-  | { kind: 'move'; start: Pt; t: Transform; moved: boolean }
+  | { kind: 'move'; start: Pt; t: Transform; moved: boolean; editOnTap?: string }
   | { kind: 'scale'; anchor: Pt; corner: Pt; t: Transform; moved: boolean }
   | { kind: 'lasso'; points: Pt[] }
-  | { kind: 'marquee'; start: Pt; end: Pt };
+  | { kind: 'marquee'; start: Pt; end: Pt }
+  | { kind: 'shape'; start: Pt; end: Pt }
+  | { kind: 'place'; start: Pt; moved: boolean };
 
 /** Буфер обмена — общий для всех досок в окне приложения. */
 let clipboard: CanvasElement[] = [];
@@ -133,6 +155,14 @@ export class CanvasEngine {
   private draw: ActiveDraw | null = null;
   private erase: ActiveErase | null = null;
   private gesture: SelectGesture | null = null;
+  /** Shift зажат во время жеста (квадрат, угол 45°). */
+  private gestureShift = false;
+  private shapeKind: ShapeKind;
+  private stickyColor: string;
+  /** Редактируемый стикер или текст; новый ещё не в доске — появится, когда в нём будет текст. */
+  private editing: { id: string; draft: CanvasElement | null } | null = null;
+  /** Откуда взять набранный текст, если правку завершает сам холст (тап мимо, смена инструмента). */
+  private editText: (() => string) | null = null;
   private readonly selection = new Set<string>();
   private selectionRev = 0;
   /** Последнее положение указателя над холстом (clientX/Y) — для вставки. */
@@ -155,6 +185,8 @@ export class CanvasEngine {
     this.color = opts.color ?? null;
     this.size = opts.size ?? 3;
     this.eraserSize = opts.eraserSize ?? 28;
+    this.shapeKind = opts.shapeKind ?? 'rect';
+    this.stickyColor = opts.stickyColor ?? STICKY_COLORS[0]!;
     this.touchDraws = opts.touchDraws ?? false;
 
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
@@ -195,6 +227,8 @@ export class CanvasEngine {
       },
       {
         onStart: (info) => {
+          // Тап по холсту во время правки текста — сначала сохранить набранное.
+          if (this.editing) this.finishEditing(null);
           this.undoManager.stopCapturing();
           const p = this.toWorld(info.point);
           if (this.tool === 'eraser' || info.eraser) {
@@ -202,12 +236,18 @@ export class CanvasEngine {
             this.eraseAt(p, p);
           } else if (this.tool === 'select') {
             this.selectStart(p, info.event, info.pointerType);
+          } else if (this.tool === 'shape') {
+            this.gestureShift = info.event.shiftKey;
+            this.gesture = { kind: 'shape', start: p, end: p };
+          } else if (this.tool === 'sticky' || this.tool === 'text') {
+            this.gesture = { kind: 'place', start: p, moved: false };
           } else {
             this.startDraw(p, info.hasPressure);
           }
           this.schedule();
         },
-        onMove: (points, predicted) => {
+        onMove: (points, predicted, event) => {
+          this.gestureShift = event.shiftKey;
           if (this.draw) {
             for (const pt of points) {
               const w = this.toWorld(pt);
@@ -295,6 +335,7 @@ export class CanvasEngine {
 
   setTool(tool: Tool): void {
     if (tool === this.tool) return;
+    if (this.editing) this.finishEditing(null);
     this.tool = tool;
     if (tool !== 'select') this.clearSelection();
     else this.renderer.invalidateAll();
@@ -311,13 +352,30 @@ export class CanvasEngine {
       return;
     }
     this.color = color;
-    if (this.tool !== 'pen') this.setTool('pen');
+    if (this.tool !== 'pen' && this.tool !== 'text' && this.tool !== 'shape') this.setTool('pen');
     this.emit();
   }
 
   setSize(size: number): void {
     this.size = size;
-    if (this.tool !== 'pen') this.setTool('pen');
+    if (this.tool !== 'pen' && this.tool !== 'shape') this.setTool('pen');
+    this.emit();
+  }
+
+  setShapeKind(kind: ShapeKind): void {
+    this.shapeKind = kind;
+    if (this.tool !== 'shape') this.setTool('shape');
+    this.emit();
+  }
+
+  /** Цвет стикера: перекрашивает выделенные стикеры или задаёт цвет новых. */
+  setStickyColor(color: string): void {
+    if (this.tool === 'select' && this.selection.size > 0) {
+      this.restyleSelection((el) => (el.type === 'sticky' ? { ...el.style, color } : null));
+      return;
+    }
+    this.stickyColor = color;
+    if (this.tool !== 'sticky') this.setTool('sticky');
     this.emit();
   }
 
@@ -336,11 +394,13 @@ export class CanvasEngine {
 
   undo(): void {
     if (this.draw || this.erase || this.gesture) return;
+    if (this.editing) this.finishEditing(null);
     this.undoManager.undo();
   }
 
   redo(): void {
     if (this.draw || this.erase || this.gesture) return;
+    if (this.editing) this.finishEditing(null);
     this.undoManager.redo();
   }
 
@@ -445,20 +505,159 @@ export class CanvasEngine {
     });
   }
 
+  /** Перекрасить «чернила» в выделении: линии, фигуры, стрелки, текст (стикеры — своей палитрой). */
   private recolorSelection(color: string | null): void {
+    this.restyleSelection((el) => {
+      if (el.type === 'sticky') return null;
+      const style = { ...el.style };
+      if (color) style.color = color;
+      else delete style.color;
+      return style;
+    });
+  }
+
+  private restyleSelection(fn: (el: CanvasElement) => CanvasElement['style'] | null): void {
     const map = elementsMap(this.doc);
     const now = Date.now();
     this.undoManager.stopCapturing();
     this.doc.transact(() => {
       for (const el of this.selectedElements()) {
-        if (el.type !== 'stroke') continue;
-        const style = { ...el.style };
-        if (color) style.color = color;
-        else delete style.color;
-        map.set(el.id, { ...el, style, updatedBy: this.opts.actor, updatedAt: now });
+        const style = fn(el);
+        if (style) map.set(el.id, { ...el, style, updatedBy: this.opts.actor, updatedAt: now });
       }
     }, LOCAL_ORIGIN);
     this.undoManager.stopCapturing();
+  }
+
+  // ---------- Стикеры и текст ----------
+
+  /** Элемент, который сейчас редактируют (из доски или ещё не созданный). */
+  getEditingElement(): CanvasElement | null {
+    if (!this.editing) return null;
+    return this.editing.draft ?? getElement(this.doc, this.editing.id) ?? null;
+  }
+
+  /** Поле ввода сообщает, как прочитать набранный текст. */
+  setEditTextSource(fn: (() => string) | null): void {
+    this.editText = fn;
+  }
+
+  startEditing(id: string): void {
+    const el = getElement(this.doc, id);
+    if (!el || (el.type !== 'sticky' && el.type !== 'text')) return;
+    if (this.editing) this.finishEditing(null);
+    this.editing = { id, draft: null };
+    this.selection.clear();
+    this.selection.add(id);
+    this.selectionChanged();
+  }
+
+  /**
+   * Закончить правку. text = null — оставить как есть. Пустой текст удаляет заметку.
+   * Высота подгоняется под текст; у стикера — не меньше ширины.
+   */
+  finishEditing(text: string | null): void {
+    const ed = this.editing;
+    if (!ed) return;
+    this.editing = null;
+    if (text === null && this.editText) text = this.editText();
+    const el = ed.draft ?? getElement(this.doc, ed.id);
+    if (el && (el.type === 'sticky' || el.type === 'text') && text !== null) {
+      const content = text.replace(/\s+$/u, '');
+      if (!content.trim()) {
+        if (!ed.draft) deleteElement(this.doc, el.id, LOCAL_ORIGIN);
+        this.selection.delete(el.id);
+      } else if (content !== el.props.content || ed.draft) {
+        const { height } = this.renderer.measureNote(el, content);
+        const h = el.type === 'sticky' ? Math.max(el.w, height) : height;
+        const next = {
+          ...el,
+          h,
+          props: { ...el.props, content },
+          updatedBy: this.opts.actor,
+          updatedAt: Date.now(),
+        } as CanvasElement;
+        this.undoManager.stopCapturing();
+        addElement(this.doc, next, LOCAL_ORIGIN);
+        this.undoManager.stopCapturing();
+        this.selection.clear();
+        this.selection.add(next.id);
+      }
+    }
+    this.selectionChanged();
+  }
+
+  /** Новый стикер или текст в точке (мировые координаты) — сразу в режиме правки. */
+  private placeNote(kind: 'sticky' | 'text', p: Pt): void {
+    const z = this.camera.zoom;
+    const now = Date.now();
+    const actor = this.opts.actor;
+    let draft: CanvasElement;
+    if (kind === 'sticky') {
+      const s = STICKY_SIZE / z;
+      draft = makeSticky('', {
+        x: p.x - s / 2,
+        y: p.y - s / 2,
+        color: this.stickyColor,
+        actor,
+        now,
+      });
+      draft = { ...draft, w: s, h: s, style: { ...draft.style, size: STICKY_FONT_SIZE / z } };
+    } else {
+      const size = TEXT_FONT_SIZE / z;
+      draft = makeText('', {
+        x: p.x,
+        y: p.y - size * 0.65,
+        w: 320 / z,
+        actor,
+        now,
+        ...(this.color ? { color: this.color } : {}),
+      });
+      draft = { ...draft, h: size * 1.3, style: { ...draft.style, size } };
+    }
+    if (this.editing) this.finishEditing(null);
+    this.editing = { id: draft.id, draft };
+    // После заметки — снова выделение, как в Miro: следующий тап не плодит пустые стикеры.
+    this.tool = 'select';
+    this.nav.handTool = false;
+    this.updateCursor();
+    this.selection.clear();
+    this.selectionChanged();
+  }
+
+  /** Элемент, к которому можно привязать конец стрелки: стикер, текст или фигура под точкой. */
+  private attachTarget(p: Pt): string | null {
+    const items = this.scene.query({ minX: p.x, minY: p.y, maxX: p.x, maxY: p.y });
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]!;
+      const t = it.element.type;
+      if (t !== 'sticky' && t !== 'text' && t !== 'shape') continue;
+      const b = it.bounds;
+      if (p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY) return it.id;
+    }
+    return null;
+  }
+
+  /** Фигура по жесту (мировые координаты). Тап без движения ставит фигуру стандартного размера. */
+  private draftShape(g: { start: Pt; end: Pt }): CanvasElement | null {
+    const z = this.camera.zoom;
+    const actor = this.opts.actor;
+    const size = this.size / z;
+    const color = this.color ?? undefined;
+    const tiny = Math.hypot(g.end.x - g.start.x, g.end.y - g.start.y) * z < 4;
+    const opts = { size, actor, ...(color ? { color } : {}) };
+    if (this.shapeKind === 'line' || this.shapeKind === 'arrow') {
+      if (tiny) return null;
+      const end = this.gestureShift ? snapAngle(g.start, g.end) : g.end;
+      return makeArrow(g.start, end, {
+        ...opts,
+        heads: this.shapeKind === 'arrow' ? 'end' : 'none',
+      });
+    }
+    const box = tiny
+      ? { x: g.start.x - 80 / z, y: g.start.y - 50 / z, w: 160 / z, h: 100 / z }
+      : boxFromDrag(g.start, g.end, this.gestureShift);
+    return makeShape(this.shapeKind, box, opts);
   }
 
   private commitTransform(t: Transform): void {
@@ -472,6 +671,16 @@ export class CanvasEngine {
       }
     }, LOCAL_ORIGIN);
     this.undoManager.stopCapturing();
+  }
+
+  private selectionKind(): EngineState['selectionKind'] {
+    let sticky = false;
+    let ink = false;
+    for (const id of this.selection) {
+      if (this.scene.items.get(id)?.element.type === 'sticky') sticky = true;
+      else ink = true;
+    }
+    return sticky && ink ? 'mixed' : sticky ? 'sticky' : ink ? 'ink' : null;
   }
 
   private selectionChanged(): void {
@@ -505,19 +714,42 @@ export class CanvasEngine {
         return;
       }
       if (p.x >= padded.minX && p.x <= padded.maxX && p.y >= padded.minY && p.y <= padded.maxY) {
-        this.gesture = { kind: 'move', start: p, t: IDENTITY, moved: false };
+        const only = this.selection.size === 1 ? [...this.selection][0]! : null;
+        const t = only ? this.scene.items.get(only)?.element.type : undefined;
+        this.gesture = {
+          kind: 'move',
+          start: p,
+          t: IDENTITY,
+          moved: false,
+          ...(only && (t === 'sticky' || t === 'text') ? { editOnTap: only } : {}),
+        };
         this.selectionChanged();
         return;
       }
     }
     const hit = this.scene.pick(p.x, p.y, (pointerType === 'mouse' ? 6 : 10) / z);
     if (hit) {
+      const t = this.scene.items.get(hit)?.element.type;
+      // Повторный тап по уже выбранному стикеру или тексту — правка.
+      const editOnTap =
+        !additive &&
+        this.selection.size === 1 &&
+        this.selection.has(hit) &&
+        (t === 'sticky' || t === 'text')
+          ? hit
+          : undefined;
       if (additive && this.selection.has(hit)) {
         this.selection.delete(hit);
       } else {
         if (!additive && !this.selection.has(hit)) this.selection.clear();
         this.selection.add(hit);
-        this.gesture = { kind: 'move', start: p, t: IDENTITY, moved: false };
+        this.gesture = {
+          kind: 'move',
+          start: p,
+          t: IDENTITY,
+          moved: false,
+          ...(editOnTap ? { editOnTap } : {}),
+        };
       }
       this.selectionChanged();
       return;
@@ -543,6 +775,11 @@ export class CanvasEngine {
     } else if (g.kind === 'scale') {
       g.moved = true;
       g.t = scaleAbout(g.anchor.x, g.anchor.y, scaleFromHandle(g.anchor, g.corner, p));
+    } else if (g.kind === 'shape') {
+      g.end = p;
+    } else if (g.kind === 'place') {
+      if (Math.hypot(p.x - g.start.x, p.y - g.start.y) * z > 8) g.moved = true;
+      return;
     } else if (g.kind === 'lasso') {
       const last = g.points[g.points.length - 1]!;
       if (Math.hypot(p.x - last.x, p.y - last.y) * z < 2) return;
@@ -561,6 +798,34 @@ export class CanvasEngine {
     if (!cancel) {
       if ((g.kind === 'move' || g.kind === 'scale') && g.moved) {
         this.commitTransform(g.t);
+      } else if (g.kind === 'move' && g.editOnTap) {
+        this.startEditing(g.editOnTap);
+        return;
+      } else if (g.kind === 'shape') {
+        let el = this.draftShape(g);
+        if (el?.type === 'arrow') {
+          // Конец на стикере, тексте или фигуре — стрелка привязывается и потом тянется за ними.
+          const from = this.attachTarget(g.start);
+          const to = this.attachTarget(g.end);
+          el = {
+            ...el,
+            props: {
+              ...el.props,
+              ...(from && from !== to ? { start: { kind: 'element' as const, id: from } } : {}),
+              ...(to && to !== from ? { end: { kind: 'element' as const, id: to } } : {}),
+            },
+          };
+        }
+        if (el) addElement(this.doc, el, LOCAL_ORIGIN);
+      } else if (g.kind === 'place' && !g.moved) {
+        const kind = this.tool === 'text' ? 'text' : 'sticky';
+        const z = this.camera.zoom;
+        // Тап по существующей заметке — правка, по пустому месту — новая.
+        const hit = this.scene.pick(g.start.x, g.start.y, 4 / z);
+        const t = hit ? this.scene.items.get(hit)?.element.type : undefined;
+        if (hit && (t === 'sticky' || t === 'text')) this.startEditing(hit);
+        else this.placeNote(kind, g.start);
+        return;
       } else if (g.kind === 'lasso' && g.points.length >= 3) {
         const area = unionBounds(
           g.points.map((q) => ({ minX: q.x, minY: q.y, maxX: q.x, maxY: q.y })),
@@ -697,7 +962,12 @@ export class CanvasEngine {
     this.doc.transact(() => {
       for (const id of ids) {
         const el = getElement(this.doc, id);
-        if (!el || el.type !== 'stroke') continue;
+        if (!el) continue;
+        if (el.type === 'shape' || el.type === 'arrow') {
+          deleteElement(this.doc, id); // фигуру ластик убирает целиком
+          continue;
+        }
+        if (el.type !== 'stroke') continue;
         const points = decodeStroke(el.props.points).map((p) => ({
           ...p,
           x: p.x + el.x,
@@ -804,15 +1074,19 @@ export class CanvasEngine {
         er.ringRect = rect;
       }
       if (this.renderer.needsPaint) {
-        const overlay: PaintOverlay = { active, ring };
+        const overlay: PaintOverlay = { active, ring, editing: this.editing?.id ?? null };
         const g = this.gesture;
+        if (g?.kind === 'shape') overlay.draft = this.draftShape(g);
         if (this.selection.size > 0) {
           const bounds = this.getSelectionBounds();
           if (bounds) {
             overlay.selection = {
               bounds,
               ids: this.selection,
-              handles: this.tool === 'select' && (!g || g.kind === 'move' || g.kind === 'scale'),
+              handles:
+                this.tool === 'select' &&
+                !this.editing &&
+                (!g || g.kind === 'move' || g.kind === 'scale'),
             };
           }
         }
@@ -858,7 +1132,7 @@ export class CanvasEngine {
   }
 
   private updateCursor(): void {
-    let cursor = this.tool === 'select' ? 'default' : 'crosshair';
+    let cursor = this.tool === 'select' ? 'default' : this.tool === 'text' ? 'text' : 'crosshair';
     if (this.nav.isPanning) cursor = 'grabbing';
     else if (this.tool === 'hand' || this.nav.spaceDown) cursor = 'grab';
     else if (this.tool === 'eraser') cursor = eraserCursor(this.eraserSize);
@@ -871,6 +1145,10 @@ export class CanvasEngine {
       color: this.color,
       size: this.size,
       eraserSize: this.eraserSize,
+      shapeKind: this.shapeKind,
+      stickyColor: this.stickyColor,
+      editing: this.editing?.id ?? null,
+      selectionKind: this.selectionKind(),
       zoom: this.camera.zoom,
       canUndo: this.undoManager.canUndo(),
       canRedo: this.undoManager.canRedo(),
@@ -951,6 +1229,15 @@ export class CanvasEngine {
       this.clearSelection();
       return;
     }
+    if (e.code === 'Enter' && this.selection.size === 1 && !mod) {
+      const id = [...this.selection][0]!;
+      const t = this.scene.items.get(id)?.element.type;
+      if (t === 'sticky' || t === 'text') {
+        e.preventDefault();
+        this.startEditing(id);
+        return;
+      }
+    }
     if (e.code.startsWith('Arrow') && this.selection.size > 0 && !mod) {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
@@ -980,6 +1267,12 @@ export class CanvasEngine {
     else if (e.shiftKey && e.code === 'Digit0') this.resetZoom();
     else if (e.shiftKey) return;
     else if (e.code === 'KeyV') this.setTool('select');
+    else if (e.code === 'KeyN') this.setTool('sticky');
+    else if (e.code === 'KeyT') this.setTool('text');
+    else if (e.code === 'KeyR') this.setShapeKind('rect');
+    else if (e.code === 'KeyO') this.setShapeKind('ellipse');
+    else if (e.code === 'KeyL') this.setShapeKind('line');
+    else if (e.code === 'KeyA') this.setShapeKind('arrow');
     else if (e.code === 'KeyP' || e.code === 'KeyB') this.setTool('pen');
     else if (e.code === 'KeyE') this.setTool('eraser');
     else if (e.code === 'KeyH') this.setTool('hand');

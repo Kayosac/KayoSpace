@@ -4,6 +4,8 @@ import {
   encodeStroke,
   strokeBounds,
   type Actor,
+  type ArrowElement,
+  type ShapeElement,
   type StickyElement,
   type StrokeElement,
   type StrokePoint,
@@ -89,7 +91,7 @@ export function makeSticky(
 
 export function makeText(
   text: string,
-  opts: { x: number; y: number; w?: number; actor: Actor; now?: number },
+  opts: { x: number; y: number; w?: number; color?: string; actor: Actor; now?: number },
 ): TextElement {
   const now = opts.now ?? Date.now();
   return {
@@ -99,7 +101,70 @@ export function makeText(
     y: opts.y,
     w: opts.w ?? 320,
     h: 40,
-    style: {},
+    style: opts.color ? { color: opts.color } : {},
     props: { content: text },
   };
+}
+
+/** Прямоугольник или эллипс по рамке (мировые координаты); size — толщина линии. */
+export function makeShape(
+  shape: 'rect' | 'ellipse',
+  box: { x: number; y: number; w: number; h: number },
+  opts: { color?: string; size: number; actor: Actor; now?: number },
+): ShapeElement {
+  const now = opts.now ?? Date.now();
+  return {
+    ...base(opts.actor, now),
+    type: 'shape',
+    ...box,
+    style: { size: opts.size, ...(opts.color ? { color: opts.color } : {}) },
+    props: { shape },
+  };
+}
+
+/** Линия или стрелка между двумя точками (мировые координаты). */
+export function makeArrow(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  opts: {
+    heads?: 'none' | 'end' | 'both';
+    color?: string;
+    size: number;
+    actor: Actor;
+    now?: number;
+  },
+): ArrowElement {
+  const now = opts.now ?? Date.now();
+  return {
+    ...base(opts.actor, now),
+    type: 'arrow',
+    x: Math.min(from.x, to.x),
+    y: Math.min(from.y, to.y),
+    w: Math.abs(to.x - from.x),
+    h: Math.abs(to.y - from.y),
+    style: { size: opts.size, ...(opts.color ? { color: opts.color } : {}) },
+    props: {
+      start: { kind: 'point', x: from.x, y: from.y },
+      end: { kind: 'point', x: to.x, y: to.y },
+      heads: opts.heads ?? 'end',
+    },
+  };
+}
+
+/**
+ * Примерная высота стикера или текста под содержимое — там, где нечем измерить шрифт
+ * (хаб, агенты). Устройство при правке пересчитывает высоту точно.
+ */
+export function estimateNoteHeight(
+  text: string,
+  w: number,
+  opts: { sticky: boolean; fontSize?: number },
+): number {
+  const font = opts.fontSize ?? (opts.sticky ? 18 : 20);
+  const pad = opts.sticky ? font * (16 / 18) : 0;
+  const perLine = Math.max(1, Math.floor((w - pad * 2) / (font * 0.55)));
+  let lines = 0;
+  for (const para of text.split('\n')) lines += Math.max(1, Math.ceil(para.length / perLine));
+  const h = lines * font * 1.3 + pad * 2;
+  return opts.sticky ? Math.max(w, h) : h;
 }

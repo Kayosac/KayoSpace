@@ -1,6 +1,6 @@
 /** Настройки приложения: хранятся только на этом устройстве (localStorage). */
 
-import type { Camera, Tool } from '@kayospace/canvas';
+import type { Camera, ShapeKind, Tool } from '@kayospace/canvas';
 
 export interface WorkspaceSettings {
   /** Адрес хаба, например x.sslip.io:8443 или 192.168.1.10:4000. */
@@ -18,6 +18,26 @@ export interface WorkspaceSettings {
   size: number;
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
+  shapeKind: ShapeKind;
+  stickyColor: string;
+  /** Недавние доски на этом устройстве (свежие — первыми). */
+  recentBoards: RecentBoard[];
+}
+
+export interface RecentBoard {
+  id: string;
+  name: string | null;
+}
+
+/** Поднять доску наверх списка недавних (не больше 30). */
+export function touchRecent(
+  list: readonly RecentBoard[],
+  id: string,
+  name: string | null,
+): RecentBoard[] {
+  const prev = list.find((b) => b.id === id);
+  const entry = { id, name: name ?? prev?.name ?? null };
+  return [entry, ...list.filter((b) => b.id !== id)].slice(0, 30);
 }
 
 export const defaultSettings: WorkspaceSettings = {
@@ -30,6 +50,9 @@ export const defaultSettings: WorkspaceSettings = {
   color: null,
   size: 3,
   eraserSize: 28,
+  shapeKind: 'rect',
+  stickyColor: '#ffe58a',
+  recentBoards: [],
 };
 
 export const SETTINGS_KEY = 'kayospace.workspace.v1';
@@ -55,7 +78,11 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     if (!raw) return { ...defaultSettings };
     const parsed = JSON.parse(raw) as Partial<WorkspaceSettings>;
     const s = { ...defaultSettings, ...parsed };
-    if (!['select', 'pen', 'eraser', 'hand'].includes(s.tool)) s.tool = 'pen';
+    if (!['select', 'pen', 'eraser', 'hand', 'sticky', 'text', 'shape'].includes(s.tool))
+      s.tool = 'pen';
+    if (!['rect', 'ellipse', 'line', 'arrow'].includes(s.shapeKind)) s.shapeKind = 'rect';
+    if (!Array.isArray(s.recentBoards)) s.recentBoards = [];
+    s.recentBoards = s.recentBoards.filter((b) => b && typeof b.id === 'string');
     if (!(typeof s.size === 'number' && s.size > 0 && s.size <= 64)) s.size = defaultSettings.size;
     if (!(typeof s.eraserSize === 'number' && s.eraserSize >= 4 && s.eraserSize <= 200)) {
       s.eraserSize = defaultSettings.eraserSize;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decodeStroke, type Actor } from '@kayospace/model';
-import { makeSticky, makeStroke } from './factory';
+import { estimateNoteHeight, makeArrow, makeShape, makeSticky, makeStroke } from './factory';
 import {
   STICKY_FONT_SIZE,
   cloneElements,
@@ -61,5 +61,34 @@ describe('преобразование элементов', () => {
     expect(copies[0]!.x).toBe(a.x + 24);
     expect(copies[0]!.z < copies[1]!.z).toBe(true);
     expect(copies[0]!.z > b.z).toBe(true);
+  });
+});
+
+describe('фигуры и стрелки', () => {
+  it('стрелка: концы двигаются и масштабируются, рамка тоже', () => {
+    const a = makeArrow({ x: 0, y: 10 }, { x: 100, y: 60 }, { size: 2, actor: me });
+    expect([a.x, a.y, a.w, a.h]).toEqual([0, 10, 100, 50]);
+    const m = transformElement(a, scaleAbout(0, 0, 2), me);
+    if (m.type !== 'arrow') throw new Error('не стрелка');
+    expect(m.props.start).toEqual({ kind: 'point', x: 0, y: 20 });
+    expect(m.props.end).toEqual({ kind: 'point', x: 200, y: 120 });
+    expect([m.x, m.y, m.w, m.h, m.style.size]).toEqual([0, 20, 200, 100, 4]);
+    const copy = cloneElements([a], 5, 5, me)[0]!;
+    if (copy.type !== 'arrow') throw new Error('не стрелка');
+    expect(copy.props.start).toEqual({ kind: 'point', x: 5, y: 15 });
+  });
+
+  it('фигура: толщина линии масштабируется вместе с рамкой', () => {
+    const r = makeShape('rect', { x: 0, y: 0, w: 10, h: 20 }, { size: 3, actor: me });
+    const m = transformElement(r, scaleAbout(0, 0, 3), me);
+    expect([m.w, m.h, m.style.size]).toEqual([30, 60, 9]);
+  });
+});
+
+describe('высота заметки без измерения шрифта', () => {
+  it('короткий стикер — квадрат, длинный — выше; текст — по строкам', () => {
+    expect(estimateNoteHeight('привет', 200, { sticky: true })).toBe(200);
+    expect(estimateNoteHeight('слово '.repeat(80), 200, { sticky: true })).toBeGreaterThan(200);
+    expect(estimateNoteHeight('a\nb\nc', 320, { sticky: false })).toBeCloseTo(3 * 20 * 1.3, 6);
   });
 });

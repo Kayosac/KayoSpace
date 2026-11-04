@@ -10,13 +10,21 @@ import {
   addElement,
   boardToJSON,
   boardToMarkdown,
+  deleteElements,
   elementText,
+  elementsMap,
+  estimateNoteHeight,
   freeSpot,
   getBoardName,
+  getElement,
   listElements,
+  makeArrow,
+  makeShape,
   makeSticky,
+  makeText,
   setBoardName,
 } from '@kayospace/board';
+import type { ArrowEnd, CanvasElement } from '@kayospace/model';
 import type { BoardStore } from './store';
 
 export const MCP_ORIGIN = 'mcp';
@@ -81,9 +89,171 @@ export function createMcp(store: BoardStore) {
         const doc = await store.get(board);
         if (boardName && !getBoardName(doc)) setBoardName(doc, boardName, MCP_ORIGIN);
         const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(doc);
-        const sticky = makeSticky(content, { ...spot, color, actor: agent });
+        const base = makeSticky(content, { ...spot, color, actor: agent });
+        const sticky = { ...base, h: estimateNoteHeight(content, base.w, { sticky: true }) };
         addElement(doc, sticky, MCP_ORIGIN);
         return text(`Стикер добавлен: ${sticky.id} в (${spot.x}, ${spot.y}).`);
+      },
+    );
+
+    server.registerTool(
+      'add_text',
+      {
+        description:
+          'Добавить надпись (заголовок, абзац) на доску. Без координат — справа от занятой области.',
+        inputSchema: z.object({
+          board: boardId,
+          text: z.string().min(1).max(5000),
+          x: z.number().optional(),
+          y: z.number().optional(),
+          width: z.number().positive().optional().describe('ширина блока, по умолчанию 320'),
+          color: z.string().optional().describe('цвет текста; без него — цвет темы'),
+        }),
+      },
+      async ({ board, text: content, x, y, width, color }) => {
+        const doc = await store.get(board);
+        const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(doc);
+        const base = makeText(content, { ...spot, w: width, color, actor: agent });
+        const el = { ...base, h: estimateNoteHeight(content, base.w, { sticky: false }) };
+        addElement(doc, el, MCP_ORIGIN);
+        return text(`Текст добавлен: ${el.id} в (${spot.x}, ${spot.y}).`);
+      },
+    );
+
+    server.registerTool(
+      'add_shape',
+      {
+        description:
+          'Добавить прямоугольник или эллипс (рамку без заливки) по координатам и размеру.',
+        inputSchema: z.object({
+          board: boardId,
+          shape: z.enum(['rect', 'ellipse']),
+          x: z.number(),
+          y: z.number(),
+          w: z.number().positive(),
+          h: z.number().positive(),
+          color: z.string().optional(),
+          lineWidth: z.number().positive().optional().describe('толщина линии, по умолчанию 2'),
+        }),
+      },
+      async ({ board, shape, x, y, w, h, color, lineWidth }) => {
+        const doc = await store.get(board);
+        const el = makeShape(shape, { x, y, w, h }, { size: lineWidth ?? 2, color, actor: agent });
+        addElement(doc, el, MCP_ORIGIN);
+        return text(`Фигура добавлена: ${el.id}.`);
+      },
+    );
+
+    const endSchema = z
+      .union([z.string().describe('id элемента'), z.object({ x: z.number(), y: z.number() })])
+      .describe('id элемента (стрелка будет тянуться за ним) или точка {x, y}');
+
+    server.registerTool(
+      'add_arrow',
+      {
+        description:
+          'Соединить стрелкой два элемента или точки. Привязанная к элементу стрелка ' +
+          'тянется за ним, когда его двигают. heads: none — линия, end — стрелка, both — в обе стороны.',
+        inputSchema: z.object({
+          board: boardId,
+          from: endSchema,
+          to: endSchema,
+          heads: z.enum(['none', 'end', 'both']).optional(),
+          color: z.string().optional(),
+        }),
+      },
+      async ({ board, from, to, heads, color }) => {
+        if (!(await store.has(board))) return fail(`Доски «${board}» нет. Список — list_boards.`);
+        const doc = await store.get(board);
+        const resolve = (
+          e: string | { x: number; y: number },
+        ): { end: ArrowEnd; at: { x: number; y: number } } | string => {
+          if (typeof e !== 'string') return { end: { kind: 'point', ...e }, at: e };
+          const el = getElement(doc, e);
+          if (!el) return `Элемента ${e} нет на доске.`;
+          return {
+            end: { kind: 'element', id: e },
+            at: { x: el.x + el.w / 2, y: el.y + el.h / 2 },
+          };
+        };
+        const a = resolve(from);
+        const b = resolve(to);
+        if (typeof a === 'string') return fail(a);
+        if (typeof b === 'string') return fail(b);
+        const base = makeArrow(a.at, b.at, { heads, size: 2, color, actor: agent });
+        const el = { ...base, props: { ...base.props, start: a.end, end: b.end } };
+        addElement(doc, el, MCP_ORIGIN);
+        return text(`Стрелка добавлена: ${el.id}.`);
+      },
+    );
+
+    server.registerTool(
+      'update_element',
+      {
+        description:
+          'Изменить элемент: текст стикера или надписи, положение (x, y), цвет. ' +
+          'id — из read_board в формате json.',
+        inputSchema: z.object({
+          board: boardId,
+          id: z.string(),
+          text: z.string().max(5000).optional(),
+          x: z.number().optional(),
+          y: z.number().optional(),
+          color: z.string().optional(),
+        }),
+      },
+      async ({ board, id, text: content, x, y, color }) => {
+        if (!(await store.has(board))) return fail(`Доски «${board}» нет.`);
+        const doc = await store.get(board);
+        const el = getElement(doc, id);
+        if (!el) return fail(`Элемента ${id} нет на доске.`);
+        let next: CanvasElement = { ...el, updatedBy: agent, updatedAt: Date.now() };
+        if (x !== undefined || y !== undefined) {
+          const dx = (x ?? el.x) - el.x;
+          const dy = (y ?? el.y) - el.y;
+          next = { ...next, x: el.x + dx, y: el.y + dy };
+          if (next.type === 'arrow') {
+            const move = (e: ArrowEnd): ArrowEnd =>
+              e.kind === 'point' ? { kind: 'point', x: e.x + dx, y: e.y + dy } : e;
+            next = {
+              ...next,
+              props: { ...next.props, start: move(next.props.start), end: move(next.props.end) },
+            };
+          }
+        }
+        if (color !== undefined) next = { ...next, style: { ...next.style, color } };
+        if (content !== undefined) {
+          if (next.type !== 'sticky' && next.type !== 'text') {
+            return fail('Текст есть только у стикеров и надписей.');
+          }
+          const sticky = next.type === 'sticky';
+          next = {
+            ...next,
+            props: { ...next.props, content },
+            h: estimateNoteHeight(content, next.w, {
+              sticky,
+              ...(next.style.size ? { fontSize: next.style.size } : {}),
+            }),
+          };
+        }
+        doc.transact(() => elementsMap(doc).set(id, next), MCP_ORIGIN);
+        return text(`Элемент ${id} изменён.`);
+      },
+    );
+
+    server.registerTool(
+      'delete_elements',
+      {
+        description:
+          'Удалить элементы с доски по id. Отменить это с устройства нельзя (отмена там — только своих правок), удаляйте осознанно.',
+        inputSchema: z.object({ board: boardId, ids: z.array(z.string()).min(1).max(500) }),
+      },
+      async ({ board, ids }) => {
+        if (!(await store.has(board))) return fail(`Доски «${board}» нет.`);
+        const doc = await store.get(board);
+        const present = ids.filter((id) => getElement(doc, id));
+        deleteElements(doc, present, MCP_ORIGIN);
+        return text(`Удалено: ${present.length} из ${ids.length}.`);
       },
     );
 

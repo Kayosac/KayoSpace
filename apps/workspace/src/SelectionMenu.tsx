@@ -11,7 +11,9 @@ export function SelectionMenu({ engine, state }: { engine: CanvasEngine; state: 
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => engine.onCamera(bump), [engine]);
 
-  if (state.selected === 0 || state.transforming || state.tool !== 'select') return null;
+  if (state.selected === 0 || state.transforming || state.editing || state.tool !== 'select') {
+    return null;
+  }
   const b = engine.getSelectionBounds();
   if (!b) return null;
   const cam = engine.getCamera();

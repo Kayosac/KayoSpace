@@ -144,10 +144,15 @@ describe('MCP', () => {
     const client = await mcp();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      'add_arrow',
+      'add_shape',
       'add_sticky',
+      'add_text',
+      'delete_elements',
       'list_boards',
       'read_board',
       'search',
+      'update_element',
     ]);
     await client.close();
   });
@@ -183,6 +188,66 @@ describe('MCP', () => {
 
     const missing = await client.callTool({ name: 'read_board', arguments: { board: 'nope' } });
     expect((missing as { isError?: boolean }).isError).toBe(true);
+    await client.close();
+  });
+});
+
+describe('MCP: схемы для агентов', () => {
+  it('агент рисует схему: стикеры, стрелка между ними, правка и удаление', async () => {
+    const client = new Client({ name: 'hub-test', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${hub.port}/mcp`)),
+    );
+    const idOf = (r: unknown): string =>
+      /: ([0-9A-Z]{26})/.exec(
+        ((r as { content: { text?: string }[] }).content[0]?.text ?? '') as string,
+      )![1]!;
+    const a = idOf(
+      await client.callTool({
+        name: 'add_sticky',
+        arguments: { board: 'flow', text: 'Начало', x: 0, y: 0 },
+      }),
+    );
+    const b = idOf(
+      await client.callTool({
+        name: 'add_sticky',
+        arguments: { board: 'flow', text: 'Конец', x: 400, y: 0 },
+      }),
+    );
+    const arrow = idOf(
+      await client.callTool({ name: 'add_arrow', arguments: { board: 'flow', from: a, to: b } }),
+    );
+    await client.callTool({
+      name: 'add_text',
+      arguments: { board: 'flow', text: 'Схема', x: 0, y: -60 },
+    });
+    await client.callTool({
+      name: 'add_shape',
+      arguments: { board: 'flow', shape: 'rect', x: -20, y: -20, w: 640, h: 260 },
+    });
+    const bad = await client.callTool({
+      name: 'add_arrow',
+      arguments: { board: 'flow', from: a, to: 'нет-такого' },
+    });
+    expect((bad as { isError?: boolean }).isError).toBe(true);
+
+    await client.callTool({
+      name: 'update_element',
+      arguments: { board: 'flow', id: b, text: 'Готово', x: 500 },
+    });
+    const doc = await hub.store.get('flow');
+    const sticky = listElements(doc).find((e) => e.id === b)!;
+    expect(sticky.x).toBe(500);
+    expect(sticky.type === 'sticky' && sticky.props.content).toBe('Готово');
+    const link = listElements(doc).find((e) => e.id === arrow)!;
+    expect(link.type === 'arrow' && link.props.end).toEqual({ kind: 'element', id: b });
+
+    const del = await client.callTool({
+      name: 'delete_elements',
+      arguments: { board: 'flow', ids: [arrow, 'нет'] },
+    });
+    expect((del as { content: { text: string }[] }).content[0]!.text).toContain('1 из 2');
+    expect(listElements(doc)).toHaveLength(4);
     await client.close();
   });
 });

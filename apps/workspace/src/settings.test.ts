@@ -6,6 +6,7 @@ import {
   loadSettings,
   saveCamera,
   saveSettings,
+  touchRecent,
   type KeyValue,
 } from './settings';
 
@@ -47,5 +48,19 @@ describe('настройки', () => {
     expect(loadCamera('b', kv)).toBeNull();
     kv.setItem('kayospace.camera.v1:c', JSON.stringify({ x: 1, y: 2, zoom: 0 }));
     expect(loadCamera('c', kv)).toBeNull();
+  });
+});
+
+describe('недавние доски', () => {
+  it('свежая — первой, без повторов, название не теряется', () => {
+    let list = touchRecent([], 'a', 'Альфа');
+    list = touchRecent(list, 'b', null);
+    list = touchRecent(list, 'a', null);
+    expect(list).toEqual([
+      { id: 'a', name: 'Альфа' },
+      { id: 'b', name: null },
+    ]);
+    for (let i = 0; i < 40; i++) list = touchRecent(list, `x${i}`, null);
+    expect(list).toHaveLength(30);
   });
 });

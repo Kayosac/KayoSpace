@@ -3,7 +3,13 @@
  * а записывает его в доску вызывающий код (одной транзакцией на жест).
  */
 
-import { decodeStroke, encodeStroke, type Actor, type CanvasElement } from '@kayospace/model';
+import {
+  decodeStroke,
+  encodeStroke,
+  type Actor,
+  type ArrowEnd,
+  type CanvasElement,
+} from '@kayospace/model';
 import { newId } from './ids';
 import { zIndexFor } from './factory';
 
@@ -42,6 +48,21 @@ export function transformElement(
   const meta = { updatedBy: actor, updatedAt: now };
   const x = el.x * t.s + t.tx;
   const y = el.y * t.s + t.ty;
+  if (el.type === 'arrow') {
+    // Концы-точки — в мировых координатах, преобразуются сами; привязка к элементу остаётся.
+    const end = (e: ArrowEnd): ArrowEnd =>
+      e.kind === 'point' ? { kind: 'point', x: e.x * t.s + t.tx, y: e.y * t.s + t.ty } : e;
+    return {
+      ...el,
+      ...meta,
+      x,
+      y,
+      w: el.w * t.s,
+      h: el.h * t.s,
+      style: t.s === 1 ? el.style : { ...el.style, size: (el.style.size ?? 2) * t.s },
+      props: { ...el.props, start: end(el.props.start), end: end(el.props.end) },
+    };
+  }
   if (t.s === 1) return { ...el, ...meta, x, y };
   const w = el.w * t.s;
   const h = el.h * t.s;
@@ -63,6 +84,9 @@ export function transformElement(
   if (el.type === 'sticky' || el.type === 'text') {
     return { ...el, ...meta, x, y, w, h, style: { ...el.style, size: fontSizeOf(el) * t.s } };
   }
+  if (el.type === 'shape') {
+    return { ...el, ...meta, x, y, w, h, style: { ...el.style, size: (el.style.size ?? 2) * t.s } };
+  }
   return { ...el, ...meta, x, y, w, h };
 }
 
@@ -81,10 +105,8 @@ export function cloneElements(
   );
   const base = zIndexFor(now);
   return ordered.map((el, i) => ({
-    ...el,
+    ...transformElement(el, { s: 1, tx: dx, ty: dy }, actor, now),
     id: newId(now),
-    x: el.x + dx,
-    y: el.y + dy,
     // Суффикс держит порядок копий; строка длиннее — всё равно выше всех, созданных раньше.
     z: base + i.toString(36).padStart(4, '0'),
     createdBy: actor,
