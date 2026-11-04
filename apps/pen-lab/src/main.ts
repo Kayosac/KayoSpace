@@ -2,17 +2,20 @@ import './style.css';
 import {
   InkStats,
   PenInput,
+  RateMeter,
   StrokeBuilder,
   drawPolyline,
   drawStroke,
   fillSamples,
   supportsRawUpdate,
   type InkPoint,
+  type RecoveryReason,
+  type Sample,
   type StrokeStyle,
 } from '@kayospace/ink';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from './settings';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 interface Stroke {
   points: InkPoint[];
@@ -31,12 +34,35 @@ interface ActiveStroke {
   pendingEventTime: number | null;
 }
 
+/** Прямоугольник в пикселях устройства. */
+interface Rect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 const settings: Settings = loadSettings();
 const stats = new InkStats();
 const strokes: Stroke[] = [];
 let active: ActiveStroke | null = null;
 let pressing = false;
 let dirty = true;
+
+/** Нужна полная перерисовка (resize, тема, отмена, настройки…). */
+let fullRepaint = true;
+/** Накопленная область для частичной перерисовки. */
+let pendingRegion: Rect | null = null;
+/** Где хвост был нарисован в прошлом кадре — его нужно стереть. */
+let prevTail: Rect | null = null;
+
+const recoveries: Record<RecoveryReason, number> = {
+  'lost-up': 0,
+  hover: 0,
+  'lost-capture': 0,
+  blur: 0,
+};
+const errors: string[] = [];
 
 const env = {
   tauri: typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window,
@@ -51,7 +77,7 @@ const env = {
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <header class="bar">
-    <div class="brand"><b>Kayospace</b><span>Pen Lab</span></div>
+    <div class="brand"><b>Kayospace</b><span>Pen Lab</span><em class="badge" id="err-badge" hidden></em></div>
     <div class="actions">
       <button id="btn-undo" type="button" title="Отменить последний штрих (Ctrl/Cmd+Z)">Отменить</button>
       <button id="btn-clear" type="button">Очистить</button>
@@ -66,9 +92,10 @@ app.innerHTML = `
     <div class="readout"><dt>Макс. давл.</dt><dd id="r-maxp">—</dd></div>
     <div class="readout"><dt>Наклон X / Y</dt><dd id="r-tilt">—</dd></div>
     <div class="readout"><dt>События пера</dt><dd id="r-hz">—</dd></div>
-    <div class="readout"><dt>Точек/событие</dt><dd id="r-coal">—</dd></div>
+    <div class="readout"><dt>Склейка</dt><dd id="r-coal">—</dd></div>
     <div class="readout key"><dt>Задержка ср.</dt><dd id="r-lat">—</dd></div>
     <div class="readout"><dt>Задержка p95</dt><dd id="r-p95">—</dd></div>
+    <div class="readout"><dt>Отрисовка</dt><dd id="r-paint">—</dd></div>
     <div class="readout"><dt>Кадры</dt><dd id="r-fps">—</dd></div>
   </dl>
   <main class="work">
@@ -131,6 +158,19 @@ const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) 
 const stage = $<HTMLDivElement>('stage');
 const panel = $<HTMLElement>('panel');
 const hint = $<HTMLElement>('hint');
+
+// ---------- Ошибки: не даём одной ошибке остановить стенд ----------
+
+function recordError(where: string, err: unknown): void {
+  const msg = `${where}: ${err instanceof Error ? err.message : String(err)}`;
+  if (errors.length < 20) errors.push(msg);
+  console.error('[pen-lab]', msg, err);
+  const badge = $('err-badge');
+  badge.textContent = `Ошибок: ${errors.length} — пришлите отчёт`;
+  badge.hidden = false;
+}
+window.addEventListener('error', (e) => recordError('window', e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => recordError('promise', e.reason));
 
 // ---------- Цвета из темы ----------
 
@@ -202,8 +242,9 @@ function resize(): void {
   activeLayer.width = w;
   activeLayer.height = h;
   if (active) active.drawnUpTo = 0; // слой очищен — дорисуем активный штрих заново
+  gridPattern = null;
   rebuildCommitted();
-  paint();
+  repaintAll();
 }
 
 function strokeStyleFromSettings(simulatePressure: boolean): StrokeStyle {
@@ -243,45 +284,156 @@ function getGrid(): CanvasPattern | null {
   return gridPattern;
 }
 
-function paint(): void {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const flashing = settings.flash && pressing;
-  ctx.fillStyle = flashing ? colors.flash : colors.paper;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (!flashing) {
-    const grid = getGrid();
-    if (grid) {
-      ctx.fillStyle = grid;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-  ctx.drawImage(committed, 0, 0);
+// ---------- Области перерисовки ----------
 
+/** Рамка сэмплов (CSS-пиксели) → прямоугольник в пикселях устройства с запасом на сглаживание. */
+function samplesRect(samples: readonly Sample[], from = 0, minR = 0): Rect | null {
+  if (samples.length <= from) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = Math.max(0, from); i < samples.length; i++) {
+    const s = samples[i]!;
+    const r = Math.max(s.r, minR);
+    if (s.x - r < x0) x0 = s.x - r;
+    if (s.y - r < y0) y0 = s.y - r;
+    if (s.x + r > x1) x1 = s.x + r;
+    if (s.y + r > y1) y1 = s.y + r;
+  }
+  if (!Number.isFinite(x0 + y0 + x1 + y1)) return null;
+  const pad = 2;
+  return {
+    x0: Math.floor(x0 * dpr) - pad,
+    y0: Math.floor(y0 * dpr) - pad,
+    x1: Math.ceil(x1 * dpr) + pad,
+    y1: Math.ceil(y1 * dpr) + pad,
+  };
+}
+
+function union(a: Rect | null, b: Rect | null): Rect | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    x0: Math.min(a.x0, b.x0),
+    y0: Math.min(a.y0, b.y0),
+    x1: Math.max(a.x1, b.x1),
+    y1: Math.max(a.y1, b.y1),
+  };
+}
+
+function invalidate(r: Rect | null): void {
+  pendingRegion = union(pendingRegion, r);
+  dirty = true;
+}
+
+function repaintAll(): void {
+  fullRepaint = true;
+  paint();
+}
+
+// ---------- Отрисовка кадра ----------
+
+function paint(): void {
+  const t0 = performance.now();
+  try {
+    paintFrame();
+  } catch (err) {
+    recordError('paint', err);
+    fullRepaint = true; // следующий кадр — с чистого листа
+  } finally {
+    dirty = false;
+    stats.paintTook(performance.now() - t0);
+  }
+}
+
+function paintFrame(): void {
+  let tail: Sample[] = [];
+  let highlight: InkPoint[] = [];
   if (active) {
     const b = active.builder;
     // 1. Новые стабильные сэмплы — на слой активного штриха (рисуются один раз).
     if (b.samples.length > active.drawnUpTo) {
-      if (active.drawnUpTo === 0) clearActiveLayer();
+      const from = active.drawnUpTo;
+      if (from === 0) clearActiveLayer();
       actx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      fillSamples(actx, b.samples, colors.ink, active.drawnUpTo);
+      fillSamples(actx, b.samples, colors.ink, from);
+      invalidate(samplesRect(b.samples, Math.max(0, from - 1)));
       active.drawnUpTo = b.samples.length;
     }
-    ctx.drawImage(activeLayer, 0, 0);
-    // 2. Хвост (последний кусок + предсказание) — заново каждый кадр.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const tail = b.tail(active.predicted);
+    // 2. Хвост (последний кусок + предсказание) рисуется заново каждый кадр.
     const lastStable = b.samples[b.samples.length - 1];
-    fillSamples(ctx, lastStable ? [lastStable, ...tail] : tail, colors.ink);
+    const fresh = b.tail(active.predicted);
+    tail = lastStable ? [lastStable, ...fresh] : fresh;
     if (settings.highlightPredicted && active.predicted.length > 0) {
-      const last = active.points[active.points.length - 1]!;
-      drawPolyline(ctx, [last, ...active.predicted], colors.accent, 2);
+      highlight = [active.points[active.points.length - 1]!, ...active.predicted];
     }
-    if (active.pendingEventTime !== null) {
-      stats.painted(active.pendingEventTime, performance.now());
-      active.pendingEventTime = null;
-    }
+    const tailRect = union(
+      samplesRect(tail),
+      samplesRect(
+        highlight.map((p) => ({ x: p.x, y: p.y, r: 2 })),
+        0,
+        2,
+      ),
+    );
+    invalidate(prevTail);
+    invalidate(tailRect);
+    prevTail = tailRect;
+  } else if (prevTail) {
+    invalidate(prevTail);
+    prevTail = null;
   }
-  dirty = false;
+
+  const region = fullRepaint ? null : pendingRegion;
+  if (!fullRepaint && !region) return;
+
+  // Обрезаем область по канве.
+  let x = 0;
+  let y = 0;
+  let w = canvas.width;
+  let h = canvas.height;
+  if (region) {
+    x = Math.max(0, region.x0);
+    y = Math.max(0, region.y0);
+    w = Math.min(canvas.width, region.x1) - x;
+    h = Math.min(canvas.height, region.y1) - y;
+  }
+  fullRepaint = false;
+  pendingRegion = null;
+  if (w <= 0 || h <= 0) return;
+
+  ctx.save();
+  try {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (region) {
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+    }
+    const flashing = settings.flash && pressing;
+    ctx.fillStyle = flashing ? colors.flash : colors.paper;
+    ctx.fillRect(x, y, w, h);
+    if (!flashing) {
+      const grid = getGrid();
+      if (grid) {
+        ctx.fillStyle = grid;
+        ctx.fillRect(x, y, w, h);
+      }
+    }
+    ctx.drawImage(committed, x, y, w, h, x, y, w, h);
+    if (active) {
+      ctx.drawImage(activeLayer, x, y, w, h, x, y, w, h);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      fillSamples(ctx, tail, colors.ink);
+      if (highlight.length > 1) drawPolyline(ctx, highlight, colors.accent, 2);
+      if (active.pendingEventTime !== null) {
+        stats.painted(active.pendingEventTime, performance.now());
+        active.pendingEventTime = null;
+      }
+    }
+  } finally {
+    ctx.restore();
+  }
 }
 
 function schedule(): void {
@@ -325,10 +477,26 @@ function removeExample(): void {
   if (strokes.length !== before) {
     rebuildCommitted();
     updateHint();
+    fullRepaint = true;
   }
 }
 
 // ---------- Ввод ----------
+
+function endStroke(): void {
+  if (active) {
+    const finished = active.builder.finish();
+    strokes.push({ points: active.points, style: active.style });
+    cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fillSamples(cctx, finished, colors.ink);
+    invalidate(samplesRect(finished, Math.max(0, active.drawnUpTo - 1)));
+  }
+  active = null;
+  clearActiveLayer();
+  if (pressing && settings.flash) fullRepaint = true;
+  pressing = false;
+  schedule();
+}
 
 const input = new PenInput(
   stage,
@@ -337,6 +505,7 @@ const input = new PenInput(
     onStart(info) {
       removeExample();
       pressing = true;
+      if (settings.flash) fullRepaint = true;
       stats.pointerType = info.pointerType;
       const style = strokeStyleFromSettings(!info.hasPressure);
       const builder = new StrokeBuilder(style);
@@ -363,25 +532,49 @@ const input = new PenInput(
       stats.predictedLast = predicted.length;
       schedule();
     },
-    onEnd() {
-      if (active) {
-        strokes.push({ points: active.points, style: active.style });
-        cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        fillSamples(cctx, active.builder.finish(), colors.ink);
-      }
-      active = null;
-      clearActiveLayer();
-      pressing = false;
-      schedule();
-    },
+    onEnd: endStroke,
     onSample(event, coalesced) {
       stats.sample(event, coalesced);
     },
     onRejected() {
       stats.rejected++;
     },
+    onRecover(reason) {
+      recoveries[reason]++;
+    },
   },
 );
+
+// Диагностика: считаем pointermove и pointerrawupdate одновременно, чтобы за одну сессию
+// понять, какой из них в этой среде приходит чаще. На рисование это не влияет.
+const diag = {
+  move: new RateMeter(1000),
+  moveSamples: new RateMeter(1000),
+  raw: new RateMeter(1000),
+  rawSamples: new RateMeter(1000),
+  peak: { move: 0, moveSamples: 0, raw: 0, rawSamples: 0 },
+};
+function diagListener(events: RateMeter, samples: RateMeter): (e: PointerEvent) => void {
+  return (e) => {
+    if (e.buttons === 0) return;
+    events.mark(e.timeStamp);
+    const n = Math.max(1, e.getCoalescedEvents?.().length ?? 1);
+    for (let i = 0; i < n; i++) samples.mark(e.timeStamp);
+  };
+}
+stage.addEventListener('pointermove', diagListener(diag.move, diag.moveSamples));
+if (env.rawUpdate) {
+  stage.addEventListener(
+    'pointerrawupdate' as 'pointermove',
+    diagListener(diag.raw, diag.rawSamples),
+  );
+}
+function updateDiagPeaks(now: number): void {
+  diag.peak.move = Math.max(diag.peak.move, diag.move.rate(now));
+  diag.peak.moveSamples = Math.max(diag.peak.moveSamples, diag.moveSamples.rate(now));
+  diag.peak.raw = Math.max(diag.peak.raw, diag.raw.rate(now));
+  diag.peak.rawSamples = Math.max(diag.peak.rawSamples, diag.rawSamples.rate(now));
+}
 
 // ---------- Цикл кадров и показания ----------
 
@@ -395,36 +588,48 @@ const r = {
   coal: $('r-coal'),
   lat: $('r-lat'),
   p95: $('r-p95'),
+  paint: $('r-paint'),
   fps: $('r-fps'),
 };
 
 const typeNames: Record<string, string> = { pen: 'перо', touch: 'палец', mouse: 'мышь', '—': '—' };
 const fmt = (v: number, digits = 0): string => (Number.isFinite(v) ? v.toFixed(digits) : '—');
+const withUnit = (v: number, digits: number, unit: string): string =>
+  Number.isFinite(v) ? `${fmt(v, digits)}<small>${unit}</small>` : '—';
+
+function updateHud(): void {
+  const now = performance.now();
+  const s = stats.snapshot(now);
+  updateDiagPeaks(now);
+  r.type.textContent = typeNames[s.pointerType] ?? s.pointerType;
+  const showP = s.pointerType === 'pen';
+  r.pressure.textContent = showP ? fmt(s.pressure, 2) : '—';
+  r.pressureBar.style.width = showP ? `${Math.round(s.pressure * 100)}%` : '0';
+  r.maxp.textContent = s.maxPressure > 0 ? fmt(s.maxPressure, 2) : '—';
+  r.tilt.textContent = showP ? `${fmt(s.tiltX)}° / ${fmt(s.tiltY)}°` : '—';
+  r.hz.innerHTML = s.peakEventHz > 0 ? withUnit(s.peakEventHz, 0, 'Гц пик') : '—';
+  r.coal.textContent = fmt(s.coalescedPerEvent, 1);
+  r.lat.innerHTML = withUnit(s.latencyMean, 1, 'мс');
+  r.p95.innerHTML = withUnit(s.latencyP95, 1, 'мс');
+  r.paint.innerHTML = withUnit(s.paintMean, 1, 'мс');
+  r.fps.innerHTML = withUnit(s.fps, 0, 'к/с');
+}
 
 let lastHud = 0;
 function frame(t: number): void {
-  stats.frame(t);
-  if (dirty) paint();
-  if (t - lastHud > 120) {
-    lastHud = t;
-    const s = stats.snapshot(performance.now());
-    r.type.textContent = typeNames[s.pointerType] ?? s.pointerType;
-    const showP = s.pointerType === 'pen';
-    r.pressure.textContent = showP ? fmt(s.pressure, 2) : '—';
-    r.pressureBar.style.width = showP ? `${Math.round(s.pressure * 100)}%` : '0';
-    r.maxp.textContent = s.maxPressure > 0 ? fmt(s.maxPressure, 2) : '—';
-    r.tilt.textContent = showP ? `${fmt(s.tiltX)}° / ${fmt(s.tiltY)}°` : '—';
-    r.hz.innerHTML = s.peakEventHz > 0 ? `${fmt(s.peakEventHz)}<small>Гц пик</small>` : '—';
-    r.coal.textContent = fmt(s.coalescedPerEvent, 1);
-    r.lat.innerHTML = Number.isFinite(s.latencyMean)
-      ? `${fmt(s.latencyMean, 1)}<small>мс</small>`
-      : '—';
-    r.p95.innerHTML = Number.isFinite(s.latencyP95)
-      ? `${fmt(s.latencyP95, 1)}<small>мс</small>`
-      : '—';
-    r.fps.innerHTML = `${fmt(s.fps)}<small>к/с</small>`;
+  try {
+    stats.frame(t);
+    if (dirty) paint();
+    if (t - lastHud > 120) {
+      lastHud = t;
+      updateHud();
+    }
+  } catch (err) {
+    recordError('frame', err);
+  } finally {
+    // Цикл кадров не должен останавливаться ни при какой ошибке.
+    requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
 }
 
 // ---------- Настройки ----------
@@ -492,6 +697,7 @@ function update(next: Partial<Settings>): void {
   if (settings.desync !== prevDesync) createCanvas();
   syncControls();
   renderEnv();
+  fullRepaint = true;
   schedule();
 }
 
@@ -532,7 +738,7 @@ function undo(): void {
   strokes.pop();
   rebuildCommitted();
   updateHint();
-  paint();
+  repaintAll();
 }
 
 $('btn-undo').addEventListener('click', undo);
@@ -540,9 +746,13 @@ $('btn-clear').addEventListener('click', () => {
   strokes.length = 0;
   rebuildCommitted();
   updateHint();
-  paint();
+  repaintAll();
 });
-$('btn-reset').addEventListener('click', () => stats.reset());
+$('btn-reset').addEventListener('click', () => {
+  stats.reset();
+  diag.peak = { move: 0, moveSamples: 0, raw: 0, rawSamples: 0 };
+  for (const k of Object.keys(recoveries) as RecoveryReason[]) recoveries[k] = 0;
+});
 $('btn-settings').addEventListener('click', () => {
   panel.hidden = !panel.hidden;
   $('btn-settings').setAttribute('aria-pressed', String(!panel.hidden));
@@ -558,7 +768,9 @@ window.addEventListener('keydown', (e) => {
 // ---------- Отчёт ----------
 
 function buildReport(): string {
-  const s = stats.snapshot(performance.now());
+  const now = performance.now();
+  const s = stats.snapshot(now);
+  updateDiagPeaks(now);
   const round = (v: number, d = 1): number | null =>
     Number.isFinite(v) ? Number(v.toFixed(d)) : null;
   const userStrokes = strokes.filter((x) => !x.example);
@@ -573,6 +785,7 @@ function buildReport(): string {
         dpr: window.devicePixelRatio,
         screen: `${screen.width}x${screen.height}`,
         viewport: `${window.innerWidth}x${window.innerHeight}`,
+        canvas: `${canvas.width}x${canvas.height}`,
         desyncApplied: env.desyncApplied,
         coalescedSupported: env.coalesced,
         predictedSupported: env.predicted,
@@ -586,11 +799,22 @@ function buildReport(): string {
         coalescedPerEvent: round(s.coalescedPerEvent, 2),
         inputToPaintMeanMs: round(s.latencyMean),
         inputToPaintP95Ms: round(s.latencyP95),
+        paintMeanMs: round(s.paintMean, 2),
+        paintP95Ms: round(s.paintP95, 2),
         fps: round(s.fps, 0),
+        longFrames: s.longFrames,
         rejectedTouches: s.rejected,
         strokes: userStrokes.length,
         points: userStrokes.reduce((n, x) => n + x.points.length, 0),
       },
+      eventSources: {
+        pointermovePeakHz: round(diag.peak.move, 0),
+        pointermoveSamplesPeakHz: round(diag.peak.moveSamples, 0),
+        rawupdatePeakHz: env.rawUpdate ? round(diag.peak.raw, 0) : null,
+        rawupdateSamplesPeakHz: env.rawUpdate ? round(diag.peak.rawSamples, 0) : null,
+      },
+      recoveries,
+      errors,
     },
     null,
     2,
@@ -631,13 +855,13 @@ addExampleStroke();
 rebuildCommitted();
 updateHint();
 syncControls();
-paint();
+repaintAll();
 
 new ResizeObserver(() => resize()).observe(stage);
 const onTheme = (): void => {
   readColors();
   rebuildCommitted();
-  paint();
+  repaintAll();
 };
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
 new MutationObserver(onTheme).observe(document.documentElement, {

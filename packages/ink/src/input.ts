@@ -4,7 +4,9 @@
  * - собирает все промежуточные точки (getCoalescedEvents): перо шлёт события чаще, чем обновляется экран;
  * - по желанию отдаёт предсказанные точки (getPredictedEvents), чтобы рисовать чуть впереди пера;
  * - умеет слушать pointerrawupdate (меньше задержка, только в защищённом контексте Chromium);
- * - отсекает касания ладонью в режимах «только перо» и «авто».
+ * - отсекает касания ладонью в режимах «только перо» и «авто»;
+ * - восстанавливается, если система потеряла «отпускание» пера: иначе ввод навсегда
+ *   считал бы штрих незаконченным и игнорировал новые касания.
  */
 
 import type { StrokePoint } from '@kayospace/model';
@@ -29,26 +31,45 @@ export interface StrokeStart {
   event: PointerEvent;
 }
 
+/** Почему штрих завершён принудительно. */
+export type RecoveryReason =
+  /** Новое касание тем же пером, хотя «отпускания» не было. */
+  | 'lost-up'
+  /** Перо движется без нажатия (наведение) — касание уже закончилось. */
+  | 'hover'
+  /** Браузер отобрал захват указателя. */
+  | 'lost-capture'
+  /** Окно потеряло фокус или страница скрыта. */
+  | 'blur';
+
 export interface PenInputHandlers {
   onStart(info: StrokeStart): void;
   onMove(points: InkPoint[], predicted: InkPoint[], event: PointerEvent): void;
-  onEnd(event: PointerEvent): void;
-  onCancel?(event: PointerEvent): void;
+  /** Штрих закончен. event = null, если он завершён принудительно без события (потеря фокуса). */
+  onEnd(event: PointerEvent | null): void;
+  onCancel?(event: PointerEvent | null): void;
   /** Для статистики: каждое событие движения и сколько точек в нём склеено. */
   onSample?(event: PointerEvent, coalesced: readonly PointerEvent[]): void;
   /** Касание отброшено как ладонь. */
   onRejected?(event: PointerEvent): void;
+  /** Штрих завершён принудительно (см. RecoveryReason). */
+  onRecover?(reason: RecoveryReason): void;
 }
 
 export const supportsRawUpdate = (): boolean =>
   typeof window !== 'undefined' && 'onpointerrawupdate' in window;
 
+/** Касание пальцем без событий дольше этого времени считаем потерянным. */
+const STALE_TOUCH_MS = 300;
+
 export class PenInput {
   private active: number | null = null;
   private activeType = '';
+  private lastActivity = 0;
   private penSeen = false;
   private rect: DOMRect;
   private moveEvent: 'pointermove' | 'pointerrawupdate' = 'pointermove';
+  private bound = false;
 
   constructor(
     private readonly el: HTMLElement,
@@ -58,9 +79,13 @@ export class PenInput {
     this.rect = el.getBoundingClientRect();
     el.style.touchAction = 'none';
     el.addEventListener('pointerdown', this.onDown);
-    el.addEventListener('pointerup', this.onUp);
-    el.addEventListener('pointercancel', this.onCancel);
+    el.addEventListener('lostpointercapture', this.onLostCapture);
     el.addEventListener('contextmenu', preventDefault);
+    // Отпускание слушаем на окне: так оно не потеряется, даже если захват не сработал.
+    window.addEventListener('pointerup', this.onUp, true);
+    window.addEventListener('pointercancel', this.onCancel, true);
+    window.addEventListener('blur', this.onBlur);
+    document.addEventListener('visibilitychange', this.onVisibility);
     this.bindMove();
   }
 
@@ -75,20 +100,23 @@ export class PenInput {
 
   destroy(): void {
     this.el.removeEventListener('pointerdown', this.onDown);
-    this.el.removeEventListener('pointerup', this.onUp);
-    this.el.removeEventListener('pointercancel', this.onCancel);
+    this.el.removeEventListener('lostpointercapture', this.onLostCapture);
     this.el.removeEventListener('contextmenu', preventDefault);
     this.el.removeEventListener(this.moveEvent, this.onMove as EventListener);
+    window.removeEventListener('pointerup', this.onUp, true);
+    window.removeEventListener('pointercancel', this.onCancel, true);
+    window.removeEventListener('blur', this.onBlur);
+    document.removeEventListener('visibilitychange', this.onVisibility);
   }
 
   private bindMove(): void {
     const wanted =
       this.options.useRawUpdate && supportsRawUpdate() ? 'pointerrawupdate' : 'pointermove';
-    if (wanted === this.moveEvent && this.el.dataset.inkBound === '1') return;
+    if (wanted === this.moveEvent && this.bound) return;
     this.el.removeEventListener(this.moveEvent, this.onMove as EventListener);
     this.moveEvent = wanted;
     this.el.addEventListener(this.moveEvent, this.onMove as EventListener);
-    this.el.dataset.inkBound = '1';
+    this.bound = true;
   }
 
   private accepts(e: PointerEvent): boolean {
@@ -103,11 +131,33 @@ export class PenInput {
     return true;
   }
 
+  /** Завершить текущий штрих. */
+  private finish(e: PointerEvent | null, cancel: boolean): void {
+    if (this.active === null) return;
+    const id = this.active;
+    this.active = null;
+    try {
+      if (this.el.hasPointerCapture?.(id)) this.el.releasePointerCapture(id);
+    } catch {
+      /* захват уже снят */
+    }
+    if (cancel) (this.handlers.onCancel ?? this.handlers.onEnd)(e);
+    else this.handlers.onEnd(e);
+  }
+
   private onDown = (e: PointerEvent): void => {
     if (this.active !== null) {
-      // Второе касание во время штриха (обычно ладонь) — игнорируем.
-      if (e.pointerType !== this.activeType) this.handlers.onRejected?.(e);
-      return;
+      const sameDevice = e.pointerType === this.activeType;
+      const stale = e.timeStamp - this.lastActivity > STALE_TOUCH_MS;
+      // Перо у устройства одно: новое касание пером значит, что «отпускание» потерялось.
+      // Пальцев может быть несколько (ладонь), поэтому для них ждём паузы.
+      if (sameDevice && (e.pointerType !== 'touch' || stale)) {
+        this.handlers.onRecover?.('lost-up');
+        this.finish(e, false);
+      } else {
+        if (!sameDevice) this.handlers.onRejected?.(e);
+        return;
+      }
     }
     if (!this.accepts(e)) {
       this.handlers.onRejected?.(e);
@@ -117,6 +167,7 @@ export class PenInput {
     this.rect = this.el.getBoundingClientRect();
     this.active = e.pointerId;
     this.activeType = e.pointerType;
+    this.lastActivity = e.timeStamp;
     try {
       this.el.setPointerCapture(e.pointerId);
     } catch {
@@ -133,6 +184,16 @@ export class PenInput {
 
   private onMove = (e: PointerEvent): void => {
     if (e.pointerId !== this.active) return;
+    // Перо без нажатия и без давления (наведение) или мышь без кнопок — касания уже нет.
+    const released =
+      e.buttons === 0 &&
+      (e.pointerType === 'mouse' || (e.pointerType === 'pen' && !(e.pressure > 0)));
+    if (released) {
+      this.handlers.onRecover?.('hover');
+      this.finish(e, false);
+      return;
+    }
+    this.lastActivity = e.timeStamp;
     const coalesced = e.getCoalescedEvents?.() ?? [];
     const events = coalesced.length > 0 ? coalesced : [e];
     const predicted = this.options.usePredicted ? (e.getPredictedEvents?.() ?? []) : [];
@@ -145,20 +206,35 @@ export class PenInput {
   };
 
   private onUp = (e: PointerEvent): void => {
-    if (e.pointerId !== this.active) return;
-    this.active = null;
-    this.handlers.onEnd(e);
+    if (e.pointerId === this.active) this.finish(e, false);
   };
 
   private onCancel = (e: PointerEvent): void => {
-    if (e.pointerId !== this.active) return;
-    this.active = null;
-    (this.handlers.onCancel ?? this.handlers.onEnd)(e);
+    if (e.pointerId === this.active) this.finish(e, true);
+  };
+
+  private onLostCapture = (e: PointerEvent): void => {
+    // После обычного отпускания active уже null — сюда попадаем только при отобранном захвате.
+    if (e.pointerId === this.active) {
+      this.handlers.onRecover?.('lost-capture');
+      this.finish(e, false);
+    }
+  };
+
+  private onBlur = (): void => {
+    if (this.active !== null) {
+      this.handlers.onRecover?.('blur');
+      this.finish(null, true);
+    }
+  };
+
+  private onVisibility = (): void => {
+    if (document.visibilityState === 'hidden') this.onBlur();
   };
 
   private toPoint(e: PointerEvent): InkPoint {
     const isPen = e.pointerType === 'pen';
-    // Мышь и палец давление не передают (0 или 0.5) — подставляем 0.5, а форму штриха имитирует perfect-freehand.
+    // Мышь и палец давление не передают (0 или 0.5) — подставляем 0.5, форму штриха имитирует render.ts.
     const p = isPen ? clamp01(e.pressure) : 0.5;
     return {
       x: e.clientX - this.rect.left,
@@ -172,4 +248,5 @@ export class PenInput {
 }
 
 const preventDefault = (e: Event): void => e.preventDefault();
-const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+/** NaN тоже приводим к безопасному значению: некоторые устройства шлют мусор в pressure. */
+const clamp01 = (v: number): number => (!(v > 0) ? 0 : v > 1 ? 1 : v);

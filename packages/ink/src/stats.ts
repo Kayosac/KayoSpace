@@ -74,7 +74,10 @@ export interface InkStatsSnapshot {
   coalescedPerEvent: number;
   latencyMean: number;
   latencyP95: number;
+  paintMean: number;
+  paintP95: number;
   fps: number;
+  longFrames: number;
   predictedLast: number;
   rejected: number;
 }
@@ -93,6 +96,11 @@ export class InkStats {
   readonly frames = new RateMeter(1000);
   readonly latency = new RollingSamples(240);
   readonly coalesced = new RollingSamples(120);
+  /** Сколько миллисекунд занимает сама отрисовка кадра. */
+  readonly paintCost = new RollingSamples(240);
+  /** Кадры, между которыми прошло больше 34 мс (пропущен минимум один кадр при 60 Гц). */
+  longFrames = 0;
+  private lastFrame = 0;
 
   sample(e: PointerEvent, coalesced: readonly PointerEvent[]): void {
     this.pointerType = e.pointerType;
@@ -110,16 +118,24 @@ export class InkStats {
   }
 
   frame(t: number): void {
+    if (this.lastFrame > 0 && t - this.lastFrame > 34) this.longFrames++;
+    this.lastFrame = t;
     this.frames.mark(t);
+  }
+
+  paintTook(ms: number): void {
+    this.paintCost.push(ms);
   }
 
   reset(): void {
     this.maxPressure = 0;
     this.rejected = 0;
     this.peakEventHz = 0;
+    this.longFrames = 0;
     this.events.clear();
     this.latency.clear();
     this.coalesced.clear();
+    this.paintCost.clear();
   }
 
   snapshot(now: number): InkStatsSnapshot {
@@ -136,7 +152,10 @@ export class InkStats {
       coalescedPerEvent: this.coalesced.mean(),
       latencyMean: this.latency.mean(),
       latencyP95: this.latency.percentile(0.95),
+      paintMean: this.paintCost.mean(),
+      paintP95: this.paintCost.percentile(0.95),
       fps: this.frames.rate(now),
+      longFrames: this.longFrames,
       predictedLast: this.predictedLast,
       rejected: this.rejected,
     };
