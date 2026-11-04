@@ -86,7 +86,6 @@ fi
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
   ufw allow 80/tcp >/dev/null
   ufw allow "$HTTPS_PORT/tcp" >/dev/null
-  ufw allow "$HTTPS_PORT/udp" >/dev/null
   echo "Открыл порты 80 и $HTTPS_PORT в ufw"
 fi
 

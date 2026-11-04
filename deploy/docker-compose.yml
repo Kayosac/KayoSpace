@@ -21,7 +21,6 @@ services:
       # 80 — выдача сертификата; HTTPS — 443 или другой порт, если 443 занят (HTTPS_PORT в .env)
       - '80:80'
       - '${HTTPS_PORT:-443}:${HTTPS_PORT:-443}'
-      - '${HTTPS_PORT:-443}:${HTTPS_PORT:-443}/udp'
     environment:
       HUB_DOMAIN: ${HUB_DOMAIN}
       HTTPS_PORT: ${HTTPS_PORT:-443}
