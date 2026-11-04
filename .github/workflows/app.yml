@@ -1,6 +1,7 @@
 name: Сборка приложения
 
 # Запуск вручную (Actions → «Сборка приложения» → Run workflow) или по тегу v*.
+# По тегу v* все сборки дополнительно публикуются в GitHub Release.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +11,9 @@ on:
         default: 'android,macos,windows'
   push:
     tags: ['v*']
+
+permissions:
+  contents: write
 
 concurrency:
   group: app-${{ github.ref }}
@@ -68,10 +72,17 @@ jobs:
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
 
+      - name: Понятное имя файла
+        run: |
+          mkdir -p out
+          APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          cp "$APK" "out/kayospace-${GITHUB_REF_NAME//\//-}-android-arm64.apk"
+          ls -la out
+
       - uses: actions/upload-artifact@v4
         with:
           name: kayospace-android-apk
-          path: apps/app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: out/*.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -136,3 +147,22 @@ jobs:
           path: ${{ matrix.bundle }}
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Релиз
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: find dist -type f -exec ls -la {} \;
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          prerelease: true
+          generate_release_notes: true
