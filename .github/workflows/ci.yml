@@ -156,6 +156,9 @@ jobs:
         run: |
           HUB_DOMAIN=example.sslip.io HUB_TOKEN=x docker compose -f deploy/docker-compose.yml config -q
           HUB_DOMAIN=example.sslip.io HUB_TOKEN=x HTTPS_PORT=8443 docker compose -f deploy/docker-compose.yml config | grep -q 'published: "8443"'
+          # Исполнитель ИИ включается профилем ai.
+          HUB_DOMAIN=example.sslip.io HUB_TOKEN=x COMPOSE_PROFILES=ai docker compose -f deploy/docker-compose.yml config --services | grep -qx ai-worker
+          ! HUB_DOMAIN=example.sslip.io HUB_TOKEN=x docker compose -f deploy/docker-compose.yml config --services | grep -qx ai-worker
 
       - name: Caddyfile
         run: |
@@ -176,7 +179,16 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/boards)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-token' http://127.0.0.1:4000/api/boards)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:4000/mcp)" = 401
+          # Коннектор Claude: хаб объявляет OAuth.
+          curl -fsS -H 'Host: example.sslip.io' http://127.0.0.1:4000/.well-known/oauth-protected-resource | grep -q '/mcp'
+          curl -fsS -H 'Host: example.sslip.io' http://127.0.0.1:4000/.well-known/oauth-authorization-server | grep -q 'registration_endpoint'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-token' http://127.0.0.1:4000/api/ai/status)" = 200
           echo "Образ работает, доступ по токену проверен"
+
+      - name: Образ исполнителя ИИ
+        run: |
+          docker build -f deploy/ai-worker.Dockerfile -t kayospace-ai-worker .
+          docker run --rm --entrypoint claude kayospace-ai-worker --version
 
       - name: Логи хаба
         if: always()

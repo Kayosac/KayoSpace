@@ -22,14 +22,20 @@ function fromBase64(b64: string): Uint8Array {
 }
 
 export function elementToWire(el: CanvasElement): WireElement {
-  if (el.type !== 'stroke') return el as WireElement;
-  return { ...el, props: { ...el.props, points: { $b64: toBase64(el.props.points) } } } as WireElement;
+  if (el.type !== 'stroke') return el as unknown as WireElement;
+  return {
+    ...el,
+    props: { ...el.props, points: { $b64: toBase64(el.props.points) } },
+  } as WireElement;
 }
 
 export function elementFromWire(w: WireElement): CanvasElement {
   const pts = (w.props as { points?: unknown }).points;
   if (w.type === 'stroke' && pts && typeof pts === 'object' && '$b64' in pts) {
-    return { ...w, props: { ...w.props, points: fromBase64((pts as { $b64: string }).$b64) } } as CanvasElement;
+    return {
+      ...w,
+      props: { ...w.props, points: fromBase64((pts as { $b64: string }).$b64) },
+    } as CanvasElement;
   }
   return w as unknown as CanvasElement;
 }

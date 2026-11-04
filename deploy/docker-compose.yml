@@ -1,6 +1,15 @@
-# Хаб Kayospace на VPS: хаб + Caddy (автоматический HTTPS от Let's Encrypt).
+# Хаб Kayospace на VPS: хаб + Caddy (автоматический HTTPS от Let's Encrypt)
+# и, по желанию, исполнитель ИИ (Claude Code на вашей подписке — решение 0007).
 # Переменные берутся из deploy/.env (его создаёт setup.sh).
+# Исполнитель ИИ включается строками в .env: COMPOSE_PROFILES=ai и CLAUDE_CODE_OAUTH_TOKEN=…
 name: kayospace
+
+# Логи контейнеров не растут бесконечно: до 3 файлов по 10 МБ.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
 
 services:
   hub:
@@ -11,8 +20,12 @@ services:
     environment:
       HUB_TOKEN: ${HUB_TOKEN:?Задайте HUB_TOKEN в deploy/.env}
       PUBLIC_HOST: ${HUB_DOMAIN:?Задайте HUB_DOMAIN в deploy/.env}
+      # Исполнитель ИИ ходит к хабу внутри docker-сети по имени hub.
+      INTERNAL_HOSTS: hub
     volumes:
       - hub-data:/data
+    mem_limit: ${HUB_MEMORY:-768m}
+    logging: *logging
 
   caddy:
     image: caddy:2
@@ -30,6 +43,28 @@ services:
       - caddy-config:/config
     depends_on:
       - hub
+    mem_limit: 192m
+    logging: *logging
+
+  # Исполнитель ИИ: берёт задачи кнопки «✦ ИИ» и выполняет их официальным Claude Code.
+  # Токен подписки: на своём компьютере `claude setup-token`, строку — в CLAUDE_CODE_OAUTH_TOKEN.
+  ai-worker:
+    profiles: [ai]
+    build:
+      context: ..
+      dockerfile: deploy/ai-worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      HUB_URL: http://hub:4000
+      HUB_TOKEN: ${HUB_TOKEN}
+      WORKER_NAME: ${AI_WORKER_NAME:-сервер}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    depends_on:
+      - hub
+    # Одна задача за раз; Claude Code — это Node, ему хватает ~1 ГБ.
+    mem_limit: ${AI_WORKER_MEMORY:-1g}
+    logging: *logging
 
 volumes:
   hub-data:

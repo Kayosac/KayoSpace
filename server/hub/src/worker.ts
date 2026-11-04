@@ -152,6 +152,7 @@ export async function workLoop(opts: WorkerOptions): Promise<void> {
   const log = opts.log ?? ((m: string) => console.log(`[ai-worker] ${m}`));
   const headers = { Authorization: `Bearer ${opts.token}`, 'Content-Type': 'application/json' };
   let pause = 1000;
+  let online = false;
   while (!opts.signal?.aborted) {
     let task: Task | null = null;
     try {
@@ -162,10 +163,14 @@ export async function workLoop(opts: WorkerOptions): Promise<void> {
         signal: opts.signal,
       });
       if (res.status === 401) throw new Error('хаб не принял токен (HUB_TOKEN)');
+      if (res.status !== 200 && res.status !== 204) throw new Error(`хаб ответил ${res.status}`);
       if (res.status === 200) task = (await res.json()) as Task;
       pause = 1000;
+      if (!online) log('на связи с хабом, жду задачи');
+      online = true;
     } catch (err) {
       if (opts.signal?.aborted) return;
+      online = false;
       log(
         `нет связи с хабом: ${err instanceof Error ? err.message : err}; повтор через ${pause / 1000} с`,
       );

@@ -196,3 +196,10 @@ export const ImageIcon = () => (
     <path d="M4 17l5-5 4 4 2.5-2.5L20 18" />
   </Svg>
 );
+
+export const SparkleIcon = () => (
+  <Svg>
+    <path d="M12 3.5l1.9 5.1a2 2 0 0 0 1.2 1.2l5.1 1.9-5.1 1.9a2 2 0 0 0-1.2 1.2L12 19.9l-1.9-5.1a2 2 0 0 0-1.2-1.2L3.8 11.7l5.1-1.9a2 2 0 0 0 1.2-1.2z" />
+    <path d="M19 3v3M17.5 4.5h3" />
+  </Svg>
+);

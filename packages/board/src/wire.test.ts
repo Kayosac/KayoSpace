@@ -12,7 +12,9 @@ describe('элементы в JSON', () => {
       { hasPressure: true, actor: me },
     );
     const back = elementFromWire(JSON.parse(JSON.stringify(elementToWire(s))));
-    expect(back.type === 'stroke' && Array.from(back.props.points)).toEqual(Array.from(s.props.points));
+    expect(back.type === 'stroke' && Array.from(back.props.points)).toEqual(
+      Array.from(s.props.points),
+    );
   });
 
   it('остальные элементы — как есть', () => {

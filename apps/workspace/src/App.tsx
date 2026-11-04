@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CanvasEngine, type EngineState } from '@kayospace/canvas';
 import type { Actor } from '@kayospace/model';
 import { BoardSession, type SessionState } from './session';
@@ -17,6 +17,8 @@ import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
 import { SelectionMenu } from './SelectionMenu';
+import { AiController, type AiAction, type AiState } from './ai';
+import { AiBar } from './AiBar';
 
 declare global {
   interface Window {
@@ -53,6 +55,8 @@ export function App() {
   const [panel, setPanel] = useState<'settings' | 'boards' | null>(null);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const ai = useMemo(() => new AiController(), []);
+  const [aiPrompt, setAiPrompt] = useState(false);
   /** Название новой доски — запишем в неё, когда она откроется. */
   const pendingName = useRef<{ id: string; name: string } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -211,6 +215,80 @@ export function App() {
     if (syncState === 'synced') void assets.uploadPending();
   }, [syncState]);
 
+  // ИИ ходит на тот же хаб.
+  useEffect(() => {
+    ai.setHub(syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null);
+  }, [ai, syncOn, hubUrl, hubToken]);
+  useEffect(() => () => ai.destroy(), [ai]);
+  const aiState = useStore<AiState>(ai);
+  // Результат готов — предпросмотр на холсте; результат убрали — убрать и предпросмотр.
+  useEffect(() => {
+    engine?.setAiPreview(aiState?.kind === 'ready' ? aiState.draft : null);
+  }, [engine, aiState]);
+  // Сменили доску — задача прошлой доски больше не нужна.
+  useEffect(() => () => ai.cancel(), [ai, board]);
+
+  /** Почему ИИ недоступен (null — доступен). */
+  const aiBlocked: string | null = !(syncOn && hubUrl.trim())
+    ? 'ИИ работает через хаб: включите синхронизацию в настройках'
+    : null;
+
+  const runAi = useCallback(
+    async (action: AiAction, prompt?: string) => {
+      if (!engine || !session) return;
+      setAiPrompt(false);
+      const sync = session.getState().sync;
+      if (sync !== 'synced') {
+        ai.fail(
+          sync === 'connecting' || sync === 'connected'
+            ? 'Доска ещё синхронизируется с хабом — попробуйте через пару секунд.'
+            : 'Нет связи с хабом — ИИ работает через него.',
+        );
+        return;
+      }
+      const selection = engine.getSelection();
+      const area = engine.getSelectionBounds() ?? engine.visibleBounds();
+      const ink = selection.some((id) => {
+        const type = engine.scene.items.get(id)?.element.type;
+        return (
+          type === 'stroke' ||
+          type === 'image' ||
+          engine.scene
+            .childrenOf(id)
+            .some((c) => engine.scene.items.get(c)?.element.type === 'stroke')
+        );
+      });
+      // Картинку выделенного видит ИИ: для распознавания всегда, для своего запроса — если есть рисунки.
+      const image =
+        action === 'recognize' || (action === 'prompt' && ink) ? await engine.exportImage() : null;
+      await ai.start({
+        board,
+        action,
+        ...(prompt ? { prompt } : {}),
+        selection,
+        area,
+        image,
+      });
+    },
+    [ai, engine, session, board],
+  );
+
+  // Ctrl/⌘ J — свой запрос к ИИ.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyJ') {
+        e.preventDefault();
+        setAiPrompt((p) => !p);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const selectedCount = engineState?.selected ?? 0;
+  const aiScope =
+    selectedCount > 0 ? `про выделенное (${selectedCount})` : 'про видимую часть доски';
+
   const insertImages = useCallback(
     async (files: File[], at?: { x: number; y: number }) => {
       if (!engine) return;
@@ -354,7 +432,35 @@ export function App() {
           <ZoomControls engine={engine} zoom={engineState.zoom} rotation={engineState.rotation} />
         )}
       </div>
-      {engine && engineState && <SelectionMenu engine={engine} state={engineState} />}
+      {engine && engineState && (
+        <SelectionMenu
+          engine={engine}
+          state={engineState}
+          ai={aiBlocked}
+          onAi={(a) => void runAi(a)}
+          onAiPrompt={() => setAiPrompt(true)}
+        />
+      )}
+      {aiState && (
+        <AiBar
+          state={aiState}
+          promptOpen={aiPrompt && !aiBlocked}
+          scope={aiScope}
+          onPrompt={(text) => void runAi('prompt', text)}
+          onClosePrompt={() => setAiPrompt(false)}
+          onApply={() => {
+            engine?.applyAiPreview();
+            ai.cancel();
+          }}
+          onDiscard={() => ai.cancel()}
+        />
+      )}
+      {aiPrompt && aiBlocked && aiState?.kind === 'idle' && (
+        <div className="ai-bar error" role="alert" data-testid="ai-bar">
+          <span className="ai-text">{aiBlocked}.</span>
+          <button onClick={() => setAiPrompt(false)}>Закрыть</button>
+        </div>
+      )}
       {engine && engineState && <NoteEditor engine={engine} state={engineState} />}
       {engine && engineState && (
         <Toolbar
@@ -363,6 +469,8 @@ export function App() {
           onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
           onImages={(files) => void insertImages(files)}
           onPaste={() => void pasteFromButton()}
+          onAi={() => setAiPrompt((p) => !p)}
+          aiOn={aiPrompt || (aiState?.kind ?? 'idle') !== 'idle'}
         />
       )}
       {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}

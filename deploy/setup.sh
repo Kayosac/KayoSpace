@@ -117,11 +117,22 @@ Pen Lab / приложение → Настройки → Синхронизац
   Хаб:   $HUB_ADDR
   Токен: (строка выше)
 
+Коннектор в приложении Claude (claude.ai, телефон, компьютер):
+  Настройки → Коннекторы → Добавить свой коннектор → URL: $HUB_URL/mcp
+  → «Подключить» → на странице хаба вставьте токен → «Разрешить»
+
 Claude Code на своём компьютере:
   claude mcp add --transport http kayospace $HUB_URL/mcp --header "Authorization: Bearer $HUB_TOKEN"
 
+ИИ в доске (кнопка «✦ ИИ») на этом сервере — по желанию:
+  1) на своём компьютере: claude setup-token  (выдаст токен подписки)
+  2) добавьте в $DIR/deploy/.env строки:
+       COMPOSE_PROFILES=ai
+       CLAUDE_CODE_OAUTH_TOKEN=<токен из шага 1>
+  3) cd $DIR/deploy && docker compose up -d --build
+
 Обновить хаб:      повторите команду установки
-Логи:              cd $DIR/deploy && docker compose logs -f hub
+Логи:              cd $DIR/deploy && docker compose logs -f hub   (ИИ: … logs -f ai-worker)
 Резервная копия:   docker run --rm -v kayospace_hub-data:/data -v "\$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .
 Показать токен:    cat $DIR/deploy/.env
 EOF

@@ -15,6 +15,7 @@ import {
   SelectIcon,
   SettingsIcon,
   ShapesIcon,
+  SparkleIcon,
   StickyIcon,
   TextIcon,
   UndoIcon,
@@ -64,7 +65,8 @@ const SHAPES: { value: ShapeKind; name: string; key: string; Icon: ComponentType
 const STICKY_NAMES = ['Жёлтый', 'Розовый', 'Мятный', 'Голубой', 'Лавандовый', 'Персиковый'];
 
 /** Можно ли прочитать системный буфер кнопкой (без клавиатуры). */
-const canReadClipboard = typeof navigator !== 'undefined' && typeof navigator.clipboard?.read === 'function';
+const canReadClipboard =
+  typeof navigator !== 'undefined' && typeof navigator.clipboard?.read === 'function';
 
 const mod =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
@@ -75,12 +77,16 @@ export function Toolbar({
   onSettings,
   onImages,
   onPaste,
+  onAi,
+  aiOn,
 }: {
   engine: CanvasEngine;
   state: EngineState;
   onSettings: () => void;
   onImages: (files: File[]) => void;
   onPaste: () => void;
+  onAi: () => void;
+  aiOn: boolean;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const tool = state.tool;
@@ -243,6 +249,15 @@ export function Toolbar({
             <PasteIcon />
           </button>
         )}
+        <button
+          className="tool ai-tool"
+          aria-label="ИИ"
+          aria-pressed={aiOn}
+          title={`Попросить ИИ (${mod}J)`}
+          onClick={onAi}
+        >
+          <SparkleIcon />
+        </button>
         <button className="tool" aria-label="Настройки" title="Настройки" onClick={onSettings}>
           <SettingsIcon />
         </button>

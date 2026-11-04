@@ -551,10 +551,152 @@ hr {
   color: var(--bad);
 }
 
+.selection-menu .ai {
+  color: var(--accent);
+}
+
+.selection-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-actions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+
+.selection-menu .ai-actions button {
+  justify-content: space-between;
+  height: 38px;
+  font-size: 14px;
+  text-align: left;
+}
+
+.ai-actions kbd {
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
 @media (max-width: 560px) {
-  .selection-menu button span {
+  .selection-menu > button span {
     display: none;
   }
+}
+
+/* ---------- ИИ ---------- */
+
+.ai-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--gutter-b) + 70px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(620px, calc(100vw - 24px));
+  min-height: 48px;
+  padding: 6px 6px 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 14px;
+  z-index: 4;
+}
+
+.ai-bar.error {
+  color: var(--bad);
+}
+
+.ai-bar .ai-spark {
+  display: flex;
+  color: var(--accent);
+}
+
+.ai-bar .spinning {
+  animation: ai-spin 1.6s linear infinite;
+}
+
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-bar .spinning {
+    animation: none;
+  }
+}
+
+.ai-bar .ai-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.ai-bar .ai-muted {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-bar textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  padding: 6px 0;
+}
+
+.ai-bar button {
+  flex: none;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.ai-bar button:hover {
+  background: var(--surface-2);
+}
+
+.ai-bar button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.ai-bar button.primary:disabled {
+  opacity: 0.45;
+}
+
+.toolbar .ai-tool {
+  color: var(--accent);
+}
+
+.toolbar .ai-tool[aria-pressed='true'] {
+  background: var(--accent-soft);
 }
 
 /* ---------- Правка стикера и текста ---------- */

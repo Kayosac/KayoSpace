@@ -4,7 +4,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -36,6 +38,24 @@ export class AssetStore {
     if (!ASSET_ID_RE.test(id)) return null;
     try {
       return await readFile(this.file(id));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Размер и тип файла без чтения целиком (для выдачи потоком); null — файла нет. */
+  async head(id: string): Promise<{ size: number; type: string } | null> {
+    if (!ASSET_ID_RE.test(id)) return null;
+    try {
+      const fh = await open(this.file(id), 'r');
+      try {
+        const { size } = await fh.stat();
+        const probe = Buffer.alloc(12);
+        await fh.read(probe, 0, 12, 0);
+        return { size, type: sniffType(probe) };
+      } finally {
+        await fh.close();
+      }
     } catch {
       return null;
     }
@@ -91,15 +111,16 @@ export async function handleAsset(
 ): Promise<void> {
   if (!ASSET_ID_RE.test(id)) return send(res, 400, 'Неверный id файла');
   if (req.method === 'GET') {
-    const data = await store.get(id);
-    if (!data) return send(res, 404, 'Файла нет на хабе');
+    // Потоком с диска: картинка не держится в памяти хаба целиком.
+    const info = await store.head(id);
+    if (!info) return send(res, 404, 'Файла нет на хабе');
     res.writeHead(200, {
-      'Content-Type': sniffType(data),
-      'Content-Length': data.length,
+      'Content-Type': info.type,
+      'Content-Length': info.size,
       // Содержимое по id не меняется никогда.
       'Cache-Control': 'private, max-age=31536000, immutable',
     });
-    res.end(data);
+    await pipeline(createReadStream(store.file(id)), res).catch(() => res.destroy());
     return;
   }
   if (req.method === 'PUT') {

@@ -102,6 +102,8 @@ export interface EngineState {
   transforming: boolean;
   /** Есть что вставить. */
   canPaste: boolean;
+  /** Показан предпросмотр правок ИИ. */
+  aiPreview: boolean;
 }
 
 export interface EngineOptions {
@@ -154,6 +156,21 @@ type SelectGesture =
 let clipboard: CanvasElement[] = [];
 let clipboardText = '';
 
+/** Правки ИИ: новые и изменённые элементы целиком и id удалённых. */
+export interface AiDraft {
+  elements: CanvasElement[];
+  deleted: string[];
+}
+
+interface AiPreview {
+  draft: AiDraft;
+  doc: Y.Doc;
+  scene: Scene;
+  /** Тронутые ИИ элементы (подсветка) и удалённые (рисуем бледно из настоящей доски). */
+  ids: Set<string>;
+  rebuild: ReturnType<typeof setTimeout> | null;
+}
+
 interface ActiveErase {
   last: { x: number; y: number };
   /** Кольцо ластика на экране (пиксели устройства) — чтобы стереть его в следующем кадре. */
@@ -195,6 +212,8 @@ export class CanvasEngine {
   /** Последнее положение указателя над холстом (clientX/Y) — для вставки. */
   private pointer: Pt | null = null;
   private raf = 0;
+  /** Предпросмотр черновика ИИ: копия доски с его правками, которую рисуем вместо доски. */
+  private ai: AiPreview | null = null;
   private state: EngineState;
   private hasCamera: boolean;
   /** Время последней отрисовки, мс — для отладки и e2e-проверок. */
@@ -330,6 +349,7 @@ export class CanvasEngine {
           this.renderer.invalidateAll();
         }
         for (const b of dirty) this.renderer.invalidateWorld(this.camera, b);
+        this.aiBoardChanged();
         this.schedule();
         this.emit();
       }),
@@ -605,6 +625,129 @@ export class CanvasEngine {
   nudgeSelection(dx: number, dy: number): void {
     if (this.selection.size === 0 || this.gesture) return;
     this.commitTransform({ s: 1, tx: dx / this.camera.zoom, ty: dy / this.camera.zoom });
+  }
+
+  // ---------- ИИ: предпросмотр черновика ----------
+
+  /**
+   * Показать правки ИИ поверх доски, не меняя её: рисуем копию доски с этими правками,
+   * тронутые элементы подсвечены, удалённые — бледные. null — убрать предпросмотр.
+   */
+  setAiPreview(draft: AiDraft | null): void {
+    this.dropAiPreview();
+    if (draft && (draft.elements.length > 0 || draft.deleted.length > 0)) {
+      this.ai = this.buildAiPreview(draft);
+      this.clearSelection();
+      // Если правки за краем экрана — показать их вместе с видимой частью.
+      const b = this.aiBounds();
+      const v = this.visibleBounds();
+      if (b && !(b.minX >= v.minX && b.maxX <= v.maxX && b.minY >= v.minY && b.maxY <= v.maxY)) {
+        const all = {
+          minX: Math.min(b.minX, v.minX),
+          minY: Math.min(b.minY, v.minY),
+          maxX: Math.max(b.maxX, v.maxX),
+          maxY: Math.max(b.maxY, v.maxY),
+        };
+        const fit = fitBounds(
+          all,
+          this.renderer.width,
+          this.renderer.height,
+          48,
+          this.camera.rotation ?? 0,
+        );
+        this.setCamera(fit.zoom > this.camera.zoom ? this.camera : fit);
+      }
+    }
+    this.renderer.invalidateAll();
+    this.schedule();
+    this.emit();
+  }
+
+  /** Перенести правки ИИ в доску одним шагом (его можно отменить). Возвращает id новых и изменённых. */
+  applyAiPreview(): string[] {
+    const ai = this.ai;
+    if (!ai) return [];
+    const { elements, deleted } = ai.draft;
+    this.setAiPreview(null);
+    if (this.editing) this.finishEditing(null);
+    this.undoManager.stopCapturing();
+    this.doc.transact(() => {
+      for (const el of elements) addElement(this.doc, el);
+      for (const id of deleted) deleteElement(this.doc, id);
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    const ids = elements.map((el) => el.id).filter((id) => this.scene.ownerOf(id) === id);
+    if (ids.length > 0) this.select(ids);
+    return ids;
+  }
+
+  /** Рамка правок ИИ (мировые координаты). */
+  private aiBounds() {
+    const ai = this.ai;
+    if (!ai) return null;
+    return unionBounds(
+      [...ai.ids].flatMap((id) => {
+        const item = ai.scene.items.get(id) ?? this.scene.items.get(id);
+        return item ? [item.bounds] : [];
+      }),
+    );
+  }
+
+  private buildAiPreview(draft: AiDraft): AiPreview {
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(this.doc));
+    doc.transact(() => {
+      for (const el of draft.elements) addElement(doc, el);
+      for (const id of draft.deleted) deleteElement(doc, id);
+    });
+    return {
+      draft,
+      doc,
+      scene: new Scene(doc),
+      ids: new Set([...draft.elements.map((el) => el.id), ...draft.deleted]),
+      rebuild: null,
+    };
+  }
+
+  /** Доска изменилась (в том числе с другого устройства) — пересобрать копию, не чаще раза в 300 мс. */
+  private aiBoardChanged(): void {
+    const ai = this.ai;
+    if (!ai || ai.rebuild) return;
+    ai.rebuild = setTimeout(() => {
+      if (this.ai !== ai) return;
+      const next = this.buildAiPreview(ai.draft);
+      ai.rebuild = null;
+      this.dropAiPreview();
+      this.ai = next;
+      this.renderer.invalidateAll();
+      this.schedule();
+    }, 300);
+  }
+
+  private dropAiPreview(): void {
+    const ai = this.ai;
+    if (!ai) return;
+    if (ai.rebuild) clearTimeout(ai.rebuild);
+    ai.scene.destroy();
+    ai.doc.destroy();
+    this.ai = null;
+  }
+
+  /**
+   * Картинка выделенного (или видимой части доски) для ИИ: PNG, длинная сторона до maxSide пикселей.
+   * Без сетки и рамок выделения — только содержимое.
+   */
+  exportImage(maxSide = 1600): Promise<Blob | null> {
+    const b = this.getSelectionBounds() ?? this.visibleBounds();
+    const pad = 16 / this.camera.zoom;
+    const area = { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad };
+    const w = area.maxX - area.minX;
+    const h = area.maxY - area.minY;
+    if (!(w > 0 && h > 0)) return Promise.resolve(null);
+    const k = Math.min(maxSide / Math.max(w, h), 3 * this.camera.zoom * (this.renderer.dpr || 1));
+    const canvas = this.renderer.exportRegion(this.scene, area, k);
+    if (!canvas) return Promise.resolve(null);
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
   }
 
   private insert(els: CanvasElement[]): void {
@@ -1113,6 +1256,7 @@ export class CanvasEngine {
     this.resizeObserver.disconnect();
     for (const fn of this.cleanups) fn();
     this.undoManager.destroy();
+    this.dropAiPreview();
     this.scene.destroy();
     this.images.destroy();
     this.host.removeEventListener('pointermove', this.onPointerTrack);
@@ -1335,7 +1479,17 @@ export class CanvasEngine {
         } else if (g?.kind === 'marquee') {
           overlay.marquee = rectFromPoints(g.start, g.end);
         }
-        this.renderer.paint(this.camera, this.scene, overlay);
+        const ai = this.ai;
+        if (ai) {
+          overlay.ai = {
+            ids: ai.ids,
+            deleted: ai.draft.deleted.flatMap((id) => {
+              const item = this.scene.items.get(id);
+              return item ? [item] : [];
+            }),
+          };
+        }
+        this.renderer.paint(this.camera, ai?.scene ?? this.scene, overlay);
         this.paints++;
       }
     } catch (err) {
@@ -1397,6 +1551,7 @@ export class CanvasEngine {
       selectionRev: this.selectionRev,
       transforming: this.gesture !== null,
       canPaste: clipboard.length > 0,
+      aiPreview: this.ai !== null,
     };
   }
 

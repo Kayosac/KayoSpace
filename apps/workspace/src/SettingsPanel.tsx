@@ -145,7 +145,9 @@ export function SettingsPanel({
         <dt>Выделение</dt>
         <dd>лассо пером, рамка мышью, Shift — добавить; угол — масштаб</dd>
         <dt>Правка</dt>
-        <dd>Ctrl/⌘ C, X, V, D (копия рядом), Delete, стрелки</dd>
+        <dd>Ctrl/⌘ C, X, V (текст и картинки тоже), D (копия рядом), Delete, стрелки</dd>
+        <dt>ИИ</dt>
+        <dd>«✦ ИИ» в меню выделения; Ctrl/⌘ J — свой запрос</dd>
         <dt>Вид</dt>
         <dd>Shift 1 — всё, Shift 0 — 100%</dd>
       </dl>
