@@ -3,6 +3,11 @@
 # если 443 занят (например, VPN), setup.sh выбирает HTTPS_PORT=8443.
 {
 	https_port {$HTTPS_PORT:443}
+	# Только HTTP/1.1: браузеры открывают WebSocket поверх HTTP/2 (RFC 8441), и этот путь через прокси
+	# оказался ненадёжным. Трафику хаба HTTP/2 ничего не даёт.
+	servers {
+		protocols h1
+	}
 }
 
 {$HUB_DOMAIN} {
