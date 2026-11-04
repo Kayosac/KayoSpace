@@ -198,5 +198,50 @@ test('планшет: перо рисует, палец двигает холс�
   await touch('touchEnd', []);
   expect((await camera(page)).zoom).toBeCloseTo(3, 1);
 
+  // Тап двумя пальцами — отменить, тремя — повторить; холст при этом не сдвигается.
+  const before = await camera(page);
+  await touch('touchStart', [
+    [400, 600, 1],
+    [480, 600, 2],
+  ]);
+  await touch('touchMove', [
+    [402, 601, 1],
+    [483, 600, 2],
+  ]);
+  await touch('touchEnd', []);
+  await expect.poll(() => elements(page)).toBe(0);
+  expect(await camera(page)).toEqual(before);
+  await touch('touchStart', [
+    [400, 600, 1],
+    [480, 600, 2],
+    [560, 600, 3],
+  ]);
+  await touch('touchEnd', []);
+  await expect.poll(() => elements(page)).toBe(1);
+
   await page.screenshot({ path: shot('workspace-tablet.png') });
+});
+
+test('ластик стирает часть штриха, как кисть; отмена возвращает всё одним шагом', async ({
+  browser,
+}) => {
+  const page = await openDevice(browser, { board: 'e2e-eraser' });
+  await page.getByRole('radio', { name: 'Толстое' }).click();
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  for (let i = 1; i <= 30; i++) await page.mouse.move(300 + i * 20, 300);
+  await page.mouse.up();
+  await expect.poll(() => elements(page)).toBe(1);
+
+  await page.getByRole('radio', { name: 'Ластик', exact: true }).click();
+  await page.getByRole('radio', { name: 'Большой ластик' }).click();
+  await page.mouse.move(600, 220);
+  await page.mouse.down();
+  await page.mouse.move(600, 380, { steps: 12 });
+  await page.screenshot({ path: shot('workspace-eraser.png') });
+  await page.mouse.up();
+  await expect.poll(() => elements(page)).toBe(2);
+
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => elements(page)).toBe(1);
 });

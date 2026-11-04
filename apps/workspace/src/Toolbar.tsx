@@ -19,6 +19,13 @@ export const PEN_SIZES: { value: number; name: string; dot: number }[] = [
   { value: 7, name: 'Толстое', dot: 14 },
 ];
 
+/** Диаметр ластика в экранных пикселях. */
+export const ERASER_SIZES: { value: number; name: string; dot: number }[] = [
+  { value: 12, name: 'Маленький ластик', dot: 6 },
+  { value: 28, name: 'Средний ластик', dot: 11 },
+  { value: 60, name: 'Большой ластик', dot: 17 },
+];
+
 const TOOLS: { value: Tool; name: string; key: string; Icon: ComponentType }[] = [
   { value: 'pen', name: 'Перо', key: 'P', Icon: PenIcon },
   { value: 'eraser', name: 'Ластик', key: 'E', Icon: EraserIcon },
@@ -38,6 +45,7 @@ export function Toolbar({
   onSettings: () => void;
 }) {
   const pen = state.tool === 'pen';
+  const eraser = state.tool === 'eraser';
   return (
     <nav className="toolbar" aria-label="Инструменты">
       <div className="group" role="radiogroup" aria-label="Инструмент">
@@ -73,16 +81,21 @@ export function Toolbar({
         ))}
       </div>
       <span className="sep" />
-      <div className="group sizes" role="radiogroup" aria-label="Толщина">
-        {PEN_SIZES.map(({ value, name, dot }) => (
+      <div
+        className="group sizes"
+        role="radiogroup"
+        aria-label={eraser ? 'Размер ластика' : 'Толщина'}
+        data-eraser={eraser || undefined}
+      >
+        {(eraser ? ERASER_SIZES : PEN_SIZES).map(({ value, name, dot }) => (
           <button
-            key={value}
+            key={name}
             className="size"
             role="radio"
-            aria-checked={pen && state.size === value}
+            aria-checked={eraser ? state.eraserSize === value : pen && state.size === value}
             aria-label={name}
             title={name}
-            onClick={() => engine.setSize(value)}
+            onClick={() => (eraser ? engine.setEraserSize(value) : engine.setSize(value))}
           >
             <span style={{ width: dot, height: dot }} />
           </button>

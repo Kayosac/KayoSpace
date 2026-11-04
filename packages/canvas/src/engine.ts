@@ -4,10 +4,11 @@
  */
 
 import * as Y from 'yjs';
-import { addElement, deleteElements, elementsMap, makeStroke } from '@kayospace/board';
+import { addElement, deleteElement, elementsMap, getElement, makeStroke } from '@kayospace/board';
 import { PenInput, StrokeBuilder, type InkPoint, type PressurePoint } from '@kayospace/ink';
-import type { Actor, StrokePoint } from '@kayospace/model';
+import { decodeStroke, type Actor, type StrokePoint } from '@kayospace/model';
 import { defaultCamera, fitBounds, screenToWorld, viewBounds, zoomAt, type Camera } from './camera';
+import { eraseFromPoints } from './erase';
 import { Navigation } from './navigation';
 import { Renderer, samplesWorldBounds, type ActiveStroke, type Rect } from './renderer';
 import { Scene, STROKE_STREAMLINE, STROKE_THINNING } from './scene';
@@ -21,6 +22,8 @@ export interface EngineState {
   tool: Tool;
   color: string | null;
   size: number;
+  /** Диаметр ластика в экранных пикселях. */
+  eraserSize: number;
   zoom: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -36,12 +39,11 @@ export interface EngineOptions {
   color?: string | null;
   /** Толщина пера в экранных пикселях. */
   size?: number;
+  /** Диаметр ластика в экранных пикселях. */
+  eraserSize?: number;
   /** Рисовать пальцем (иначе палец двигает холст). */
   touchDraws?: boolean;
 }
-
-/** Радиус ластика в экранных пикселях. */
-const ERASER_RADIUS = 8;
 
 interface ActiveDraw {
   builder: StrokeBuilder;
@@ -57,6 +59,8 @@ interface ActiveDraw {
 
 interface ActiveErase {
   last: { x: number; y: number };
+  /** Кольцо ластика на экране (пиксели устройства) — чтобы стереть его в следующем кадре. */
+  ringRect: Rect | null;
 }
 
 export class CanvasEngine {
@@ -75,6 +79,7 @@ export class CanvasEngine {
   private tool: Tool;
   private color: string | null;
   private size: number;
+  private eraserSize: number;
   private touchDraws: boolean;
   private draw: ActiveDraw | null = null;
   private erase: ActiveErase | null = null;
@@ -95,6 +100,7 @@ export class CanvasEngine {
     this.tool = opts.tool ?? 'pen';
     this.color = opts.color ?? null;
     this.size = opts.size ?? 3;
+    this.eraserSize = opts.eraserSize ?? 28;
     this.touchDraws = opts.touchDraws ?? false;
 
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
@@ -117,6 +123,10 @@ export class CanvasEngine {
       drawingWith: () => this.input.drawingWith,
       onMultiTouch: () => this.input.cancel(),
       onPanChange: () => this.updateCursor(),
+      onTap: (fingers) => {
+        if (fingers === 2) this.undo();
+        else if (fingers === 3) this.redo();
+      },
     });
     this.nav.handTool = this.tool === 'hand';
     this.nav.touchPans = !this.touchDraws;
@@ -134,7 +144,7 @@ export class CanvasEngine {
           this.undoManager.stopCapturing();
           const p = this.toWorld(info.point);
           if (this.tool === 'eraser' || info.eraser) {
-            this.erase = { last: p };
+            this.erase = { last: p, ringRect: null };
             this.eraseAt(p, p);
           } else {
             this.startDraw(p, info.hasPressure);
@@ -156,6 +166,7 @@ export class CanvasEngine {
               this.eraseAt(this.erase.last, w);
               this.erase.last = w;
             }
+            this.schedule();
           }
         },
         onEnd: () => this.endGesture(false),
@@ -233,6 +244,13 @@ export class CanvasEngine {
   setSize(size: number): void {
     this.size = size;
     if (this.tool !== 'pen') this.setTool('pen');
+    this.emit();
+  }
+
+  setEraserSize(size: number): void {
+    this.eraserSize = size;
+    if (this.tool !== 'eraser') this.setTool('eraser');
+    this.updateCursor();
     this.emit();
   }
 
@@ -350,28 +368,61 @@ export class CanvasEngine {
     };
   }
 
+  /** Стереть часть штрихов под ластиком на отрезке from → to (мировые координаты). */
   private eraseAt(from: { x: number; y: number }, to: { x: number; y: number }): void {
-    const r = ERASER_RADIUS / this.camera.zoom;
+    const r = this.eraserSize / 2 / this.camera.zoom;
     const len = Math.hypot(to.x - from.x, to.y - from.y);
     const steps = Math.max(1, Math.ceil(len / (r / 2)));
     const ids = new Set<string>();
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      for (const id of this.scene.hitTest(
-        from.x + (to.x - from.x) * t,
-        from.y + (to.y - from.y) * t,
-        r,
-      )) {
-        ids.add(id);
-      }
+      const x = from.x + (to.x - from.x) * t;
+      const y = from.y + (to.y - from.y) * t;
+      for (const id of this.scene.hitTest(x, y, r)) ids.add(id);
     }
-    if (ids.size > 0) deleteElements(this.doc, ids, LOCAL_ORIGIN);
+    if (ids.size === 0) return;
+    const actor = this.opts.actor;
+    this.doc.transact(() => {
+      for (const id of ids) {
+        const el = getElement(this.doc, id);
+        if (!el || el.type !== 'stroke') continue;
+        const points = decodeStroke(el.props.points).map((p) => ({
+          ...p,
+          x: p.x + el.x,
+          y: p.y + el.y,
+        }));
+        // Задеваем не только осевую линию, но и край толстого штриха.
+        const reach = r + (el.style.size ?? 4) / 4;
+        const pieces = eraseFromPoints(points, from, to, reach, r / 4);
+        if (!pieces) continue;
+        deleteElement(this.doc, id);
+        for (const piece of pieces) {
+          const part = makeStroke(piece, {
+            tool: el.props.tool,
+            style: el.style,
+            hasPressure: el.props.hasPressure,
+            actor,
+            ...(el.props.unit !== undefined ? { unit: el.props.unit } : {}),
+          });
+          // Кусок остаётся на том же слое и с тем же автором.
+          addElement(this.doc, {
+            ...part,
+            z: el.z,
+            createdBy: el.createdBy,
+            createdAt: el.createdAt,
+          });
+        }
+      }
+    }, LOCAL_ORIGIN);
   }
 
   private endGesture(cancel: boolean): void {
     const d = this.draw;
     this.draw = null;
-    this.erase = null;
+    if (this.erase) {
+      this.renderer.invalidate(this.erase.ringRect);
+      this.erase = null;
+    }
     if (d) {
       this.renderer.invalidate(d.prevTail);
       const finished = d.builder.finish();
@@ -421,8 +472,26 @@ export class CanvasEngine {
         d.prevTail = tailRect;
         active = { samples: b.samples, tail, color: d.color };
       }
+      let ring: { x: number; y: number; r: number } | null = null;
+      const er = this.erase;
+      if (er) {
+        ring = { x: er.last.x, y: er.last.y, r: this.eraserSize / 2 / this.camera.zoom };
+        const rect = this.renderer.worldRect(
+          this.camera,
+          {
+            minX: ring.x - ring.r,
+            minY: ring.y - ring.r,
+            maxX: ring.x + ring.r,
+            maxY: ring.y + ring.r,
+          },
+          4,
+        );
+        this.renderer.invalidate(er.ringRect);
+        this.renderer.invalidate(rect);
+        er.ringRect = rect;
+      }
       if (this.renderer.needsPaint) {
-        this.renderer.paint(this.camera, this.scene, active);
+        this.renderer.paint(this.camera, this.scene, active, ring);
         this.paints++;
       }
     } catch (err) {
@@ -460,7 +529,7 @@ export class CanvasEngine {
     let cursor = 'crosshair';
     if (this.nav.isPanning) cursor = 'grabbing';
     else if (this.tool === 'hand' || this.nav.spaceDown) cursor = 'grab';
-    else if (this.tool === 'eraser') cursor = ERASER_CURSOR;
+    else if (this.tool === 'eraser') cursor = eraserCursor(this.eraserSize);
     this.host.style.cursor = cursor;
   }
 
@@ -469,6 +538,7 @@ export class CanvasEngine {
       tool: this.tool,
       color: this.color,
       size: this.size,
+      eraserSize: this.eraserSize,
       zoom: this.camera.zoom,
       canUndo: this.undoManager.canUndo(),
       canRedo: this.undoManager.canRedo(),
@@ -552,6 +622,14 @@ function isTyping(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
-const ERASER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8" fill="none" stroke="white" stroke-width="3"/><circle cx="10" cy="10" r="8" fill="none" stroke="black" stroke-width="1.2"/></svg>',
-)}") 10 10, cell`;
+/** Курсор ластика — кольцо его размера (браузеры не показывают курсоры больше 128 пикселей). */
+function eraserCursor(size: number): string {
+  const d = Math.max(8, Math.min(120, Math.round(size)));
+  const c = d / 2 + 2;
+  const w = d + 4;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${w}">` +
+    `<circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="white" stroke-width="3"/>` +
+    `<circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="black" stroke-width="1.2"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${c} ${c}, cell`;
+}

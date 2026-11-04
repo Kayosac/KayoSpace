@@ -80,6 +80,7 @@ export function App() {
       tool: s.tool,
       color: s.color,
       size: s.size,
+      eraserSize: s.eraserSize,
       touchDraws: s.touchDraws,
     });
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,9 +116,15 @@ export function App() {
     if (
       s.tool !== engineState.tool ||
       s.color !== engineState.color ||
-      s.size !== engineState.size
+      s.size !== engineState.size ||
+      s.eraserSize !== engineState.eraserSize
     ) {
-      update({ tool: engineState.tool, color: engineState.color, size: engineState.size });
+      update({
+        tool: engineState.tool,
+        color: engineState.color,
+        size: engineState.size,
+        eraserSize: engineState.eraserSize,
+      });
     }
   }, [engineState, update]);
 

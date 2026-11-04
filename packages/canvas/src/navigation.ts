@@ -20,6 +20,8 @@ export interface NavigationOptions {
   onMultiTouch?(): void;
   /** Начало и конец перетаскивания — для курсора. */
   onPanChange?(panning: boolean): void;
+  /** Короткое касание несколькими пальцами без движения: 2 — отменить, 3 — повторить. */
+  onTap?(fingers: number): void;
 }
 
 /** Касание шире этого (CSS-пиксели) — скорее ладонь, чем палец. */
@@ -27,6 +29,10 @@ const PALM_SIZE = 30;
 /** Ограничение шага колеса при масштабе: у мыши один щелчок = 100 и больше. */
 const MAX_ZOOM_DELTA = 30;
 const ZOOM_SPEED = 0.01;
+/** Касание пальцами считается тапом, если короче этого (мс)… */
+const TAP_MAX_MS = 350;
+/** …и ни один палец не сдвинулся дальше этого (CSS-пиксели). */
+const TAP_SLOP = 16;
 
 interface TouchPoint {
   x: number;
@@ -52,6 +58,14 @@ export class Navigation {
   private pan: { id: number; x: number; y: number; touch: boolean } | null = null;
   private gestureScale = 1;
   private rect: DOMRect;
+  /** Текущий жест пальцами — кандидат в тап (двумя — отмена, тремя — повтор). */
+  private tap: {
+    start: number;
+    fingers: number;
+    camera: Camera;
+    origin: Map<number, TouchPoint>;
+    failed: boolean;
+  } | null = null;
 
   constructor(
     private readonly el: HTMLElement,
@@ -89,6 +103,7 @@ export class Navigation {
   /** Сбросить жесты пальцами (например, коснулось перо — значит, это была ладонь). */
   cancelTouches(): void {
     const had = this.isPanning;
+    this.tap = null;
     this.touches.clear();
     this.pinch = null;
     if (this.pan?.touch) this.pan = null;
@@ -165,7 +180,21 @@ export class Navigation {
       if (e.width >= PALM_SIZE || e.height >= PALM_SIZE) return;
       const claimed = this.claims(e);
       this.rect = this.el.getBoundingClientRect();
+      if (this.touches.size === 0) {
+        this.tap = {
+          start: e.timeStamp,
+          fingers: 0,
+          camera: this.opts.getCamera(),
+          origin: new Map(),
+          failed: false,
+        };
+      }
       this.touches.set(e.pointerId, this.local(e));
+      if (this.tap) {
+        if (e.timeStamp - this.tap.start > TAP_MAX_MS) this.tap.failed = true;
+        this.tap.origin.set(e.pointerId, this.local(e));
+        this.tap.fingers = Math.max(this.tap.fingers, this.touches.size);
+      }
       if (this.touches.size >= 2) {
         if (this.opts.drawingWith() === 'touch') this.opts.onMultiTouch?.();
         this.capture(e);
@@ -194,7 +223,10 @@ export class Navigation {
 
   private onMove = (e: PointerEvent): void => {
     if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
-      this.touches.set(e.pointerId, this.local(e));
+      const here = this.local(e);
+      this.touches.set(e.pointerId, here);
+      const o = this.tap?.origin.get(e.pointerId);
+      if (o && Math.hypot(here.x - o.x, here.y - o.y) > TAP_SLOP) this.tap!.failed = true;
       if (this.pinch) {
         const next = this.pinchState();
         if (!next) return;
@@ -218,6 +250,16 @@ export class Navigation {
 
   private onUp = (e: PointerEvent): void => {
     if (this.touches.delete(e.pointerId)) {
+      const tap = this.tap;
+      if (tap && e.type === 'pointercancel') tap.failed = true;
+      if (tap && this.touches.size === 0) {
+        this.tap = null;
+        if (!tap.failed && tap.fingers >= 2 && e.timeStamp - tap.start <= TAP_MAX_MS) {
+          // Пальцы чуть сдвинули холст за время тапа — возвращаем как было.
+          this.opts.setCamera(tap.camera);
+          this.opts.onTap?.(tap.fingers);
+        }
+      }
       if (this.pinch) {
         if (this.touches.size >= 2) {
           this.pinch = this.pinchState();

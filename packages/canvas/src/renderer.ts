@@ -193,7 +193,13 @@ export class Renderer {
   }
 
   /** Нарисовать накопившиеся изменения. Возвращает долю перерисованной площади. */
-  paint(cam: Camera, scene: Scene, active: ActiveStroke | null): number {
+  paint(
+    cam: Camera,
+    scene: Scene,
+    active: ActiveStroke | null,
+    /** Кольцо ластика (мировые координаты). */
+    ring: { x: number; y: number; r: number } | null = null,
+  ): number {
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     let x = 0;
@@ -254,6 +260,13 @@ export class Renderer {
         if (active.tail.length > 0 && boundsIntersect(samplesWorldBounds(active.tail)!, view)) {
           fillSamples(ctx, active.tail, fill);
         }
+      }
+      if (ring) {
+        ctx.beginPath();
+        ctx.arc(ring.x, ring.y, ring.r, 0, Math.PI * 2);
+        ctx.lineWidth = 1.5 / cam.zoom;
+        ctx.strokeStyle = this.colors.accent;
+        ctx.stroke();
       }
     } finally {
       ctx.restore();
