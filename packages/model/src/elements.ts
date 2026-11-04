@@ -84,9 +84,12 @@ export interface FrameProps {
 export type ArrowEnd = { kind: 'point'; x: number; y: number } | { kind: 'element'; id: ElementId };
 
 export interface ArrowProps {
+  /** Концы стрелки: точка — в мировых координатах. */
   start: ArrowEnd;
   end: ArrowEnd;
   label?: string;
+  /** Наконечники: нет (линия), на конце (по умолчанию), на обоих концах. */
+  heads?: 'none' | 'end' | 'both';
 }
 
 export interface ShapeProps {

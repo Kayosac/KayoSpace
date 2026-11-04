@@ -120,3 +120,63 @@ export const TrashIcon = () => (
     <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
   </Svg>
 );
+
+export const StickyIcon = () => (
+  <Svg>
+    <path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+    <path d="M14 20v-5a1 1 0 0 1 1-1h5" />
+  </Svg>
+);
+
+export const TextIcon = () => (
+  <Svg>
+    <path d="M5 6V4h14v2M12 4v16M9 20h6" />
+  </Svg>
+);
+
+export const ShapesIcon = () => (
+  <Svg>
+    <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+    <circle cx="16" cy="16" r="4.5" />
+  </Svg>
+);
+
+export const RectIcon = () => (
+  <Svg>
+    <rect x="4" y="6" width="16" height="12" rx="2" />
+  </Svg>
+);
+
+export const EllipseIcon = () => (
+  <Svg>
+    <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />
+  </Svg>
+);
+
+export const LineIcon = () => (
+  <Svg>
+    <path d="M5 19L19 5" />
+  </Svg>
+);
+
+export const ArrowIcon = () => (
+  <Svg>
+    <path d="M5 19L18 6M10 6h8v8" />
+  </Svg>
+);
+
+export const BoardsIcon = () => (
+  <Svg>
+    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+    <rect x="13" y="4" width="7" height="7" rx="1.5" />
+    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+  </Svg>
+);
+
+export const SearchIcon = () => (
+  <Svg>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l4 4" />
+  </Svg>
+);

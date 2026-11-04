@@ -15,6 +15,8 @@ import {
   type Sample,
 } from '@kayospace/ink';
 import { STICKY_FONT_SIZE, fontSizeOf, type Transform } from '@kayospace/board';
+import type { ArrowElement, CanvasElement, ShapeElement } from '@kayospace/model';
+import { DEFAULT_LINE, arrowEnds, arrowHead } from './shapes';
 import type { Camera } from './camera';
 import { transformBounds } from './selection';
 import type { Scene, SceneItem } from './scene';
@@ -59,6 +61,10 @@ export interface PaintOverlay {
   lasso?: readonly { x: number; y: number }[] | null;
   /** Рамка выделения мышью (мировые координаты). */
   marquee?: Bounds | null;
+  /** Фигура, которую сейчас тянут (ещё не в доске). */
+  draft?: CanvasElement | null;
+  /** Стикер или текст, который сейчас редактируют: текст рисует поле ввода, а не канва. */
+  editing?: string | null;
 }
 
 /** Отступ рамки выделения от элементов и размер ручек, CSS-пиксели. */
@@ -71,9 +77,11 @@ export const GRID_STEP = 24;
 const GRID_MIN_GAP = 14;
 
 const STICKY_COLOR = '#ffe58a';
+/** Межстрочный интервал текста — так же в поле ввода (интерфейс). */
+export const LINE_HEIGHT = 1.3;
 /** Стикер всегда светлый — текст на нём тёмный в любой теме. */
-const STICKY_INK = '#1c1f26';
-const NOTE_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+export const STICKY_INK = '#1c1f26';
+export const NOTE_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
 /** Перенос строк по ширине (по словам; длинное слово режется). */
 export function wrapText(
@@ -152,6 +160,7 @@ export class Renderer {
   readonly desynchronized: boolean;
 
   private pending: Rect | null = null;
+  private editing: string | null = null;
   private full = true;
 
   constructor(host: HTMLElement) {
@@ -222,6 +231,7 @@ export class Renderer {
   /** Нарисовать накопившиеся изменения. Возвращает долю перерисованной площади. */
   paint(cam: Camera, scene: Scene, overlay: PaintOverlay = {}): number {
     const { active = null, ring = null, preview = null, selection = null } = overlay;
+    this.editing = overlay.editing ?? null;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     let x = 0;
@@ -271,7 +281,7 @@ export class Renderer {
         if (preview?.ids.has(item.id)) continue;
         setFill(item.color);
         this.drawItem(item, cam.zoom);
-        if (item.element.type !== 'stroke') fill = ''; // стикер сам меняет fillStyle
+        if (item.element.type !== 'stroke') fill = ''; // стикер и фигура сами меняют fillStyle
       }
       if (preview) {
         // Перетаскиваемые элементы — поверх остальных, с преобразованием жеста.
@@ -297,6 +307,10 @@ export class Renderer {
         if (active.tail.length > 0 && boundsIntersect(samplesWorldBounds(active.tail)!, view)) {
           fillSamples(ctx, active.tail, fill);
         }
+      }
+      if (overlay.draft) {
+        const d = overlay.draft;
+        if (d.type === 'shape' || d.type === 'arrow') this.drawShape(d, d.style.color ?? null);
       }
       if (ring) {
         ctx.beginPath();
@@ -349,6 +363,10 @@ export class Renderer {
     const type = item.element.type;
     if (type === 'sticky' || type === 'text') {
       this.drawNote(item, zoom);
+      return;
+    }
+    if (type === 'shape' || type === 'arrow') {
+      this.drawShape(item.element as ShapeElement | ArrowElement, item.color, item.ends);
       return;
     }
     // Совсем мелкий на экране элемент — точкой: контур из сотен кругов там всё равно не виден.
@@ -407,7 +425,71 @@ export class Renderer {
     }
   }
 
-  /** Стикер или текст (пока только показ). */
+  /** Прямоугольник, эллипс, линия или стрелка. */
+  private drawShape(
+    el: ShapeElement | ArrowElement,
+    color: string | null,
+    ends?: [{ x: number; y: number }, { x: number; y: number }],
+  ): void {
+    const ctx = this.ctx;
+    const c = color ?? this.colors.ink;
+    const size = el.style.size ?? DEFAULT_LINE;
+    ctx.strokeStyle = c;
+    ctx.fillStyle = c;
+    ctx.lineWidth = size;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (el.type === 'arrow') {
+      const [a, b] = ends ?? arrowEnds(el);
+      const heads = el.props.heads ?? 'end';
+      // Линия заканчивается у основания наконечника — острый кончик не скругляется толщиной.
+      const tipEnd = heads !== 'none' ? arrowHead(a, b, size) : null;
+      const tipStart = heads === 'both' ? arrowHead(b, a, size) : null;
+      const base = (
+        h: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }],
+      ) => ({
+        x: (h[1].x + h[2].x) / 2,
+        y: (h[1].y + h[2].y) / 2,
+      });
+      const p0 = tipStart ? base(tipStart) : a;
+      const p1 = tipEnd ? base(tipEnd) : b;
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+      for (const h of [tipEnd, tipStart]) {
+        if (!h) continue;
+        ctx.beginPath();
+        ctx.moveTo(h[0].x, h[0].y);
+        ctx.lineTo(h[1].x, h[1].y);
+        ctx.lineTo(h[2].x, h[2].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      return;
+    }
+    if (el.props.shape === 'ellipse') {
+      ctx.ellipse(el.x + el.w / 2, el.y + el.h / 2, el.w / 2, el.h / 2, 0, 0, Math.PI * 2);
+    } else {
+      ctx.roundRect(el.x, el.y, el.w, el.h, Math.min(size * 2, el.w / 2, el.h / 2));
+    }
+    ctx.stroke();
+  }
+
+  /** Строки и высота текста стикера или заметки при данной ширине (для подгонки рамки). */
+  measureNote(el: CanvasElement, content: string): { lines: string[]; height: number } {
+    const sticky = el.type === 'sticky';
+    const size = fontSizeOf(el);
+    const pad = sticky ? size * (16 / STICKY_FONT_SIZE) : 0;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;
+    const lines = wrapText(ctx, content, el.w - pad * 2);
+    ctx.restore();
+    return { lines, height: lines.length * size * LINE_HEIGHT + pad * 2 };
+  }
+
+  /** Стикер или текст. */
   private drawNote(item: SceneItem, zoom: number): void {
     const ctx = this.ctx;
     const b = item.bounds;
@@ -420,19 +502,20 @@ export class Renderer {
       ctx.roundRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY, 6);
       ctx.fill();
     }
-    if (size * zoom < 3) return; // текст неразличим — не тратим время
+    if (size * zoom < 3 || item.id === this.editing) return; // текст неразличим или его правят
     const content =
       item.element.type === 'sticky' || item.element.type === 'text'
         ? item.element.props.content
         : '';
     ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;
-    ctx.textBaseline = 'top';
+    // Середина строки — как в поле ввода (CSS делит межстрочный интервал поровну сверху и снизу).
+    ctx.textBaseline = 'middle';
     item.lines ??= wrapText(ctx, content, b.maxX - b.minX - pad * 2);
-    ctx.fillStyle = sticky ? STICKY_INK : this.colors.ink;
-    const lh = size * 1.3;
+    ctx.fillStyle = sticky ? STICKY_INK : (item.color ?? this.colors.ink);
+    const lh = size * LINE_HEIGHT;
     const maxLines = Math.max(1, Math.floor((b.maxY - b.minY - pad * 2) / lh));
     const lines = sticky ? item.lines.slice(0, maxLines) : item.lines;
-    lines.forEach((line, i) => ctx.fillText(line, b.minX + pad, b.minY + pad + i * lh));
+    lines.forEach((line, i) => ctx.fillText(line, b.minX + pad, b.minY + pad + (i + 0.5) * lh));
   }
 
   /** Точки сетки в участке (x, y, w, h — пиксели устройства); квадратики по пиксельной сетке — чётче. */

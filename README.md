@@ -102,7 +102,9 @@ claude mcp add --transport http kayospace http://localhost:4000/mcp
 ```
 
 Дальше можно просить: «прочитай доску pen-lab», «добавь на доску plan стикеры с задачами на неделю»,
-«найди на досках всё про шрифты». Инструменты: `list_boards`, `read_board`, `add_sticky`, `search`.
+«найди на досках всё про шрифты», «нарисуй схему: стикеры этапов и стрелки между ними».
+Инструменты: `list_boards`, `read_board`, `search`, `add_sticky`, `add_text`, `add_shape`, `add_arrow`,
+`update_element`, `delete_elements`.
 MCP-эндпоинт принимает запросы только с этого компьютера.
 
 **Планшет ↔ компьютер.** В Pen Lab (приложение или `pnpm dev`) откройте «Настройки» → «Синхронизация»,

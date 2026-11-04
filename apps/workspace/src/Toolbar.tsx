@@ -1,13 +1,21 @@
 import type { ComponentType } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
+import { STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
 import {
+  ArrowIcon,
+  EllipseIcon,
   EraserIcon,
   HandIcon,
+  LineIcon,
   PasteIcon,
   PenIcon,
+  RectIcon,
   RedoIcon,
   SelectIcon,
   SettingsIcon,
+  ShapesIcon,
+  StickyIcon,
+  TextIcon,
   UndoIcon,
 } from './icons';
 
@@ -39,8 +47,20 @@ const TOOLS: { value: Tool; name: string; key: string; Icon: ComponentType }[] =
   { value: 'select', name: 'Выделение', key: 'V', Icon: SelectIcon },
   { value: 'pen', name: 'Перо', key: 'P', Icon: PenIcon },
   { value: 'eraser', name: 'Ластик', key: 'E', Icon: EraserIcon },
+  { value: 'sticky', name: 'Стикер', key: 'N', Icon: StickyIcon },
+  { value: 'text', name: 'Текст', key: 'T', Icon: TextIcon },
+  { value: 'shape', name: 'Фигуры', key: 'R, O, L, A', Icon: ShapesIcon },
   { value: 'hand', name: 'Рука', key: 'H', Icon: HandIcon },
 ];
+
+const SHAPES: { value: ShapeKind; name: string; key: string; Icon: ComponentType }[] = [
+  { value: 'rect', name: 'Прямоугольник', key: 'R', Icon: RectIcon },
+  { value: 'ellipse', name: 'Эллипс', key: 'O', Icon: EllipseIcon },
+  { value: 'line', name: 'Линия', key: 'L', Icon: LineIcon },
+  { value: 'arrow', name: 'Стрелка', key: 'A', Icon: ArrowIcon },
+];
+
+const STICKY_NAMES = ['Жёлтый', 'Розовый', 'Мятный', 'Голубой', 'Лавандовый', 'Персиковый'];
 
 const mod =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
@@ -54,8 +74,14 @@ export function Toolbar({
   state: EngineState;
   onSettings: () => void;
 }) {
-  const pen = state.tool === 'pen';
-  const eraser = state.tool === 'eraser';
+  const tool = state.tool;
+  const eraser = tool === 'eraser';
+  // Палитра стикеров — для инструмента «Стикер» и когда выделены только стикеры.
+  const stickyPalette =
+    tool === 'sticky' || (tool === 'select' && state.selectionKind === 'sticky');
+  // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
+  const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
+  const showSizes = !stickyPalette && tool !== 'text';
   return (
     <nav className="toolbar" aria-label="Инструменты">
       <div className="group" role="radiogroup" aria-label="Инструмент">
@@ -64,7 +90,7 @@ export function Toolbar({
             key={value}
             className="tool"
             role="radio"
-            aria-checked={state.tool === value}
+            aria-checked={tool === value}
             aria-label={name}
             title={`${name} (${key})`}
             data-tool={value}
@@ -74,43 +100,89 @@ export function Toolbar({
           </button>
         ))}
       </div>
+      {tool === 'shape' && (
+        <>
+          <span className="sep" />
+          <div className="group" role="radiogroup" aria-label="Фигура">
+            {SHAPES.map(({ value, name, key, Icon }) => (
+              <button
+                key={value}
+                className="tool"
+                role="radio"
+                aria-checked={state.shapeKind === value}
+                aria-label={name}
+                title={`${name} (${key}); Shift — ровно`}
+                onClick={() => engine.setShapeKind(value)}
+              >
+                <Icon />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <span className="sep" />
-      <div className="group colors" role="radiogroup" aria-label="Цвет">
-        {PEN_COLORS.map(({ value, name }) => (
-          <button
-            key={name}
-            className="swatch"
-            role="radio"
-            aria-checked={pen && state.color === value}
-            aria-label={name}
-            title={name}
-            onClick={() => engine.setColor(value)}
+      {stickyPalette ? (
+        <div className="group colors" role="radiogroup" aria-label="Цвет стикера">
+          {STICKY_COLORS.map((value, i) => (
+            <button
+              key={value}
+              className="swatch sticky-swatch"
+              role="radio"
+              aria-checked={tool === 'sticky' && state.stickyColor === value}
+              aria-label={`Стикер: ${STICKY_NAMES[i] ?? value}`}
+              title={STICKY_NAMES[i] ?? value}
+              onClick={() => engine.setStickyColor(value)}
+            >
+              <span style={{ background: value }} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="group colors" role="radiogroup" aria-label="Цвет">
+          {PEN_COLORS.map(({ value, name }) => (
+            <button
+              key={name}
+              className="swatch"
+              role="radio"
+              aria-checked={inkTool && state.color === value}
+              aria-label={name}
+              title={name}
+              onClick={() => engine.setColor(value)}
+            >
+              <span style={{ background: value ?? 'var(--canvas-ink)' }} />
+            </button>
+          ))}
+        </div>
+      )}
+      {showSizes && (
+        <>
+          <span className="sep" />
+          <div
+            className="group sizes"
+            role="radiogroup"
+            aria-label={eraser ? 'Размер ластика' : 'Толщина'}
+            data-eraser={eraser || undefined}
           >
-            <span style={{ background: value ?? 'var(--canvas-ink)' }} />
-          </button>
-        ))}
-      </div>
-      <span className="sep" />
-      <div
-        className="group sizes"
-        role="radiogroup"
-        aria-label={eraser ? 'Размер ластика' : 'Толщина'}
-        data-eraser={eraser || undefined}
-      >
-        {(eraser ? ERASER_SIZES : PEN_SIZES).map(({ value, name, dot }) => (
-          <button
-            key={name}
-            className="size"
-            role="radio"
-            aria-checked={eraser ? state.eraserSize === value : pen && state.size === value}
-            aria-label={name}
-            title={name}
-            onClick={() => (eraser ? engine.setEraserSize(value) : engine.setSize(value))}
-          >
-            <span style={{ width: dot, height: dot }} />
-          </button>
-        ))}
-      </div>
+            {(eraser ? ERASER_SIZES : PEN_SIZES).map(({ value, name, dot }) => (
+              <button
+                key={name}
+                className="size"
+                role="radio"
+                aria-checked={
+                  eraser
+                    ? state.eraserSize === value
+                    : (tool === 'pen' || tool === 'shape') && state.size === value
+                }
+                aria-label={name}
+                title={name}
+                onClick={() => (eraser ? engine.setEraserSize(value) : engine.setSize(value))}
+              >
+                <span style={{ width: dot, height: dot }} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <span className="sep" />
       <div className="group">
         <button

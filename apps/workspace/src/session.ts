@@ -4,7 +4,7 @@
  */
 
 import { IndexeddbPersistence } from 'y-indexeddb';
-import { createBoardDoc } from '@kayospace/board';
+import { META, createBoardDoc, getBoardName, setBoardName } from '@kayospace/board';
 import { SyncClient, hubSyncUrl, type SyncError, type SyncStatus } from '@kayospace/sync';
 
 export type SessionSync = SyncStatus | 'off' | 'bad-address';
@@ -14,6 +14,8 @@ export interface SessionState {
   loaded: boolean;
   sync: SessionSync;
   error: SyncError | null;
+  /** Название доски (хранится в самой доске и синхронизируется). */
+  name: string | null;
 }
 
 export class BoardSession {
@@ -45,7 +47,10 @@ export class BoardSession {
         sync = 'bad-address';
       }
     }
-    this.state = { loaded: !persistence, sync, error: null };
+    this.state = { loaded: !persistence, sync, error: null, name: null };
+    const meta = this.doc.getMap(META);
+    const onMeta = (): void => this.update({ name: getBoardName(this.doc) ?? null });
+    meta.observe(onMeta);
     persistence?.whenSynced.then(
       () => this.update({ loaded: true }),
       () => this.update({ loaded: true }),
@@ -59,6 +64,12 @@ export class BoardSession {
   subscribe(cb: () => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
+  }
+
+  /** Переименовать доску (видно на всех устройствах). */
+  rename(name: string): void {
+    const n = name.trim();
+    if (n && n !== this.state.name) setBoardName(this.doc, n);
   }
 
   /** Переподключиться немедленно (после сна, смены сети). */
@@ -85,7 +96,8 @@ export class BoardSession {
     if (
       next.loaded === this.state.loaded &&
       next.sync === this.state.sync &&
-      next.error === this.state.error
+      next.error === this.state.error &&
+      next.name === this.state.name
     ) {
       return;
     }

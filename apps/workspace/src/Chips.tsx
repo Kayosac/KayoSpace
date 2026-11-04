@@ -30,10 +30,12 @@ export function syncTone(sync: string): 'ok' | 'wait' | 'bad' | 'idle' {
 
 export function SyncChip({
   board,
+  name,
   state,
   onClick,
 }: {
   board: string;
+  name: string | null;
   state: SessionState | null;
   onClick: () => void;
 }) {
@@ -42,9 +44,11 @@ export function SyncChip({
     sync === 'offline' && state?.error ? ` — ${ERROR_TEXT[state.error] ?? state.error}` : '';
   const text = (SYNC_TEXT[sync] ?? sync) + detail;
   return (
-    <button className="chip board-chip" onClick={onClick} title="Доска и синхронизация">
+    <button className="chip board-chip" onClick={onClick} title="Доски (Ctrl/⌘ K)">
       <span className="brand">Kayospace</span>
-      <span className="board-name">{board}</span>
+      <span className="board-name" data-testid="board-title">
+        {name ?? board}
+      </span>
       <span className="sync" data-tone={syncTone(sync)} data-testid="sync" data-sync={sync}>
         <i />
         <span>{text}</span>

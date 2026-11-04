@@ -7,8 +7,11 @@ import {
   loadSettings,
   saveCamera,
   saveSettings,
+  touchRecent,
   type WorkspaceSettings,
 } from './settings';
+import { BoardsPanel } from './BoardsPanel';
+import { NoteEditor } from './NoteEditor';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
@@ -43,7 +46,9 @@ export function App() {
   const [settings, setSettings] = useState<WorkspaceSettings>(loadSettings);
   const [session, setSession] = useState<BoardSession | null>(null);
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panel, setPanel] = useState<'settings' | 'boards' | null>(null);
+  /** Название новой доски — запишем в неё, когда она откроется. */
+  const pendingName = useRef<{ id: string; name: string } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -64,7 +69,18 @@ export function App() {
       syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null,
     );
     setSession(s);
+    const pending = pendingName.current;
+    const nameNewBoard = (): void => {
+      if (pending?.id === board && s.getState().loaded) {
+        if (!s.getState().name) s.rename(pending.name);
+        pendingName.current = null;
+        stop();
+      }
+    };
+    const stop = s.subscribe(nameNewBoard);
+    nameNewBoard();
     return () => {
+      stop();
       setSession(null);
       s.destroy();
     };
@@ -82,6 +98,8 @@ export function App() {
       color: s.color,
       size: s.size,
       eraserSize: s.eraserSize,
+      shapeKind: s.shapeKind,
+      stickyColor: s.stickyColor,
       touchDraws: s.touchDraws,
     });
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,10 +107,21 @@ export function App() {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => saveCamera(session.board, c), 300);
     });
-    // Новая на этом устройстве доска: когда загрузится, показать всё содержимое.
+    // Новая на этом устройстве доска: когда загрузится (или придёт с хаба), показать всё содержимое.
+    // Один раз и только пока здесь ничего не делали — иначе вид прыгал бы, например, при переименовании.
+    let fitted = false;
     const fitWhenLoaded = (): void => {
-      if (session.getState().loaded && e.cameraIsDefault && e.scene.size > 0) e.zoomToFit();
+      if (fitted || !session.getState().loaded || !e.cameraIsDefault) return;
+      if (e.getState().canUndo) {
+        fitted = true;
+        return;
+      }
+      if (e.scene.size > 0) {
+        fitted = true;
+        e.zoomToFit();
+      }
     };
+    // Состояние доски меняется при загрузке из IndexedDB и при «синхронизировано» — содержимое уже на месте.
     const stopSession = session.subscribe(fitWhenLoaded);
     fitWhenLoaded();
     setEngine(e);
@@ -118,16 +147,52 @@ export function App() {
       s.tool !== engineState.tool ||
       s.color !== engineState.color ||
       s.size !== engineState.size ||
-      s.eraserSize !== engineState.eraserSize
+      s.eraserSize !== engineState.eraserSize ||
+      s.shapeKind !== engineState.shapeKind ||
+      s.stickyColor !== engineState.stickyColor
     ) {
       update({
         tool: engineState.tool,
         color: engineState.color,
         size: engineState.size,
         eraserSize: engineState.eraserSize,
+        shapeKind: engineState.shapeKind,
+        stickyColor: engineState.stickyColor,
       });
     }
   }, [engineState, update]);
+
+  // Недавние доски: открытая — наверх, с актуальным названием.
+  const boardName = sessionState?.name ?? null;
+  useEffect(() => {
+    const s = settingsRef.current;
+    const top = s.recentBoards[0];
+    if (top?.id === s.board && (top.name === boardName || !boardName)) return;
+    update({ recentBoards: touchRecent(s.recentBoards, s.board, boardName) });
+  }, [board, boardName, update]);
+
+  const openBoard = useCallback(
+    (id: string, name: string | null, isNew: boolean) => {
+      if (isNew && name) pendingName.current = { id, name };
+      engine?.finishEditing(null);
+      const s = settingsRef.current;
+      update({ board: id, recentBoards: touchRecent(s.recentBoards, id, name) });
+      setPanel(null);
+    },
+    [engine, update],
+  );
+
+  // Ctrl/⌘ K — список досок.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyK') {
+        e.preventDefault();
+        setPanel((p) => (p === 'boards' ? null : 'boards'));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Вернулись в приложение (после сна, из фона) — переподключиться сразу, не дожидаясь паузы.
   useEffect(() => {
@@ -146,17 +211,38 @@ export function App() {
     <div className="app">
       <div className="stage" ref={stageRef} data-testid="stage" />
       <header className="top top-left">
-        <SyncChip board={board} state={sessionState} onClick={() => setPanelOpen((v) => !v)} />
+        <SyncChip
+          board={board}
+          name={boardName}
+          state={sessionState}
+          onClick={() => setPanel((p) => (p === 'boards' ? null : 'boards'))}
+        />
       </header>
       <div className="top top-right">
         {engine && engineState && <ZoomControls engine={engine} zoom={engineState.zoom} />}
       </div>
       {engine && engineState && <SelectionMenu engine={engine} state={engineState} />}
+      {engine && engineState && <NoteEditor engine={engine} state={engineState} />}
       {engine && engineState && (
-        <Toolbar engine={engine} state={engineState} onSettings={() => setPanelOpen((v) => !v)} />
+        <Toolbar
+          engine={engine}
+          state={engineState}
+          onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
+        />
       )}
       {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}
-      {panelOpen && (
+      {panel === 'boards' && (
+        <BoardsPanel
+          current={board}
+          currentName={boardName}
+          recent={settings.recentBoards}
+          hub={syncOn && hubUrl.trim() ? { url: hubUrl, token: hubToken } : null}
+          onOpen={openBoard}
+          onRename={(n) => session?.rename(n)}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === 'settings' && (
         <SettingsPanel
           settings={settings}
           state={sessionState}
@@ -165,7 +251,7 @@ export function App() {
             update({ touchDraws: on });
             engine?.setTouchDraws(on);
           }}
-          onClose={() => setPanelOpen(false)}
+          onClose={() => setPanel(null)}
         />
       )}
     </div>

@@ -19,6 +19,7 @@ export class BoardStore {
   private readonly docs = new Map<string, Y.Doc>();
   private readonly loading = new Map<string, Promise<Y.Doc>>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly saving = new Map<string, Promise<void>>();
 
   constructor(
     readonly dir: string,
@@ -101,7 +102,23 @@ export class BoardStore {
     );
   }
 
-  async save(id: string): Promise<void> {
+  /**
+   * Сохранить доску. Записи одной доски идут строго по очереди: иначе две записи во временный
+   * файл одновременно, и вторая переименовывает уже переименованный файл (ENOENT).
+   */
+  save(id: string): Promise<void> {
+    const prev = this.saving.get(id) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(() => this.write(id))
+      .finally(() => {
+        if (this.saving.get(id) === next) this.saving.delete(id);
+      });
+    this.saving.set(id, next);
+    return next;
+  }
+
+  private async write(id: string): Promise<void> {
     const doc = this.docs.get(id);
     if (!doc) return;
     const tmp = `${this.file(id)}.tmp`;
@@ -109,14 +126,14 @@ export class BoardStore {
     await rename(tmp, this.file(id));
   }
 
-  /** Записать на диск всё, что ждёт сохранения. */
+  /** Записать на диск всё, что ждёт сохранения, и дождаться уже идущих записей. */
   async flush(): Promise<void> {
     const ids = [...this.timers.keys()];
     for (const id of ids) {
       clearTimeout(this.timers.get(id));
       this.timers.delete(id);
     }
-    await Promise.all(ids.map((id) => this.save(id)));
+    await Promise.all([...ids.map((id) => this.save(id)), ...this.saving.values()]);
   }
 
   async close(): Promise<void> {

@@ -122,8 +122,8 @@ test('офлайн: доска сохраняется на устройстве 
   await expect.poll(() => elements(page)).toBe(2);
   expect(await hubElements(request, board)).toBe(0);
 
-  // Включаем синхронизацию через панель настроек.
-  await page.getByTestId('sync').click();
+  // Включаем синхронизацию через панель настроек (шестерёнка на панели инструментов).
+  await page.getByRole('button', { name: 'Настройки' }).click();
   await page.getByLabel('Синхронизировать через хаб').check();
   await page.getByLabel('Адрес хаба').fill(HUB_ADDRESS);
   await page.getByLabel('Токен').fill(HUB_TOKEN);
@@ -322,3 +322,102 @@ interface Sel {
   getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null;
   scene: { items: Map<string, { bounds: { minX: number } }> };
 }
+
+test('стикеры, текст, фигуры, стрелка с привязкой и доски', async ({ browser, request }) => {
+  const board = 'e2e-notes';
+  const page = await openDevice(browser, { ...synced, board });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  const kinds = () =>
+    page.evaluate(() =>
+      [
+        ...(
+          window.__kayospace!.engine as unknown as {
+            scene: {
+              items: Map<string, { element: { type: string; props: Record<string, unknown> } }>;
+            };
+          }
+        ).scene.items.values(),
+      ].map((i) => i.element),
+    );
+
+  // Стикер: тап — сразу ввод текста; Esc — сохранить.
+  await page.keyboard.press('n');
+  await page.mouse.click(300, 300);
+  await expect(page.getByTestId('note-editor')).toBeFocused();
+  await page.keyboard.type('Первая мысль');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('note-editor')).toBeHidden();
+
+  // Текст.
+  await page.keyboard.press('t');
+  await page.mouse.click(250, 150);
+  await page.keyboard.type('Заголовок');
+  await page.mouse.click(1000, 650); // тап мимо тоже сохраняет
+
+  // Пустой стикер не остаётся на доске.
+  await page.keyboard.press('n');
+  await page.mouse.click(900, 200);
+  await page.keyboard.press('Escape');
+
+  // Прямоугольник и стрелка от стикера к прямоугольнику.
+  await page.keyboard.press('r');
+  await page.mouse.move(650, 250);
+  await page.mouse.down();
+  await page.mouse.move(850, 400, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.press('a');
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  await page.mouse.move(750, 320, { steps: 8 });
+  await page.mouse.up();
+
+  await expect
+    .poll(async () => (await kinds()).map((e) => e.type).sort())
+    .toEqual(['arrow', 'shape', 'sticky', 'text']);
+  const els = await kinds();
+  const sticky = els.find((e) => e.type === 'sticky')!;
+  expect(sticky.props.content).toBe('Первая мысль');
+  const arrow = els.find((e) => e.type === 'arrow')!;
+  expect((arrow.props.start as { kind: string }).kind).toBe('element');
+  expect((arrow.props.end as { kind: string }).kind).toBe('element');
+  await expect.poll(() => hubElements(request, board)).toBe(4);
+
+  // Двойной тап по стикеру (выбрать, потом ещё раз) — правка.
+  await page.keyboard.press('v');
+  await page.mouse.click(300, 300);
+  await page.mouse.click(300, 300);
+  await expect(page.getByTestId('note-editor')).toBeFocused();
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Escape');
+  await expect
+    .poll(async () => (await kinds()).find((e) => e.type === 'sticky')!.props.content)
+    .toBe('Первая мысль!');
+  await page.screenshot({ path: shot('workspace-notes.png') });
+
+  // Доски: переименовать текущую, создать новую через Ctrl+K, вернуться.
+  await page.getByTestId('board-title').click();
+  await page.getByTestId('board-name').fill('Мысли');
+  await page.getByTestId('board-name').press('Enter');
+  await expect(page.getByTestId('board-title')).toHaveText('Мысли');
+  await expect
+    .poll(async () => {
+      const res = await request.get(`http://${HUB_ADDRESS}/api/boards`, {
+        headers: { Authorization: `Bearer ${HUB_TOKEN}` },
+      });
+      return ((await res.json()) as { id: string; name: string | null }[]).find(
+        (b) => b.id === board,
+      )?.name;
+    })
+    .toBe('Мысли');
+  // Панель ещё открыта — сразу ищем/создаём доску.
+  await page.getByLabel('Найти или создать доску').fill('Вторая доска');
+  await page.screenshot({ path: shot('workspace-boards.png') });
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('board-title')).toHaveText('Вторая доска');
+  await expect.poll(() => elements(page)).toBe(0);
+  await page.keyboard.press('Control+k');
+  await page.getByRole('option', { name: /Мысли/ }).click();
+  await expect(page.getByTestId('board-title')).toHaveText('Мысли');
+  await expect.poll(() => elements(page)).toBe(4);
+});
