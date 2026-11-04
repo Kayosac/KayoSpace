@@ -1,0 +1,6 @@
+dist
+node_modules
+pnpm-lock.yaml
+apps/app/src-tauri/target
+apps/app/src-tauri/gen
+apps/pen-lab/dist-single

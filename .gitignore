@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.turbo/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Tauri / Rust
+apps/app/src-tauri/target/
+apps/app/src-tauri/gen/schemas/
+
+# Android / IDE
+.idea/
+*.iml
+.gradle/
+local.properties
+apps/pen-lab/dist-single/

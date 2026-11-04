@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Типы, линтер, тесты, сборка
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Установка зависимостей
+        # Пока pnpm-lock.yaml нет в репозитории — ставим без него и сохраняем получившийся lock-файл.
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Сохранить lock-файл
+        if: hashFiles('pnpm-lock.yaml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-lock
+          path: pnpm-lock.yaml
+          retention-days: 7
+
+      - name: Проверка типов
+        run: pnpm typecheck
+
+      - name: Линтер
+        run: pnpm lint
+
+      - name: Тесты
+        run: pnpm test
+
+      - name: Сборка Pen Lab
+        run: |
+          pnpm --filter @kayospace/pen-lab build
+          pnpm --filter @kayospace/pen-lab build:single
+
+      - name: Pen Lab одним файлом
+        uses: actions/upload-artifact@v4
+        with:
+          name: pen-lab
+          path: apps/pen-lab/dist-single/pen-lab.html
+          retention-days: 14

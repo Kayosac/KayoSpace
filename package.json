@@ -1,0 +1,40 @@
+{
+  "name": "kayospace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Kayospace — личный воркспейс: бесконечный холст, стилус, агенты через MCP",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @kayospace/pen-lab dev",
+    "dev:lan": "pnpm --filter @kayospace/pen-lab dev --host",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "app:dev": "pnpm --filter @kayospace/app tauri dev",
+    "app:build": "pnpm --filter @kayospace/app tauri build",
+    "app:android:init": "pnpm --filter @kayospace/app tauri android init",
+    "app:android:dev": "pnpm --filter @kayospace/app tauri android dev",
+    "app:android:build": "pnpm --filter @kayospace/app tauri android build --apk"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

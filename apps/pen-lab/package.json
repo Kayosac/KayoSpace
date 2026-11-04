@@ -1,0 +1,23 @@
+{
+  "name": "@kayospace/pen-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Стенд для замера пера: давление, наклон, частота событий, задержка отрисовки",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "node scripts/build-single.mjs",
+    "preview": "vite preview --host",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kayospace/ink": "workspace:*",
+    "@kayospace/model": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  }
+}
