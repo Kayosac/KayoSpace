@@ -13,6 +13,7 @@ import {
 import { BoardsPanel } from './BoardsPanel';
 import { AssetStore, imageFiles } from './assets';
 import { NoteEditor } from './NoteEditor';
+import { lowLatencyInk, releaseFieldFocus } from './touch';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
@@ -29,6 +30,14 @@ import { ConnectScreen, type ConnectReason } from './ConnectScreen';
 import { parseConnectLink } from './devices';
 import { DEFAULT_HUB } from './config';
 import { createSecretStore } from './secrets';
+import {
+  INBOX_BOARD,
+  INBOX_NAME,
+  sharedFiles,
+  sharedText,
+  takeShared,
+  type SharedPayload,
+} from './share';
 
 declare global {
   interface Window {
@@ -191,6 +200,7 @@ export function App() {
     };
   }, [board, hubUrl, hubToken]);
 
+  const lowLatency = lowLatencyInk(settings.lowLatencyInk);
   // Холст для открытой доски.
   useEffect(() => {
     const host = stageRef.current;
@@ -209,6 +219,7 @@ export function App() {
       touchDraws: s.touchDraws,
       rotateWithFingers: s.rotateWithFingers,
       assets,
+      lowLatency,
     });
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const stopCamera = e.onCamera((c) => {
@@ -242,7 +253,8 @@ export function App() {
       setEngine(null);
       e.destroy();
     };
-  }, [session]);
+    // Режим канвы задаётся при создании: смена настройки пересоздаёт холст.
+  }, [session, lowLatency]);
 
   const engineState = useStore<EngineState>(engine);
   const sessionState = useStore<SessionState>(session);
@@ -497,6 +509,54 @@ export function App() {
     };
   }, [engine, insertImages]);
 
+  // «Поделиться» → Kayospace (Android): присланное ложится на доску «Входящие».
+  const pendingShare = useRef<SharedPayload | null>(null);
+  const [shareTick, setShareTick] = useState(0);
+  useEffect(() => {
+    const check = async (): Promise<void> => {
+      const p = await takeShared();
+      if (!p) return;
+      pendingShare.current = p;
+      if (settingsRef.current.board !== INBOX_BOARD) openBoard(INBOX_BOARD, INBOX_NAME, false);
+      setShareTick((t) => t + 1);
+    };
+    void check();
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [openBoard]);
+  const boardLoaded = sessionState?.loaded ?? false;
+  useEffect(() => {
+    const p = pendingShare.current;
+    if (!p || !engine || !session || board !== INBOX_BOARD || !boardLoaded) return;
+    pendingShare.current = null;
+    if (!boardName) session.rename(INBOX_NAME);
+    void (async () => {
+      const text = sharedText(p);
+      if (text) {
+        const id = engine.insertText(text);
+        if (id) engine.stackBelow(id);
+      }
+      for (const file of sharedFiles(p)) {
+        try {
+          const img = await assets.add(file);
+          const id = engine.insertImage(
+            img.assetId,
+            { w: img.width, h: img.height },
+            { blob: img.blob, alt: file.name },
+          );
+          engine.stackBelow(id);
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : 'Картинку не удалось вставить');
+        }
+      }
+      // Меню выделения закрыло бы только что присланное.
+      engine.clearSelection();
+    })();
+  }, [engine, session, board, boardLoaded, boardName, shareTick, showToast]);
+
   /** Кнопка «Вставить» (планшет без клавиатуры): системный буфер, если доступен, иначе — свой. */
   const pasteFromButton = useCallback(async () => {
     if (!engine) return;
@@ -543,6 +603,7 @@ export function App() {
         className="stage"
         ref={stageRef}
         data-testid="stage"
+        onPointerDownCapture={releaseFieldFocus}
         onDragOver={(e) => {
           if (!e.dataTransfer.types.includes('Files')) return;
           e.preventDefault();
@@ -681,6 +742,9 @@ export function App() {
             update({ rotateWithFingers: on });
             engine?.setRotateWithFingers(on);
           }}
+          lowLatency={lowLatency}
+          onLowLatency={(on) => update({ lowLatencyInk: on })}
+          onOpenBoard={(id, name) => openBoard(id, name, false)}
           onClose={() => setPanel(null)}
         />
       )}

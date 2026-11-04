@@ -21,6 +21,8 @@ export interface WorkspaceSettings {
   touchDraws: boolean;
   /** Поворачивать холст двумя пальцами. */
   rotateWithFingers: boolean;
+  /** Канва низкой задержки для пера; null — само (включено на Android). */
+  lowLatencyInk: boolean | null;
   tool: Tool;
   /** null — цвет чернил темы. */
   color: string | null;
@@ -63,6 +65,7 @@ export const defaultSettings: WorkspaceSettings = {
   connectSkipped: false,
   touchDraws: false,
   rotateWithFingers: true,
+  lowLatencyInk: null,
   tool: 'pen',
   color: null,
   size: 3,

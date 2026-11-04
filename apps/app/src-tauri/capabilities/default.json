@@ -8,6 +8,7 @@
     "core:event:default",
     "deep-link:default",
     "secure-store:default",
+    "share-target:default",
     "dialog:allow-save",
     "fs:allow-write-file"
   ]

@@ -121,11 +121,22 @@ HUB_URL=https://<домен>:<порт> HUB_TOKEN=<токен хаба> pnpm ai-
 | Логи                          | `cd /opt/kayospace/deploy && docker compose logs -f hub` (исполнитель ИИ — `logs -f ai-worker`)                        |
 | Перезапуск                    | `cd /opt/kayospace/deploy && docker compose restart`                                                                   |
 | Остановить                    | `cd /opt/kayospace/deploy && docker compose down`                                                                      |
-| Резервная копия досок         | `docker run --rm -v kayospace_hub-data:/data -v "$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .` |
+| Копия всех данных хаба        | `docker run --rm -v kayospace_hub-data:/data -v "$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .` |
 | Подключить устройство         | `cd /opt/kayospace/deploy && docker compose exec hub pnpm pair` — QR и код в терминале                                 |
 | Сменить ключ администратора   | изменить `HUB_TOKEN` в `/opt/kayospace/deploy/.env`, затем `docker compose up -d` (токены устройств остаются)          |
+
+## Резервные копии
+
+Хаб сам снимает копию досок раз в 6 часов, если что-то изменилось (`BACKUP_INTERVAL_HOURS` в `.env`, 0 — выключить).
+Хранятся все копии за двое суток, по одной в день — две недели, по одной в неделю — два месяца; лежат в томе
+данных, в папке `backups/`. Восстановить доску: в приложении — Настройки → Резервные копии → «Восстановить доску».
+Восстановленная доска появляется рядом с исходной («… (копия от 5 ноября)»), исходная не меняется.
+
+Копии на том же диске спасают от ошибок и случайного удаления, но не от потери сервера. Для этого — снимки
+диска у хостинга или время от времени скачивайте архив данных (команда «Копия всех данных хаба» выше)
+и забирайте его к себе: `scp root@<сервер>:/opt/kayospace/deploy/kayospace-boards.tgz .`
 
 ## Что пока не сделано
 
 - ChatGPT как коннектор — позже (OAuth на хабе уже есть, нужна проверка с их стороны).
-- Автоматические резервные копии во внешнее хранилище — фаза 2.
+- Отправка резервных копий во внешнее хранилище (S3 и т. п.) — позже.

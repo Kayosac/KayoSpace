@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { GRID_STEP, gridStepFor, samplesWorldBounds, unionRect, wrapText } from './renderer';
+import {
+  GRID_STEP,
+  closeCamera,
+  gridStepFor,
+  samplesWorldBounds,
+  snappedCamera,
+  unionRect,
+  wrapText,
+} from './renderer';
+import { worldToScreen } from './camera';
 
 describe('отрисовка: вспомогательная геометрия', () => {
   it('шаг сетки укрупняется при отдалении и мельчает при приближении', () => {
@@ -45,5 +54,32 @@ describe('перенос текста', () => {
 
   it('длинное слово режется', () => {
     expect(wrapText(ctx, 'абвгдежзик', 40)).toEqual(['абвг', 'дежз', 'ик']);
+  });
+});
+
+describe('сдвиг картинки на целые пиксели', () => {
+  it('камера картинки сдвинута на остаток — любой точке мира, с поворотом и без', () => {
+    for (const rotation of [0, 0.7]) {
+      const cam = { x: 10.3, y: -4.1, zoom: 1.6, rotation };
+      const img = snappedCamera(cam, 0.3, -0.2);
+      for (const [wx, wy] of [
+        [0, 0],
+        [120, -40],
+        [-7, 300],
+      ] as const) {
+        const a = worldToScreen(cam, wx, wy);
+        const b = worldToScreen(img, wx, wy);
+        expect(b.x).toBeCloseTo(a.x - 0.3, 9);
+        expect(b.y).toBeCloseTo(a.y + 0.2, 9);
+      }
+      expect(closeCamera(img, cam, 1.25)).toBe(true);
+    }
+  });
+
+  it('другая камера — не «та же картинка»', () => {
+    const cam = { x: 0, y: 0, zoom: 1 };
+    expect(closeCamera(cam, { ...cam, x: 3 }, 1)).toBe(false);
+    expect(closeCamera(cam, { ...cam, zoom: 1.01 }, 1)).toBe(false);
+    expect(closeCamera(cam, { ...cam, rotation: 0.1 }, 1)).toBe(false);
   });
 });

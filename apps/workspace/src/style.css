@@ -1225,9 +1225,28 @@ p.bad {
   height: 16px;
 }
 
+.project-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.project-chip.primary-chip {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.project-chip.primary-chip:disabled {
+  opacity: 0.45;
+}
+
 .project-input {
   height: 30px;
-  width: 160px;
+  flex: 1;
+  min-width: 140px;
   padding: 0 10px;
   font: inherit;
   font-size: 13px;
@@ -1260,4 +1279,79 @@ p.bad {
 
 .board-list .empty {
   padding: 8px 10px;
+}
+
+.danger-btn.neutral {
+  color: var(--accent);
+}
+
+.backups .field {
+  margin: 10px 0 6px;
+}
+
+.restored {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  font-size: 13px;
+}
+
+/* Сенсорный экран: цели для пальца не меньше 40 пикселей, подсказки про клавиши не нужны. */
+@media (pointer: coarse) {
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .project-chip,
+  .project-input,
+  .project-edit input,
+  .danger-btn,
+  .add-btn {
+    height: 40px;
+  }
+
+  .project-chip {
+    border-radius: 20px;
+  }
+
+  .project-chip.add {
+    min-width: 40px;
+    justify-content: center;
+  }
+
+  .project-input {
+    border-radius: 20px;
+    font-size: 16px;
+  }
+
+  /* Шрифт меньше 16 пикселей заставляет мобильные браузеры увеличивать страницу при фокусе. */
+  .field input,
+  .field select,
+  .search input,
+  .project-edit input,
+  .selection-menu .frame-name {
+    font-size: 16px;
+  }
+
+  .selection-menu .frame-name {
+    height: 36px;
+  }
+
+  .board-list button {
+    min-height: 44px;
+  }
+
+  .secondary {
+    height: 40px;
+  }
+
+  kbd {
+    display: none;
+  }
 }

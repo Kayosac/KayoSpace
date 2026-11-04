@@ -23,12 +23,13 @@ import { DeviceRegistry, isDeviceToken } from './devices';
 import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset } from './assets';
+import { Backups, handleBackups } from './backups';
 import { OAuthServer, publicBase } from './oauth';
 import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.3.0';
+export const HUB_VERSION = '0.4.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -47,6 +48,8 @@ export interface HubOptions {
    * Без него — адрес, по которому пришёл запрос.
    */
   publicUrl?: string;
+  /** Как часто снимать резервную копию досок, мс (0 — не снимать). По умолчанию — 6 часов. */
+  backupIntervalMs?: number;
 }
 
 export interface Hub {
@@ -55,6 +58,7 @@ export interface Hub {
   ai: AiQueue;
   devices: DeviceRegistry;
   sync: SyncServer;
+  backups: Backups;
   close(): Promise<void>;
 }
 
@@ -69,6 +73,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const devices = new DeviceRegistry(join(opts.dataDir, 'devices.json'));
   await devices.init();
   const ai = new AiQueue(store);
+  const backups = new Backups(store, { intervalMs: opts.backupIntervalMs ?? 6 * 3_600_000 });
+  backups.start();
   /** MCP черновиков ИИ: по обработчику на задачу. */
   const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
 
@@ -171,6 +177,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     if (url.pathname === '/api/boards' && req.method === 'GET') {
       return json(res, 200, await store.list());
     }
+    if (await handleBackups(req, res, url, backups, access)) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
@@ -197,7 +204,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     ai,
     devices,
     sync,
+    backups,
     async close() {
+      backups.stop();
       ai.close();
       await sync.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));

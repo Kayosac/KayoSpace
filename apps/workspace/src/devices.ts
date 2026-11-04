@@ -185,3 +185,6 @@ export function lastSeenText(at: number, now: number = Date.now()): string {
     ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
   });
 }
+
+/** Запрос к API хаба с понятными ошибками (общий для разделов настроек). */
+export { call as hubCall };

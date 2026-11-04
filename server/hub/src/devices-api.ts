@@ -106,7 +106,10 @@ export async function handleDevices(
   return false;
 }
 
-function readJson(req: IncomingMessage, limit = 16 * 1024): Promise<Record<string, unknown>> {
+export function readJson(
+  req: IncomingMessage,
+  limit = 16 * 1024,
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
@@ -129,7 +132,7 @@ function readJson(req: IncomingMessage, limit = 16 * 1024): Promise<Record<strin
   });
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+export function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',

@@ -4,6 +4,8 @@ import type { Project } from '@kayospace/model';
 import type { RecentBoard } from './settings';
 import { matchesQuery, mergeBoards } from './boards';
 import { inProject } from './projects';
+import { CommitInput } from './CommitInput';
+import { finePointer } from './touch';
 import { CloseIcon, ExportIcon, PlusIcon, SearchIcon } from './icons';
 
 export function BoardsPanel({
@@ -52,7 +54,6 @@ export function BoardsPanel({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const [name, setName] = useState(currentName ?? '');
   const [hubBoards, setHubBoards] = useState<
     { id: string; name: string | null; elements: number }[]
   >([]);
@@ -61,11 +62,10 @@ export function BoardsPanel({
   const [newProject, setNewProject] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const shown = projects.find((p) => p.id === project) ?? null;
-  const [projectName, setProjectName] = useState(shown?.name ?? '');
-  useEffect(() => setProjectName(shown?.name ?? ''), [shown?.id, shown?.name]);
-
-  useEffect(() => setName(currentName ?? ''), [currentName]);
-  useEffect(() => searchRef.current?.focus(), []);
+  // Сразу ставить курсор в поиск — только при мыши: на планшете это открыло бы клавиатуру на пол-экрана.
+  useEffect(() => {
+    if (finePointer()) searchRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (!hub) return;
@@ -112,14 +112,10 @@ export function BoardsPanel({
       </div>
       <label className="field">
         <span>Название этой доски</span>
-        <input
-          value={name}
+        <CommitInput
+          value={currentName ?? ''}
           placeholder={current}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={() => name.trim() && onRename(name)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur();
-          }}
+          onCommit={(v) => v.trim() && onRename(v)}
           data-testid="board-name"
         />
       </label>
@@ -170,36 +166,61 @@ export function BoardsPanel({
             <PlusIcon />
           </button>
         ) : (
-          <input
-            className="project-input"
-            autoFocus
-            value={newProject}
-            placeholder="Название проекта"
-            aria-label="Название нового проекта"
-            onChange={(e) => setNewProject(e.target.value)}
-            onBlur={() => setNewProject(null)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newProject.trim()) {
-                onCreateProject(newProject.trim());
-                setNewProject(null);
-              } else if (e.key === 'Escape') {
-                setNewProject(null);
-              }
+          // Форма: «Создать» — кнопкой, «Готово» на экранной клавиатуре или Enter.
+          // Уход фокуса ничего не отменяет — на планшете клавиатуру прячут, не закончив ввод.
+          <form
+            className="project-new"
+            data-testid="new-project"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const n = newProject.trim();
+              if (!n) return;
+              onCreateProject(n);
+              setNewProject(null);
             }}
-          />
+          >
+            <input
+              className="project-input"
+              autoFocus
+              value={newProject}
+              placeholder="Название проекта"
+              aria-label="Название нового проекта"
+              enterKeyHint="done"
+              maxLength={60}
+              onChange={(e) => setNewProject(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setNewProject(null);
+              }}
+              data-testid="new-project-name"
+            />
+            <button
+              type="submit"
+              className="project-chip primary-chip"
+              disabled={!newProject.trim()}
+              data-testid="new-project-create"
+            >
+              Создать
+            </button>
+            <button
+              type="button"
+              className="project-chip add"
+              aria-label="Не создавать проект"
+              title="Не создавать"
+              onClick={() => setNewProject(null)}
+            >
+              <CloseIcon />
+            </button>
+          </form>
         )}
       </div>
       {shown && (
         <div className="row project-edit">
-          <input
-            value={projectName}
+          <CommitInput
+            key={shown.id}
+            value={shown.name}
             aria-label="Название проекта"
             data-testid="project-name"
-            onChange={(e) => setProjectName(e.target.value)}
-            onBlur={() => onRenameProject(shown.id, projectName)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur();
-            }}
+            onCommit={(v) => onRenameProject(shown.id, v)}
           />
           <button className="link-btn danger-link" onClick={() => onDeleteProject(shown.id)}>
             Удалить проект
@@ -213,6 +234,7 @@ export function BoardsPanel({
           value={query}
           placeholder="Найти или создать доску"
           aria-label="Найти или создать доску"
+          enterKeyHint="go"
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
@@ -295,7 +317,7 @@ export function BoardsPanel({
       </div>
       {hub && hubError && <p className="muted">Список с хаба недоступен: {hubError}</p>}
       {!hub && <p className="muted">Включите синхронизацию — появятся доски с хаба.</p>}
-      <p className="muted">Ctrl/⌘ K — открыть этот список с клавиатуры.</p>
+      {finePointer() && <p className="muted">Ctrl/⌘ K — открыть этот список с клавиатуры.</p>}
     </aside>
   );
 }

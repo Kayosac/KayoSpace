@@ -24,6 +24,8 @@ services:
       PUBLIC_URL: https://${HUB_DOMAIN}:${HTTPS_PORT:-443}
       # Исполнитель ИИ ходит к хабу внутри docker-сети по имени hub.
       INTERNAL_HOSTS: hub
+      # Резервные копии досок (в томе данных, папка backups/): раз в столько часов, 0 — выключить.
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-6}
     volumes:
       - hub-data:/data
     mem_limit: ${HUB_MEMORY:-768m}

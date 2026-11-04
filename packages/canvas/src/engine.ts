@@ -11,6 +11,7 @@ import {
   cloneElements,
   deleteElement,
   deleteElements,
+  elementBounds,
   elementsMap,
   getElement,
   isIdentity,
@@ -146,6 +147,8 @@ export interface EngineOptions {
   rotateWithFingers?: boolean;
   /** Откуда грузить картинки по id содержимого. */
   assets?: AssetLoader;
+  /** Канва низкой задержки для пера (по умолчанию — да). */
+  lowLatency?: boolean;
 }
 
 /** Хранилище картинок приложения: локальная копия или хаб. */
@@ -274,7 +277,7 @@ export class CanvasEngine {
     host.style.setProperty('-webkit-user-select', 'none');
     host.style.setProperty('-webkit-touch-callout', 'none');
 
-    this.renderer = new Renderer(host);
+    this.renderer = new Renderer(host, { lowLatency: opts.lowLatency ?? true });
     this.scene = new Scene(doc);
     this.images = new ImageCache(opts.assets ?? null, (assetId) => {
       // Картинка готова — перерисовать места, где она стоит.
@@ -662,6 +665,25 @@ export class CanvasEngine {
     if (opts.blob) void this.images.put(assetId, opts.blob);
     this.insert([el]);
     return el.id;
+  }
+
+  /**
+   * Положить элемент под всё остальное содержимое доски, по левому краю, и показать его —
+   * лента «Входящих»: каждое новое — ниже предыдущих. Один шаг отмены вместе со вставкой.
+   */
+  stackBelow(id: string, gap = 48): void {
+    const el = getElement(this.doc, id);
+    if (!el) return;
+    const others = [...this.scene.items.values()].map((i) => i.element).filter((e) => e.id !== id);
+    const own = elementBounds([el]);
+    const b = elementBounds(others);
+    if (own && b) {
+      const t = { s: 1, tx: b.minX - own.minX, ty: b.maxY + gap - own.minY };
+      addElement(this.doc, transformElement(el, t, this.opts.actor), LOCAL_ORIGIN);
+    }
+    const moved = elementBounds([getElement(this.doc, id) ?? el]);
+    if (moved)
+      this.centerOn({ x: (moved.minX + moved.maxX) / 2, y: (moved.minY + moved.maxY) / 2 });
   }
 
   /** Сдвинуть выделенное на экранные пиксели (стрелки). */
@@ -1539,6 +1561,7 @@ export class CanvasEngine {
       streamline: STROKE_STREAMLINE,
       simulatePressure: kind === 'pen' ? !hasPressure : false,
       unit,
+      ...(spec.nib ? { nib: spec.nib } : {}),
     });
     builder.add(p);
     this.draw = {

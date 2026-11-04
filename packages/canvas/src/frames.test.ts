@@ -99,12 +99,16 @@ describe('фреймы', () => {
 
 describe('маркер и выделитель', () => {
   const pts = Array.from({ length: 5 }, (_, i) => ({ x: i * 5, y: 0, p: 0.9, tx: 0, ty: 0, t: i }));
-  it('маркер и выделитель — ровной толщины, выделитель полупрозрачный', () => {
+  it('маркер — скошенный наконечник, выделитель — ровный и полупрозрачный', () => {
     const pen = makeStroke(pts, { hasPressure: true, actor: me });
     const marker = makeStroke(pts, { tool: 'marker', hasPressure: true, actor: me });
     const hl = makeStroke(pts, { tool: 'highlighter', hasPressure: true, actor: me });
     expect(strokeStyleFor(pen).thinning).toBeGreaterThan(0);
     expect(strokeStyleFor(marker).thinning).toBe(0);
+    expect(strokeStyleFor(marker).nib).toBeDefined();
+    expect(strokeStyleFor(pen).nib).toBeUndefined();
+    expect(strokeAlpha(marker)).toBeLessThan(1);
+    expect(strokeAlpha(marker)).toBeGreaterThan(strokeAlpha(hl));
     expect(strokeStyleFor(hl).simulatePressure).toBe(false);
     expect(strokeAlpha(pen)).toBe(1);
     expect(strokeAlpha(hl)).toBeLessThan(0.5);

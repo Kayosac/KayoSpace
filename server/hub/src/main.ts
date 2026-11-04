@@ -2,7 +2,8 @@
  * Запуск хаба: pnpm hub
  * Переменные окружения: PORT (4000), HOST (0.0.0.0), DATA_DIR (./data),
  * HUB_TOKEN (ключ администратора — обязателен, если хаб в интернете), PUBLIC_HOST (домен хаба за HTTPS),
- * PUBLIC_URL (внешний адрес для ссылок подключения, например https://1-2-3-4.sslip.io:8443).
+ * PUBLIC_URL (внешний адрес для ссылок подключения, например https://1-2-3-4.sslip.io:8443),
+ * BACKUP_INTERVAL_HOURS (как часто снимать резервную копию досок, 6; 0 — не снимать).
  */
 
 import { networkInterfaces } from 'node:os';
@@ -36,7 +37,19 @@ if (!token && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
   );
 }
 
-const hub = await startHub({ port, host, dataDir, token, publicHost, publicUrl, internalHosts });
+const backupHours = Number(process.env.BACKUP_INTERVAL_HOURS ?? 6);
+const backupIntervalMs = Number.isFinite(backupHours) ? Math.max(0, backupHours) * 3_600_000 : 0;
+
+const hub = await startHub({
+  port,
+  host,
+  dataDir,
+  token,
+  publicHost,
+  publicUrl,
+  internalHosts,
+  backupIntervalMs,
+});
 
 const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(host);
 const lan = loopbackOnly
@@ -49,6 +62,11 @@ const lan = loopbackOnly
 console.log(`Kayospace hub ${HUB_VERSION}${token ? ' (доступ по токену)' : ''}`);
 if (publicHost) console.log(`  публичный адрес: https://${publicHost}`);
 console.log(`  данные:        ${dataDir}`);
+console.log(
+  backupIntervalMs > 0
+    ? `  копии:         ${hub.backups.dir} (раз в ${backupHours} ч, если были изменения)`
+    : '  копии:         выключены (BACKUP_INTERVAL_HOURS=0)',
+);
 if (loopbackOnly) console.log('  доступен только с этого компьютера (127.0.0.1)');
 console.log(`  MCP (агенты):  http://localhost:${hub.port}/mcp`);
 console.log(`  синхронизация: ws://localhost:${hub.port}/sync/<доска>`);

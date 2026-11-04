@@ -21,6 +21,8 @@ serde_json = "1"
 tauri-plugin-deep-link = "2"
 # Токен устройства в хранилище ОС: Keychain, Credential Manager, Android Keystore.
 tauri-plugin-secure-store = { path = "plugins/secure-store" }
+# «Поделиться» в Android: текст, ссылки и картинки — на доску «Входящие».
+tauri-plugin-share-target = { path = "plugins/share-target" }
 # Экспорт доски: диалог «Сохранить как» и запись выбранного файла.
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
