@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Хаб Kayospace: синхронизация досок, хранение, MCP для агентов",
+  "main": "./src/hub.ts",
+  "types": "./src/hub.ts",
+  "exports": {
+    ".": "./src/hub.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",

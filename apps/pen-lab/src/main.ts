@@ -20,10 +20,14 @@ import {
   type StrokeStyle,
 } from '@kayospace/ink';
 import { defaultSettings, loadSettings, saveSettings, type Settings } from './settings';
+import { BoardLink, hubSyncUrl, type RemoteStroke } from './link';
+import type { SyncStatus } from '@kayospace/sync';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 interface Stroke {
+  /** id элемента на доске хаба (если штрих синхронизирован). */
+  id?: string;
   points: InkPoint[];
   style: StrokeStyle;
   example?: boolean;
@@ -98,7 +102,7 @@ const env = {
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <header class="bar">
-    <div class="brand"><b>Kayospace</b><span>Pen Lab</span><em class="badge" id="err-badge" hidden></em></div>
+    <div class="brand"><b>Kayospace</b><span>Pen Lab</span><em class="badge" id="err-badge" hidden></em><em class="badge quiet" id="sync-badge" hidden></em></div>
     <div class="actions">
       <button id="btn-undo" type="button" title="Отменить последний штрих (Ctrl/Cmd+Z)">Отменить</button>
       <button id="btn-clear" type="button">Очистить</button>
@@ -154,6 +158,13 @@ app.innerHTML = `
         <label class="range"><span>Чувствительность к давлению</span><output id="out-thinning"></output><input type="range" id="opt-thinning" min="0" max="0.95" step="0.05" /></label>
         <label class="range"><span>Сглаживание дрожи</span><output id="out-streamline"></output><input type="range" id="opt-streamline" min="0" max="0.9" step="0.05" /></label>
         <button type="button" id="btn-defaults">Вернуть настройки по умолчанию</button>
+      </section>
+      <section class="group">
+        <h2>Синхронизация</h2>
+        <label class="field"><span>Хаб</span><input id="opt-hub" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.10:4000" /></label>
+        <label class="field"><span>Доска</span><input id="opt-board" type="text" autocomplete="off" spellcheck="false" placeholder="pen-lab" /></label>
+        <button type="button" id="btn-sync">Подключить</button>
+        <p class="note" id="sync-note">Запустите хаб на компьютере (pnpm hub) и введите его адрес из вывода команды.</p>
       </section>
       <section class="group">
         <h2>Среда</h2>
@@ -268,7 +279,7 @@ function strokeStyleFromSettings(simulatePressure: boolean): StrokeStyle {
   };
 }
 
-function makeStroke(
+function buildStroke(
   points: InkPoint[],
   style: StrokeStyle,
   samples: Sample[] = strokeSamples(points, style),
@@ -485,7 +496,7 @@ function addExampleStroke(): void {
     });
   }
   const style = { ...strokeStyleFromSettings(false), size: 6 };
-  const stroke = makeStroke(pts, style, undefined, true);
+  const stroke = buildStroke(pts, style, undefined, true);
   if (stroke) strokes.push(stroke);
 }
 
@@ -507,8 +518,12 @@ function removeExample(): void {
 function endStroke(): void {
   if (active) {
     const finished = active.builder.finish();
-    const stroke = makeStroke(active.points, active.style, finished);
-    if (stroke) strokes.push(stroke);
+    const stroke = buildStroke(active.points, active.style, finished);
+    if (stroke) {
+      if (link)
+        stroke.id = link.publish(active.points, active.style.size, !active.style.simulatePressure);
+      strokes.push(stroke);
+    }
     // Хвост законченного штриха доходит до настоящей точки пера — перерисуем этот участок.
     invalidate(samplesRect(finished, Math.max(0, active.builder.samples.length - 1)));
     logEvent(`штрих закончен: ${active.points.length} точек`);
@@ -623,7 +638,9 @@ function logPointer(e: PointerEvent): void {
     moveKind.delete(e.pointerId);
   }
   lastEventLabel = shortType[e.type] ?? e.type;
-  logEvent(`${lastEventLabel} ${who} ${state}${e.target instanceof Node && stage.contains(e.target) ? '' : ' (вне холста)'}`);
+  logEvent(
+    `${lastEventLabel} ${who} ${state}${e.target instanceof Node && stage.contains(e.target) ? '' : ' (вне холста)'}`,
+  );
 }
 for (const type of Object.keys(shortType)) {
   window.addEventListener(type, logPointer as EventListener, true);
@@ -688,6 +705,7 @@ function frame(t: number): void {
     recordError('frame', err);
   } finally {
     // Цикл кадров не должен останавливаться ни при какой ошибке.
+    if (settings.syncOn && settings.hubUrl) startSync();
     requestAnimationFrame(frame);
   }
 }
@@ -791,17 +809,129 @@ bindRange('opt-thinning', 'thinning');
 bindRange('opt-streamline', 'streamline');
 $('btn-defaults').addEventListener('click', () => update({ ...defaultSettings }));
 
+// ---------- Синхронизация с хабом ----------
+
+let link: BoardLink | null = null;
+const syncLabels: Record<SyncStatus, string> = {
+  connecting: 'подключаюсь…',
+  connected: 'соединено, сверяю доску…',
+  synced: 'синхронизировано',
+  offline: 'нет связи, переподключаюсь…',
+  stopped: 'отключено',
+};
+
+function cssBoundsToRect(b: { minX: number; minY: number; maxX: number; maxY: number }): Rect {
+  return {
+    x0: Math.floor(b.minX * dpr) - 2,
+    y0: Math.floor(b.minY * dpr) - 2,
+    x1: Math.ceil(b.maxX * dpr) + 2,
+    y1: Math.ceil(b.maxY * dpr) + 2,
+  };
+}
+
+function onRemoteStroke(r: RemoteStroke): void {
+  if (strokes.some((st) => st.id === r.id)) return;
+  removeExample();
+  const style = { ...strokeStyleFromSettings(!r.hasPressure), size: r.size };
+  const stroke = buildStroke(r.points, style);
+  if (!stroke) return;
+  stroke.id = r.id;
+  strokes.push(stroke);
+  invalidate(cssBoundsToRect(stroke.bounds));
+  schedule();
+}
+
+function onRemoteDelete(id: string): void {
+  const i = strokes.findIndex((st) => st.id === id);
+  if (i < 0) return;
+  const [gone] = strokes.splice(i, 1);
+  invalidate(cssBoundsToRect(gone!.bounds));
+  updateHint();
+  schedule();
+}
+
+function renderSync(status: SyncStatus | 'off'): void {
+  const badge = $('sync-badge');
+  const note = $('sync-note');
+  $('btn-sync').textContent = link ? 'Отключить' : 'Подключить';
+  if (status === 'off') {
+    badge.hidden = true;
+    return;
+  }
+  badge.hidden = false;
+  badge.textContent = `Хаб: ${syncLabels[status]}`;
+  badge.classList.toggle('quiet', status === 'synced');
+  note.textContent =
+    status === 'synced'
+      ? `Доска «${settings.board}»: ${strokes.filter((x) => x.id).length} штрихов с хабом.`
+      : `${link?.url ?? ''} — ${syncLabels[status]}`;
+}
+
+function startSync(): void {
+  stopSync();
+  const url = hubSyncUrl(settings.hubUrl, settings.board);
+  if (!url) {
+    $('sync-note').textContent =
+      'Проверьте адрес хаба (например 192.168.1.10:4000) и имя доски (латиница, цифры, «-», «_»).';
+    return;
+  }
+  if (location.protocol === 'https:' && url.startsWith('ws:')) {
+    $('sync-note').textContent =
+      'Страница открыта по HTTPS, а хаб в локальной сети — без шифрования: браузер такое соединение запретит. ' +
+      'Откройте Pen Lab в приложении Kayospace или через pnpm dev.';
+    return;
+  }
+  link = new BoardLink(
+    url,
+    { kind: 'human', name: 'kayos', device: env.tauri ? 'app' : 'browser' },
+    { onStroke: onRemoteStroke, onDelete: onRemoteDelete, onStatus: renderSync },
+  );
+  // Штрихи, нарисованные до подключения, тоже отправляем на доску.
+  for (const st of strokes) {
+    if (!st.id && !st.example) {
+      st.id = link.publish(st.points, st.style.size, !st.style.simulatePressure);
+    }
+  }
+  logEvent(`синхронизация: ${url}`);
+}
+
+function stopSync(): void {
+  if (!link) return;
+  link.destroy();
+  link = null;
+  renderSync('off');
+  logEvent('синхронизация выключена');
+}
+
+$<HTMLInputElement>('opt-hub').value = settings.hubUrl;
+$<HTMLInputElement>('opt-board').value = settings.board;
+$('btn-sync').addEventListener('click', () => {
+  if (link) {
+    stopSync();
+    update({ syncOn: false });
+    return;
+  }
+  update({
+    hubUrl: $<HTMLInputElement>('opt-hub').value.trim(),
+    board: $<HTMLInputElement>('opt-board').value.trim() || 'pen-lab',
+    syncOn: true,
+  });
+  startSync();
+});
+
 // ---------- Кнопки ----------
 
 function undo(): void {
   if (strokes.length === 0) return;
-  strokes.pop();
+  const removed = strokes.pop()!;
+  if (removed.id) link?.remove([removed.id]);
   updateHint();
   repaintAll();
 }
 
 $('btn-undo').addEventListener('click', undo);
 $('btn-clear').addEventListener('click', () => {
+  link?.remove(strokes.flatMap((st) => (st.id ? [st.id] : [])));
   strokes.length = 0;
   updateHint();
   repaintAll();
@@ -867,6 +997,11 @@ function buildReport(): string {
         rejectedTouches: s.rejected,
         strokes: userStrokes.length,
         points: userStrokes.reduce((n, x) => n + x.points.length, 0),
+      },
+      sync: {
+        hub: link?.url ?? null,
+        status: link?.client.status ?? 'off',
+        syncedStrokes: strokes.filter((x) => x.id).length,
       },
       eventSources: {
         pointermovePeakHz: round(diag.peak.move, 0),

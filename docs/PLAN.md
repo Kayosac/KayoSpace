@@ -41,6 +41,7 @@ Claude Code подключается по MCP (stdio или HTTP) и допол�
 - [x] Pen Lab: стенд замера пера (браузер)
 - [x] Оболочка Tauri 2 (macOS, Windows, Android)
 - [x] Замер пера на планшете: WebView справляется, нативный слой не нужен (решение 0003)
-- [ ] Спайк синка: два клиента + Hocuspocus, офлайн-правки и слияние
-- [ ] Спайк MCP: сервер с `list_boards` и `read_board`, подключение из Claude Code и ChatGPT
+- [x] Спайк синка: свой протокол поверх Yjs, офлайн-правки сливаются, доски переживают перезапуск хаба (решение 0004)
+- [x] Спайк MCP: `list_boards`, `read_board`, `add_sticky`, `search` по HTTP; Claude Code подключается локально, ChatGPT — в фазе 3 через VPS
+- [ ] Проверка на устройствах: планшет ↔ мак через хаб, Claude Code пишет на доску
 - [x] CI на GitHub Actions: проверки на каждый пуш, сборка APK/macOS/Windows по кнопке
