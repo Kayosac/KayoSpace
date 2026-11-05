@@ -158,7 +158,9 @@ describe('проекты', () => {
     await until(() => {
       void fetch(`http://127.0.0.1:${hub.port}/api/boards`)
         .then((r) => r.json())
-        .then((j) => (list = j as typeof list));
+        .then((j) => (list = j as typeof list))
+        // Хаб закрывается после теста — запоздавший запрос не должен ронять прогон.
+        .catch(() => {});
       return list.some((b) => b.id === 'plan' && b.project?.name === 'Работа');
     }, 'проект в списке досок');
     expect(list.map((b) => b.id)).toEqual(['free', 'plan']);
