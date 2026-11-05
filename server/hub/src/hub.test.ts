@@ -190,6 +190,7 @@ describe('MCP', () => {
       'add_arrow',
       'add_elements',
       'add_frame',
+      'add_image_file',
       'add_images',
       'add_shape',
       'add_sticky',
@@ -497,7 +498,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(27);
+    expect(tools.length).toBe(28);
     await client.close();
   });
 
