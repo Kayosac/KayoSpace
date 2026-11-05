@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { AI_ACTION_NAMES, type AiState } from './ai';
-import { SparkleIcon } from './icons';
+import type { Hub } from './devices';
+import { MicIcon, SparkleIcon } from './icons';
+import { finePointer } from './touch';
+import { MAX_VOICE_SECONDS, VoiceRecorder, transcribe, voiceSupported } from './voice';
 
 /** Сколько секунд идёт задача — тикает раз в секунду, пока она идёт. */
 function useSeconds(since: number | null): number {
@@ -37,6 +40,7 @@ export function AiBar({
   onClosePrompt,
   onApply,
   onDiscard,
+  voiceHub,
 }: {
   state: AiState;
   promptOpen: boolean;
@@ -46,14 +50,69 @@ export function AiBar({
   onClosePrompt: () => void;
   onApply: () => void;
   onDiscard: () => void;
+  /** Хаб с голосом (ключ OpenAI на хабе); null — кнопки микрофона нет. */
+  voiceHub: Hub | null;
 }) {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const recStart = useRef<number | null>(null);
   const seconds = useSeconds(state.kind === 'running' ? state.startedAt : null);
+  // Голос (решение 0018): запись → хаб → текст в поле запроса.
+  const [voice, setVoice] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const recorder = useRef<VoiceRecorder | null>(null);
+  const recSeconds = useSeconds(voice === 'recording' ? recStart.current : null);
 
+  // Курсор в поле — только при мыши: на планшете иначе вылезает клавиатура (а можно и голосом).
   useEffect(() => {
-    if (promptOpen) inputRef.current?.focus();
+    if (promptOpen && finePointer()) inputRef.current?.focus();
   }, [promptOpen]);
+
+  // Закрыли запрос — запись выбрасываем.
+  useEffect(() => {
+    if (promptOpen) return;
+    recorder.current?.cancel();
+    recorder.current = null;
+    setVoice('idle');
+    setVoiceError(null);
+  }, [promptOpen]);
+
+  const stopVoice = async (): Promise<void> => {
+    const r = recorder.current;
+    if (!r || !voiceHub) return;
+    recorder.current = null;
+    setVoice('transcribing');
+    try {
+      const audio = await r.stop();
+      const heard = await transcribe(voiceHub, audio);
+      if (heard) setText((t) => (t.trim() ? `${t.trim()} ${heard}` : heard));
+      else setVoiceError('Ничего не расслышал — попробуйте ещё раз');
+    } catch (e) {
+      setVoiceError(e instanceof Error ? e.message : 'Голос не распознался');
+    } finally {
+      setVoice('idle');
+    }
+  };
+
+  const startVoice = async (): Promise<void> => {
+    if (!voiceHub) return;
+    setVoiceError(null);
+    const r = new VoiceRecorder();
+    try {
+      await r.start();
+    } catch (e) {
+      setVoiceError(e instanceof Error ? e.message : 'Микрофон недоступен');
+      return;
+    }
+    recorder.current = r;
+    recStart.current = Date.now();
+    setVoice('recording');
+  };
+
+  // Забыли остановить — останавливаем сами.
+  useEffect(() => {
+    if (voice === 'recording' && recSeconds >= MAX_VOICE_SECONDS) void stopVoice();
+  }, [voice, recSeconds]);
 
   if (state.kind === 'running') {
     return (
@@ -141,10 +200,30 @@ export function AiBar({
           }
         }}
       />
+      {voiceHub && voiceSupported() && (
+        <button
+          type="button"
+          className={voice === 'recording' ? 'mic recording' : 'mic'}
+          aria-label={voice === 'recording' ? 'Остановить запись' : 'Сказать голосом'}
+          aria-pressed={voice === 'recording'}
+          disabled={voice === 'transcribing'}
+          onClick={() => void (voice === 'recording' ? stopVoice() : startVoice())}
+          data-testid="ai-mic"
+        >
+          <MicIcon />
+          {voice === 'recording' && <span>{recSeconds} с · Стоп</span>}
+          {voice === 'transcribing' && <span>Распознаю…</span>}
+        </button>
+      )}
+      {voiceError && (
+        <span className="ai-muted voice-error" role="alert">
+          {voiceError}
+        </span>
+      )}
       <button type="button" onClick={onClosePrompt}>
         Закрыть
       </button>
-      <button type="submit" className="primary" disabled={!text.trim()}>
+      <button type="submit" className="primary" disabled={!text.trim() || voice !== 'idle'}>
         Спросить
       </button>
     </form>

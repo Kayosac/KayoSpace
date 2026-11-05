@@ -799,7 +799,7 @@ test.describe('ИИ в доске', () => {
     await expect.poll(async () => (await boardElements(page)).length).toBe(1);
   });
 
-  test('«вставь картинку сюда»: ИИ кладёт картинку в предпросмотр, «Вставить» — на доску', async ({
+  test('«нарисуй … сюда»: ИИ кладёт картинку в предпросмотр, «Вставить» — на доску', async ({
     browser,
     request,
   }) => {
@@ -808,7 +808,7 @@ test.describe('ИИ в доске', () => {
     await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
     await page.keyboard.press('Control+j');
     const prompt = page.getByTestId('ai-prompt');
-    await prompt.getByRole('textbox').fill('Вставь картинку солнца над морем сюда');
+    await prompt.getByRole('textbox').fill('Нарисуй солнце над морем сюда');
     await page.keyboard.press('Enter');
     const bar = page.getByTestId('ai-bar');
     await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
@@ -821,6 +821,44 @@ test.describe('ИИ в доске', () => {
       .poll(async () => (await boardElements(page)).map((e) => e.type))
       .toEqual(['image']);
     await expect.poll(() => hubElements(request, board)).toBe(1);
+  });
+
+  test('голос (планшет): микрофон → «Стоп» → текст в поле запроса', async ({ browser }) => {
+    const context = await browser.newContext({
+      viewport: { width: 1180, height: 820 },
+      hasTouch: true,
+      isMobile: true,
+      permissions: ['microphone'],
+    });
+    await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+      SETTINGS_KEY,
+      JSON.stringify({ ...synced, board: `e2e-voice-${Date.now()}` }),
+    ] as const);
+    const page = await context.newPage();
+    // На хабе тестов нет ключа OpenAI — отвечаем за хаб: голос включён, запись распознана.
+    let audioBytes = 0;
+    await page.route('**/api/features', (r) =>
+      r.fulfill({ json: { imageGen: true, voice: true } }),
+    );
+    await page.route('**/api/voice', async (r) => {
+      audioBytes = r.request().postDataBuffer()?.length ?? 0;
+      await r.fulfill({ json: { text: 'Нарисуй солнце над морем' } });
+    });
+    await page.goto(WORKSPACE_URL);
+    await page.waitForFunction(() => window.__kayospace?.engine);
+    await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+    await page.getByRole('button', { name: 'ИИ' }).first().tap();
+    const prompt = page.getByTestId('ai-prompt');
+    const mic = prompt.getByTestId('ai-mic');
+    await mic.tap();
+    await expect(mic).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: shot('voice-recording.png') });
+    await mic.tap();
+    await expect(prompt.getByRole('textbox')).toHaveValue('Нарисуй солнце над морем');
+    expect(audioBytes).toBeGreaterThan(500);
+    await expect(prompt.getByRole('button', { name: 'Спросить' })).toBeEnabled();
+    await context.close();
   });
 
   test('свой запрос (Ctrl+J): результат можно не вставлять', async ({ browser }) => {
@@ -1562,6 +1600,18 @@ test('планшет: доска из шаблона, PDF страницами, 
     .toEqual(['В работе', 'Готово', 'Договор — стр. 1', 'Договор — стр. 2', 'Сделать']);
   await expect(page.locator('.toast')).toContainText('PDF на доске: 2 стр.');
   expect((await boardElements(page)).filter((e) => e.type === 'image')).toHaveLength(2);
+  // Фрейм страницы шире самой страницы — его удобно брать за поля.
+  const pageFrame = await page.evaluate(
+    () =>
+      (
+        window.__kayospace!.engine as unknown as {
+          getFrames(): { name: string; bounds: { minX: number; maxX: number } }[];
+        }
+      )
+        .getFrames()
+        .find((f) => f.name === 'Договор — стр. 1')!.bounds,
+  );
+  expect(pageFrame.maxX - pageFrame.minX).toBe(864);
   await page.screenshot({ path: shot('pdf-pages.png') });
 
   // Презентация: «Показать» в списке досок; касание справа — вперёд, слева — назад.
@@ -1587,5 +1637,67 @@ test('планшет: доска из шаблона, PDF страницами, 
   await expect(page.getByTestId('presentation')).toHaveCount(0);
   await expect(page.locator('.toolbar')).toBeVisible();
   expect(await camera(page)).toEqual(before);
+  await context.close();
+});
+
+test('планшет: история доски — версии картинками, «Вернуть» и «Копией» касаниями', async ({
+  browser,
+}) => {
+  const board = `e2e-history-${Date.now()}`;
+  const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+  const client = new Client({ name: 'e2e-history', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://${HUB_ADDRESS}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${HUB_TOKEN}` } },
+    }),
+  );
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: args }) as Promise<{ content: { text?: string }[] }>;
+  await call('create_board', { board, name: 'История' });
+  await call('add_elements', { board, items: [{ text: 'Было' }] });
+  await new Promise((r) => setTimeout(r, 1000));
+  const added = await call('add_elements', { board, items: [{ text: 'Стало' }, { text: 'Ещё' }] });
+  expect(added.content[0]!.text).toContain('added');
+  await new Promise((r) => setTimeout(r, 1000));
+
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ ...synced, board })] as const,
+  );
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await expect.poll(() => elements(page)).toBe(2 + 1);
+
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('open-history').tap();
+  const panel = page.getByTestId('history-panel');
+  const versions = panel.getByTestId('version');
+  await expect(versions).toHaveCount(2);
+  await expect(versions.first()).toContainText('3 эл.');
+  await expect(versions.last()).toContainText('1 эл.');
+  await expect(versions.first().locator('img')).toBeVisible();
+  await page.screenshot({ path: shot('history-panel.png') });
+
+  // Вернуть первую версию — в два касания; доска снова как была.
+  const restore = versions.last().getByRole('button', { name: 'Вернуть' });
+  await restore.tap();
+  await versions.last().getByRole('button', { name: 'Точно вернуть?' }).tap();
+  await expect.poll(() => elements(page)).toBe(1);
+  await expect(page.locator('.toast')).toContainText('Доска возвращена');
+
+  // Копией — новая доска рядом с той версией, где было три элемента.
+  await expect(versions.first()).toContainText('1 эл.');
+  await panel.getByTestId('version').nth(1).getByRole('button', { name: 'Копией' }).tap();
+  await expect(page.getByTestId('board-title')).toContainText('версия от');
+  await expect.poll(() => elements(page)).toBe(3);
+  await client.close();
   await context.close();
 });

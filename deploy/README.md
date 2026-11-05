@@ -138,6 +138,27 @@ HUB_URL=https://<домен>:<порт> HUB_TOKEN=<токен хаба> pnpm ai-
 
 На Windows (PowerShell): `$env:HUB_URL="https://…"; $env:HUB_TOKEN="…"; pnpm ai-worker`.
 
+### OpenAI: «нарисуй», голос и рукописное (решение 0018)
+
+С ключом OpenAI API на хабе ИИ в приложении рисует картинки моделью OpenAI (как ChatGPT), у поля запроса
+появляется микрофон, а написанное пером распознаётся (поиск и агенты его видят). Подписка ChatGPT для этого
+не подходит — нужен ключ API с балансом. Ключ живёт только на сервере.
+
+1. platform.openai.com → войти → **Billing** → пополнить баланс (от $5).
+2. **API keys** → **Create new secret key** → скопировать (начинается с `sk-`).
+3. На сервере:
+   ```bash
+   cd /opt/kayospace/deploy
+   echo 'OPENAI_API_KEY=sk-…' >> .env
+   docker compose up -d
+   ```
+4. Проверка: `docker compose logs hub | grep OpenAI` — строка «OpenAI: картинки (…) и голос — включены».
+   Приложение подхватит это само — когда вы в него вернётесь или перезапустите.
+
+Цены примерно: картинка — $0.05, минута голоса — $0.005, группа рукописного — доли цента.
+Модели можно сменить в `.env`: `OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY` (`low`/`medium`/`high`),
+`OPENAI_TRANSCRIBE_MODEL`, `OPENAI_VISION_MODEL`. Выключить — убрать строку `OPENAI_API_KEY` и `docker compose up -d`.
+
 ## Обслуживание
 
 | Что                         | Команда на сервере                                                                                                     |

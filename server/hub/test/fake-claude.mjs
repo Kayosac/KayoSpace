@@ -15,8 +15,8 @@ await client.connect(
     requestInit: { headers: server.headers },
   }),
 );
-// «Вставь картинку …» — рисует картинку сам (SVG), как настоящий Claude по подсказке в задании.
-const wantsImage = /Просьба пользователя:.*картинк/i.test(prompt);
+// «Нарисуй …» — рисует картинку сам (SVG), как настоящий Claude по правилам в задании.
+const wantsImage = /Просьба пользователя:.*нарису/i.test(prompt);
 if (wantsImage) {
   const r = await client.callTool({
     name: 'add_images',

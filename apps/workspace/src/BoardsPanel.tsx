@@ -15,7 +15,15 @@ import { inProject } from './projects';
 import { CommitInput } from './CommitInput';
 import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
-import { CloseIcon, ExportIcon, PlayIcon, PlusIcon, SearchIcon, TrashIcon } from './icons';
+import {
+  CloseIcon,
+  ExportIcon,
+  HistoryIcon,
+  PlayIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+} from './icons';
 
 export function BoardsPanel({
   current,
@@ -39,6 +47,7 @@ export function BoardsPanel({
   trashCount,
   onDeleteBoard,
   onTrash,
+  onHistory,
   onPresent,
   background,
   onBackground,
@@ -77,6 +86,8 @@ export function BoardsPanel({
   onDeleteBoard: () => void;
   /** Открыть корзину (отдельная панель). */
   onTrash: () => void;
+  /** Открыть историю версий этой доски. */
+  onHistory: () => void;
   /** Показать фреймы как слайды. */
   onPresent: () => void;
   background: BoardBackground;
@@ -462,6 +473,12 @@ export function BoardsPanel({
           {confirmDelete ? 'Точно удалить доску?' : 'Удалить эту доску'}
         </button>
         {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
+        {!confirmDelete && (
+          <button className="secondary" onClick={onHistory} data-testid="open-history">
+            <HistoryIcon />
+            История
+          </button>
+        )}
         {!confirmDelete && (
           <button className="secondary" onClick={onTrash} data-testid="open-trash">
             <TrashIcon />

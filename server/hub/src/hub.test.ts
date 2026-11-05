@@ -207,11 +207,13 @@ describe('MCP', () => {
       'list_deleted_boards',
       'list_projects',
       'list_trash',
+      'list_versions',
       'move_board',
       'move_elements',
       'read_board',
       'restore_board',
       'restore_elements',
+      'restore_version',
       'search',
       'update_element',
       'view_board',
@@ -312,7 +314,7 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
     await loop.catch(() => {});
   });
 
-  it('«вставь картинку сюда» из приложения: ИИ рисует картинку в черновик, файл — на хабе', async () => {
+  it('«нарисуй … сюда» из приложения: ИИ рисует картинку в черновик, файл — на хабе', async () => {
     const base = `http://127.0.0.1:${hub.port}`;
     const board = 'ai-image';
     await hub.store.get(board);
@@ -333,7 +335,7 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
       body: JSON.stringify({
         board,
         action: 'prompt',
-        prompt: 'вставь картинку солнца над морем сюда',
+        prompt: 'нарисуй солнце над морем сюда',
         area: { minX: 0, minY: 0, maxX: 400, maxY: 300 },
       }),
     });
@@ -372,6 +374,9 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
     expect(text).toContain('A, B');
     expect(text).toContain('x = 160');
     expect(text).toContain('selection.png');
+    // «Вставь картинку» — только из интернета, «нарисуй» — рисовать.
+    expect(text).toContain('Сам не рисуй');
+    expect(text).toContain('«Нарисуй / сгенерируй');
   });
 
   it('аргументы Claude Code и разбор ответа', () => {
@@ -549,7 +554,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(28);
+    expect(tools.length).toBe(30);
     await client.close();
   });
 

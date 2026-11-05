@@ -1775,3 +1775,82 @@ p.bad {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* История версий (решение 0018). */
+.versions {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.versions li {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.versions li:last-child {
+  border-bottom: 0;
+}
+
+.version-preview {
+  width: 96px;
+  height: 72px;
+  object-fit: contain;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.version-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13.5px;
+}
+
+.version-meta b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.version-actions {
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* Голос для ИИ (решение 0018). */
+.ai-bar .mic {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-bar .mic.recording {
+  color: var(--accent-text);
+  background: var(--bad);
+  border-color: transparent;
+}
+
+.ai-bar .mic.recording svg {
+  animation: mic-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.voice-error {
+  flex-basis: 100%;
+  font-size: 12.5px;
+}

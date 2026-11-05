@@ -33,12 +33,16 @@ describe('фильтры активности Android', () => {
     expect(activity).toContain('android:mimeType="application/pdf"');
     expect(activity).toContain('android:scheme="kayospace"');
     expect(activity).toContain('android.intent.action.MAIN');
+    // Микрофон — разрешением приложения, до <application>.
+    const head = out.slice(0, out.indexOf('<application'));
+    expect(head).toContain('<uses-permission android:name="android.permission.RECORD_AUDIO" />');
   });
 
   it('второй раз блоки заменяются, а не дублируются (как у build.rs плагинов)', () => {
     const once = patchManifest(TEMPLATE, { buildRs, conf });
     expect(patchManifest(once, { buildRs, conf })).toBe(once);
     expect(once.match(/SHARE TARGET PLUGIN/g)).toHaveLength(2);
+    expect(once.match(/RECORD_AUDIO/g)).toHaveLength(1);
     expect(shareFilters(buildRs).match(/<intent-filter>/g)).toHaveLength(4);
   });
 

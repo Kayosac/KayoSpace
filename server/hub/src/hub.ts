@@ -22,7 +22,7 @@ import { MCP_ORIGIN, agentContext, agentNameFor, createMcp } from './mcp';
 import { DeviceRegistry, isDeviceToken } from './devices';
 import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
-import { AssetStore, handleAsset } from './assets';
+import { AssetStore, handleAsset, readBody } from './assets';
 import { Backups, handleBackups } from './backups';
 import { handleSearch } from './search';
 import { Trash, handleTrash } from './trash';
@@ -30,9 +30,13 @@ import { OAuthServer, publicBase } from './oauth';
 import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { reapDeletedBoards } from './deleted-boards';
+import { History, handleHistory } from './history';
+import { Handwriting } from './handwriting';
+import { MAX_VOICE_BYTES, OpenAi, OpenAiError, type OpenAiConfig } from './openai';
+import { loadImages } from './render';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.8.0';
+export const HUB_VERSION = '0.9.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -55,6 +59,13 @@ export interface HubOptions {
   backupIntervalMs?: number;
   /** Только для тестов: агенты могут класть картинки по ссылкам на этот компьютер. */
   allowPrivateImageUrls?: boolean;
+  /** OpenAI (решение 0018): генерация картинок и голос; null — выключено. */
+  openai?: OpenAiConfig | null;
+  /** Рукописное: через сколько затишья распознавать, мс (для тестов). */
+  handwritingQuietMs?: number;
+  /** История версий: затишье и минимальный промежуток между версиями, мс (для тестов). */
+  historyQuietMs?: number;
+  historyGapMs?: number;
 }
 
 export interface Hub {
@@ -65,6 +76,8 @@ export interface Hub {
   sync: SyncServer;
   backups: Backups;
   trash: Trash;
+  history: History;
+  handwriting: Handwriting;
   /** Стереть доски, удалённые больше 7 дней назад (раз в час — само). */
   reap(now?: number): Promise<string[]>;
   close(): Promise<void>;
@@ -83,6 +96,18 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const ai = new AiQueue(store);
   const trash = new Trash(opts.dataDir, { agentOrigin: MCP_ORIGIN, saveDelayMs: opts.saveDelayMs });
   store.onLoad((id, doc) => trash.attach(id, doc));
+  // История версий (решение 0018).
+  const openai = opts.openai ? new OpenAi(opts.openai) : null;
+  const history = new History(store, {
+    quietMs: opts.historyQuietMs,
+    minGapMs: opts.historyGapMs,
+  });
+  store.onLoad((id, doc) => history.attach(id, doc));
+  // Распознавание рукописного (решение 0018) — только с ключом OpenAI.
+  const handwriting = new Handwriting(opts.dataDir, store, openai, {
+    quietMs: opts.handwritingQuietMs,
+  });
+  store.onLoad((id, doc) => handwriting.attach(id, doc));
   const backups = new Backups(store, { intervalMs: opts.backupIntervalMs ?? 6 * 3_600_000 });
   backups.start();
   /** MCP черновиков ИИ: по обработчику на задачу. */
@@ -92,6 +117,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     assets,
     trash,
     allowPrivateImageUrls: opts.allowPrivateImageUrls,
+    history,
+    openai,
+    handwriting: handwriting.enabled ? handwriting : null,
   });
   const mcpNode = toNodeHandler(mcp);
   const validateHost = localhostHostValidation();
@@ -150,7 +178,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         let handler = draftMcp.get(task.id);
         if (!handler) {
           handler = toNodeHandler(
-            createMcp(ai.draftSource(task), { actorName: 'kayospace-ai', assets }),
+            createMcp(ai.draftSource(task), { actorName: 'kayospace-ai', assets, openai }),
           );
           draftMcp.set(task.id, handler);
         }
@@ -189,6 +217,27 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     if (await handleDevices(req, res, url, devices, access, opts.publicUrl ?? publicBase(req))) {
       return;
     }
+    // Что умеет хаб сверх обычного: генерация картинок и голос — только с ключом OpenAI.
+    if (url.pathname === '/api/features' && req.method === 'GET') {
+      return json(res, 200, {
+        imageGen: Boolean(openai),
+        voice: Boolean(openai),
+        handwriting: Boolean(openai),
+      });
+    }
+    if (url.pathname === '/api/voice' && req.method === 'POST') {
+      if (!openai) return json(res, 501, { error: 'Голос не настроен: на хабе нет ключа OpenAI' });
+      const audio = await readBody(req, MAX_VOICE_BYTES);
+      if (!audio) return json(res, 413, { error: 'Запись слишком длинная' });
+      if (audio.length < 200) return json(res, 400, { error: 'Пустая запись' });
+      try {
+        const text = await openai.transcribe(audio, String(req.headers['content-type'] ?? ''));
+        return json(res, 200, { text });
+      } catch (err) {
+        if (err instanceof OpenAiError) return json(res, 502, { error: err.message });
+        throw err;
+      }
+    }
     if (await handleAi(req, res, url, ai)) {
       for (const id of draftMcp.keys()) if (!ai.tasks.has(id)) draftMcp.delete(id);
       return;
@@ -197,8 +246,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return json(res, 200, await store.list());
     }
     if (await handleBackups(req, res, url, backups, access)) return;
-    if (await handleSearch(req, res, url, store)) return;
+    if (await handleSearch(req, res, url, store, handwriting.enabled ? handwriting : null)) return;
     if (await handleTrash(req, res, url, trash, store)) return;
+    if (await handleHistory(req, res, url, history, (els) => loadImages(els, assets))) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
@@ -221,6 +271,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         purge: async (id) => {
           sync.dropBoard(id);
           await trash.purge(id);
+          await history.purge(id);
+          await handwriting.purge(id);
         },
       },
       now,
@@ -246,15 +298,19 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     sync,
     backups,
     trash,
+    history,
+    handwriting,
     reap,
     async close() {
       clearInterval(reaper);
+      handwriting.close();
       backups.stop();
       ai.close();
       await sync.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections?.();
       await mcp.close?.();
+      await history.flush();
       await store.close();
       await trash.flush();
       await oauth?.flush();

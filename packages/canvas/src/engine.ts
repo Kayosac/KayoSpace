@@ -84,7 +84,7 @@ import {
   type Pt,
 } from './selection';
 import { HIGHLIGHTER_COLOR, PEN_KINDS, Scene, STROKE_STREAMLINE } from './scene';
-import { isFrame, layoutPages, nextFrameName } from './frames';
+import { isFrame, layoutPages, nextFrameName, PDF_PAGE_MARGIN } from './frames';
 import { buildPdf, type PdfPage } from './pdf';
 import type { Bounds } from '@kayospace/ink';
 
@@ -837,13 +837,23 @@ export class CanvasEngine {
     const origin = content
       ? { x: Math.round(content.maxX + 120), y: Math.round(content.minY) }
       : { x: 0, y: 0 };
-    const boxes = layoutPages(pages, origin);
+    // Фрейм чуть больше страницы: за поля его удобно брать и двигать, не попадая в саму страницу.
+    const pad = PDF_PAGE_MARGIN;
+    const boxes = layoutPages(
+      pages,
+      { x: origin.x + pad, y: origin.y + pad },
+      { gap: 80 + pad * 2 },
+    );
     const els: CanvasElement[] = [];
     const frames: string[] = [];
     pages.forEach((p, i) => {
       const box = boxes[i]!;
       const name = pages.length > 1 ? `${title} — стр. ${i + 1}` : title;
-      const frame = makeFrame(name, box, { actor: this.opts.actor, titleSize: 18 });
+      const frame = makeFrame(
+        name,
+        { x: box.x - pad, y: box.y - pad, w: box.w + pad * 2, h: box.h + pad * 2 },
+        { actor: this.opts.actor, titleSize: 18 },
+      );
       frames.push(frame.id);
       els.push(
         frame,
@@ -862,10 +872,10 @@ export class CanvasEngine {
     this.clearSelection();
     const first = boxes[0]!;
     this.zoomToBounds({
-      minX: first.x,
-      minY: first.y,
-      maxX: first.x + first.w,
-      maxY: first.y + Math.min(first.h, first.w * 1.5),
+      minX: first.x - pad,
+      minY: first.y - pad,
+      maxX: first.x + first.w + pad,
+      maxY: first.y + Math.min(first.h, first.w * 1.5) + pad,
     });
     return frames;
   }
