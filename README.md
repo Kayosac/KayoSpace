@@ -116,7 +116,11 @@ claude mcp add --transport http kayospace http://localhost:4000/mcp
 Инструменты: `list_boards`, `read_board`, `view_board` (картинка доски — агент видит рукописное),
 `search`, `fetch`, `add_elements` (пачкой с раскладкой сеткой, рядом, столбцом, во фрейм), `arrange_elements`,
 `move_elements`, `add_sticky`, `add_text`, `add_shape`, `add_arrow`, `add_frame`, `update_element`,
-`delete_elements`. Что агент изменил, видно на устройстве — и отменяется одним нажатием (решение 0015).
+`delete_elements`; картинки — `add_images` (по ссылке или файлом), `get_image`; корзина — `list_trash`,
+`restore_elements`; что нового — `get_changes`; проекты и доски — `list_projects`, `create_project`,
+`create_board`, `move_board`, `delete_board`, `list_deleted_boards`, `restore_board`.
+Что агент изменил, видно на устройстве — и отменяется одним нажатием (решение 0015); удалённое 7 дней лежит
+в корзине (решение 0016).
 MCP-эндпоинт принимает запросы только с этого компьютера.
 
 **Подключить устройство** — по коду, без токенов (решение 0008). На подключённом устройстве: Настройки →

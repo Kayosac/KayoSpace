@@ -30,7 +30,7 @@ export interface WorkspaceSettings {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
   shapeKind: ShapeKind;
-  /** Вид пера: перо, маркер, выделитель. */
+  /** Вид пера: ручка или выделитель (маркер убран — решение 0016; старые штрихи маркером остаются). */
   penKind: StrokeTool;
   /** Свои цвет и толщина у каждого вида пера (color и size выше — у того, что выбран сейчас). */
   penStyles: Partial<Record<StrokeTool, PenStyle>>;
@@ -108,7 +108,8 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     const parsed = JSON.parse(raw) as Partial<WorkspaceSettings>;
     const s = { ...defaultSettings, ...parsed };
     if (!['rect', 'ellipse', 'line', 'arrow'].includes(s.shapeKind)) s.shapeKind = 'rect';
-    if (!['pen', 'marker', 'highlighter'].includes(s.penKind)) s.penKind = 'pen';
+    // Маркера в интерфейсе больше нет: выбранный когда-то маркер становится ручкой.
+    if (!['pen', 'highlighter'].includes(s.penKind)) s.penKind = 'pen';
     if (!['select', 'pen', 'eraser', 'hand', 'sticky', 'text', 'shape', 'frame'].includes(s.tool)) {
       s.tool = 'pen';
     }

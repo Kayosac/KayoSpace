@@ -18,19 +18,21 @@ import {
   toNodeHandler,
 } from '@modelcontextprotocol/node';
 import { bearerToken, hostAllowed, originAllowed, requestToken, tokenMatches } from './auth';
-import { agentContext, agentNameFor, createMcp } from './mcp';
+import { MCP_ORIGIN, agentContext, agentNameFor, createMcp } from './mcp';
 import { DeviceRegistry, isDeviceToken } from './devices';
 import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset } from './assets';
 import { Backups, handleBackups } from './backups';
 import { handleSearch } from './search';
+import { Trash, handleTrash } from './trash';
 import { OAuthServer, publicBase } from './oauth';
 import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
+import { reapDeletedBoards } from './deleted-boards';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.6.0';
+export const HUB_VERSION = '0.7.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -60,6 +62,9 @@ export interface Hub {
   devices: DeviceRegistry;
   sync: SyncServer;
   backups: Backups;
+  trash: Trash;
+  /** Стереть доски, удалённые больше 7 дней назад (раз в час — само). */
+  reap(now?: number): Promise<string[]>;
   close(): Promise<void>;
 }
 
@@ -74,12 +79,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const devices = new DeviceRegistry(join(opts.dataDir, 'devices.json'));
   await devices.init();
   const ai = new AiQueue(store);
+  const trash = new Trash(opts.dataDir, { agentOrigin: MCP_ORIGIN, saveDelayMs: opts.saveDelayMs });
+  store.onLoad((id, doc) => trash.attach(id, doc));
   const backups = new Backups(store, { intervalMs: opts.backupIntervalMs ?? 6 * 3_600_000 });
   backups.start();
   /** MCP черновиков ИИ: по обработчику на задачу. */
   const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
 
-  const mcp = createMcp(store, { assets });
+  const mcp = createMcp(store.live(), { assets, trash });
   const mcpNode = toNodeHandler(mcp);
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
@@ -183,6 +190,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     }
     if (await handleBackups(req, res, url, backups, access)) return;
     if (await handleSearch(req, res, url, store)) return;
+    if (await handleTrash(req, res, url, trash, store)) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
@@ -193,9 +201,28 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       const a = identify(given);
       return a ? { device: a.device?.id ?? null } : null;
     },
+    gone: (id) => store.isPurged(id),
   });
   // Отключили устройство — его открытые соединения закрываются сразу.
   devices.onRevoke((id) => sync.dropDevice(id));
+
+  const reap = (now?: number): Promise<string[]> =>
+    reapDeletedBoards(
+      store,
+      {
+        purge: async (id) => {
+          sync.dropBoard(id);
+          await trash.purge(id);
+        },
+      },
+      now,
+    );
+  const reaper = setInterval(
+    () => void reap().catch((err) => console.error('[hub] не стёрлись удалённые доски', err)),
+    3_600_000,
+  );
+  reaper.unref();
+  void reap().catch((err) => console.error('[hub] не стёрлись удалённые доски', err));
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -210,7 +237,10 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     devices,
     sync,
     backups,
+    trash,
+    reap,
     async close() {
+      clearInterval(reaper);
       backups.stop();
       ai.close();
       await sync.close();
@@ -218,6 +248,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       server.closeAllConnections?.();
       await mcp.close?.();
       await store.close();
+      await trash.flush();
       await oauth?.flush();
       await devices.flush();
     },

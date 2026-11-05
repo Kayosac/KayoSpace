@@ -55,7 +55,10 @@ export function frameContents(frame: FrameElement, all: readonly CanvasElement[]
 }
 
 /** Куда класть содержимое во фрейме: под тем, что в нём уже лежит. */
-function frameOrigin(frame: FrameElement, all: readonly CanvasElement[]): { x: number; y: number } {
+export function frameOrigin(
+  frame: FrameElement,
+  all: readonly CanvasElement[],
+): { x: number; y: number } {
   const b = elementBounds(frameContents(frame, all));
   return {
     x: frame.x + FRAME_PAD,
@@ -64,7 +67,12 @@ function frameOrigin(frame: FrameElement, all: readonly CanvasElement[]): { x: n
 }
 
 /** Растянуть фрейм так, чтобы раскладка поместилась с отступом. */
-function grown(frame: FrameElement, right: number, bottom: number, actor: Actor): FrameElement {
+export function grown(
+  frame: FrameElement,
+  right: number,
+  bottom: number,
+  actor: Actor,
+): FrameElement {
   const w = Math.max(frame.w, right + FRAME_PAD - frame.x);
   const h = Math.max(frame.h, bottom + FRAME_PAD - frame.y);
   if (w === frame.w && h === frame.h) return frame;

@@ -38,3 +38,23 @@ export function matchesQuery(b: BoardEntry, q: string): boolean {
   if (!s) return true;
   return (b.name ?? '').toLowerCase().includes(s) || b.id.toLowerCase().includes(s);
 }
+
+/** Недавние без удалённых досок (решение 0016). */
+export function pruneDeleted(
+  recent: readonly RecentBoard[],
+  deleted: ReadonlyMap<string, unknown>,
+): RecentBoard[] {
+  return recent.filter((b) => !deleted.has(b.id));
+}
+
+/**
+ * Чьи локальные копии стереть: доски, которые хаб стёр насовсем, или удалённые больше 7 дней
+ * назад (без хаба стирать некому, кроме устройства).
+ */
+export function boardsToForget(
+  deleted: ReadonlyMap<string, { at: number; purged?: boolean }>,
+  now: number = Date.now(),
+  keepMs: number = 7 * 24 * 60 * 60 * 1000,
+): string[] {
+  return [...deleted].filter(([, d]) => d.purged || now - d.at >= keepMs).map(([id]) => id);
+}

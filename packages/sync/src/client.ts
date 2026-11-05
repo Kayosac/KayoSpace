@@ -35,6 +35,8 @@ export type SyncError = 'timeout' | 'closed' | 'unauthorized' | 'invalid-url';
 
 /** Код закрытия, которым хаб сообщает о неверном токене. */
 export const CLOSE_UNAUTHORIZED = 4401;
+/** Код закрытия: доску стёрли насовсем (удалили больше 7 дней назад) — переподключаться незачем. */
+export const CLOSE_BOARD_GONE = 4410;
 
 export interface SyncClientOptions {
   /** Адрес вида ws://host:4000/sync/<id доски>. */
@@ -156,6 +158,11 @@ export class SyncClient {
       if (ev?.code === CLOSE_UNAUTHORIZED) {
         this.lastError = 'unauthorized';
         this.setStatus('unauthorized');
+        return;
+      }
+      if (ev?.code === CLOSE_BOARD_GONE) {
+        this.lastError = 'closed';
+        this.setStatus('offline');
         return;
       }
       this.lastError = timedOut ? 'timeout' : 'closed';

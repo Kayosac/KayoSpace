@@ -186,7 +186,18 @@ describe('подсказки для клиентов', () => {
       .filter((t) => t.annotations?.readOnlyHint)
       .map((t) => t.name)
       .sort();
-    expect(ro).toEqual(['fetch', 'list_boards', 'read_board', 'search', 'view_board']);
+    expect(ro).toEqual([
+      'fetch',
+      'get_changes',
+      'get_image',
+      'list_boards',
+      'list_deleted_boards',
+      'list_projects',
+      'list_trash',
+      'read_board',
+      'search',
+      'view_board',
+    ]);
     expect(tools.find((t) => t.name === 'delete_elements')!.annotations?.destructiveHint).toBe(
       true,
     );
