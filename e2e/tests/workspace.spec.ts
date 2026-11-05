@@ -1871,3 +1871,149 @@ test('планшет: Настройки → OpenAI — лимиты и руко
   await page.screenshot({ path: shot('openai-settings.png') });
   await context.close();
 });
+
+async function mcpClient(name: string) {
+  const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+  const client = new Client({ name, version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://${HUB_ADDRESS}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${HUB_TOKEN}` } },
+    }),
+  );
+  const call = async (tool: string, args: Record<string, unknown>) =>
+    ((await client.callTool({ name: tool, arguments: args })) as { content: { text?: string }[] })
+      .content[0]?.text ?? '';
+  return { client, call };
+}
+
+test('канбан: задачи колонками, перенос перетаскиванием и касанием', async ({ browser }) => {
+  const board = `e2e-kanban-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-kanban');
+  await call('create_board', { board, name: 'Канбан-тест' });
+  await call('add_elements', {
+    board,
+    items: [
+      { text: 'Заказать плитку', task: { status: 'todo' } },
+      { text: 'Вызвать электрика', task: { status: 'todo', high: true } },
+    ],
+  });
+  const page = await openDevice(browser, { ...synced, board });
+  await expect.poll(() => elements(page)).toBe(2);
+  await page.getByRole('button', { name: 'Задачи', exact: true }).click();
+  await page.getByTestId('open-kanban').click();
+  const kanban = page.getByTestId('kanban');
+  await kanban.getByRole('tab', { name: 'Канбан-тест' }).click();
+  const todo = page.getByTestId('kanban-todo');
+  const doing = page.getByTestId('kanban-doing');
+  const done = page.getByTestId('kanban-done');
+  await expect(todo.getByTestId('kanban-card')).toHaveCount(2);
+  // Перетащить карточку в «В работе».
+  const card = todo.getByTestId('kanban-card').filter({ hasText: 'Заказать плитку' });
+  const from = (await card.boundingBox())!;
+  const to = (await doing.boundingBox())!;
+  await page.mouse.move(from.x + 30, from.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
+  await page.mouse.move(to.x + to.width / 2, to.y + 120, { steps: 10 });
+  await page.mouse.up();
+  await expect(doing.getByTestId('kanban-card')).toHaveCount(1);
+  await expect(doing).toContainText('Заказать плитку');
+  // Касание — действия: «→ Готово».
+  await todo.getByTestId('kanban-card').click();
+  await todo.getByTestId('kanban-actions').getByRole('button', { name: '→ Готово' }).click();
+  await expect(done.getByTestId('kanban-card')).toHaveCount(1);
+  await page.screenshot({ path: shot('kanban.png') });
+  await expect
+    .poll(async () => {
+      const l = JSON.parse(await call('list_tasks', { board })) as {
+        tasks: { text: string; task: { status: string } }[];
+      }[];
+      return Object.fromEntries(l.flatMap((b) => b.tasks.map((t) => [t.text, t.task.status])));
+    })
+    .toEqual({ 'Заказать плитку': 'doing', 'Вызвать электрика': 'done' });
+  await client.close();
+  await page.context().close();
+});
+
+test('планшет: документ — заголовок, чек-лист и фрагмент доски касаниями; агент читает и дописывает', async ({
+  browser,
+}) => {
+  const board = `e2e-doc-board-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-pages');
+  await call('create_board', { board, name: 'Кухня' });
+  await call('add_frame', { board, name: 'Схема', x: 0, y: 0, w: 600, h: 400 });
+  await call('add_elements', { board, items: [{ text: 'Мойка у окна' }], at: { x: 60, y: 60 } });
+
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ ...synced, board })] as const,
+  );
+  const page = await context.newPage();
+  page.on('pageerror', (e) => console.log(`[документ] ошибка страницы: ${e.message}`));
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+
+  // Новый документ — из списка досок.
+  await page.getByTestId('board-title').tap();
+  await page.getByLabel('Найти или создать доску').fill('План ремонта');
+  await page.getByTestId('create-page').tap();
+  const view = page.getByTestId('page-view');
+  await expect(view).toBeVisible();
+  await expect(page.getByTestId('page-title')).toHaveValue('План ремонта');
+  await expect(page.getByTestId('board-title')).toHaveText('План ремонта');
+
+  // Текст и заголовок — кнопкой.
+  const editor = page.getByTestId('page-editor');
+  await editor.fill('Закупки');
+  await view.getByRole('button', { name: 'Заголовок', exact: true }).tap();
+  await expect(editor.locator('h1')).toHaveText('Закупки');
+
+  // Агент находит документ и дописывает чек-лист.
+  const list = JSON.parse(await call('list_boards', {})) as {
+    id: string;
+    name: string;
+    kind: string;
+  }[];
+  const doc = list.find((b) => b.name === 'План ремонта');
+  expect(doc).toMatchObject({ kind: 'page' });
+  await expect.poll(() => call('read_page', { page: doc!.id })).toContain('# Закупки');
+  await call('write_page', {
+    page: doc!.id,
+    markdown: '- [ ] Купить плитку\n- [ ] Позвонить мастеру',
+  });
+  const items = editor.locator('ul[data-type="taskList"] > li');
+  await expect(items).toHaveCount(2);
+  // Отметить пункт — касанием.
+  await items.first().getByRole('checkbox').tap();
+  await expect.poll(() => call('read_page', { page: doc!.id })).toContain('- [x] Купить плитку');
+
+  // Фрагмент доски: доска → фрейм.
+  await page.getByTestId('embed-open').tap();
+  const picker = page.getByTestId('embed-picker');
+  await picker.getByTestId('embed-board').filter({ hasText: 'Кухня' }).tap();
+  await picker.getByTestId('embed-frame').filter({ hasText: 'Схема' }).tap();
+  const embed = page.getByTestId('page-embed');
+  await expect(embed).toHaveCount(1);
+  await expect
+    .poll(() => embed.locator('img').evaluate((i: HTMLImageElement) => i.naturalWidth))
+    .toBeGreaterThan(100);
+  await expect
+    .poll(() => call('read_page', { page: doc!.id }))
+    .toMatch(new RegExp(`\\[\\[board:${board}#[A-Za-z0-9_-]+\\|Схема\\]\\]`));
+  await page.screenshot({ path: shot('page.png') });
+
+  // Касание фрагмента открывает доску.
+  await embed.getByRole('button', { name: 'Открыть', exact: true }).tap();
+  await expect(view).toHaveCount(0);
+  await expect(page.getByTestId('board-title')).toHaveText('Кухня');
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await client.close();
+  await context.close();
+});

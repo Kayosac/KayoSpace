@@ -343,8 +343,28 @@ export function buildPrompt(
 ): string {
   const lines = [
     'Ты — ИИ-помощник внутри Kayospace, бесконечной доски. Работай только через инструменты kayospace.',
-    `Доска: ${t.board}. Сначала прочитай её: read_board с board="${t.board}" и format="json".`,
+    `Доска: ${t.board}.`,
   ];
+  // Читаем только то, на что смотрит человек (решение 0020): на большой доске вся доска — это
+  // десятки тысяч слов в каждом задании. Всю — только когда просьба про всю доску.
+  if (t.area) {
+    const a = t.area;
+    const pad = 40;
+    const region = {
+      x: Math.round(a.minX - pad),
+      y: Math.round(a.minY - pad),
+      w: Math.round(a.maxX - a.minX + pad * 2),
+      h: Math.round(a.maxY - a.minY + pad * 2),
+    };
+    lines.push(
+      `Сначала прочитай то, что ${t.selection.length ? 'человек выделил' : 'человек видит на экране'}: ` +
+        `read_board с board="${t.board}", format="json" и region=${JSON.stringify(region)}. ` +
+        'Всю доску (read_board без region) читай, только если просьба прямо про всю доску ' +
+        '(«что на всей доске», «найди на доске», «итоги по доске»).',
+    );
+  } else {
+    lines.push(`Сначала прочитай её: read_board с board="${t.board}" и format="json".`);
+  }
   if (t.selection.length > 0) {
     lines.push(`Выделенные элементы (id): ${t.selection.join(', ')}.`);
   }
@@ -367,7 +387,8 @@ export function buildPrompt(
   }
   if (t.image)
     lines.push(
-      'Картинка выделенного фрагмента лежит в файле selection.png в текущей папке — посмотри её инструментом Read.',
+      `Картинка ${t.selection.length ? 'выделенного фрагмента' : 'видимой части доски'} (там есть рукописное или рисунки) ` +
+        'лежит в файле selection.png в текущей папке — посмотри её инструментом Read.',
     );
   lines.push('', IMAGE_RULES);
   lines.push('', `Задача: ${ACTION_TEXT[t.action]}`);

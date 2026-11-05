@@ -1066,6 +1066,17 @@ export class CanvasEngine {
     this.setCamera(fitBounds(b, this.renderer.width, this.renderer.height, 16, 0, 8));
   }
 
+  /** Есть ли рукописное (штрихи) в области — чтобы приложить ИИ картинку этого куска. */
+  hasInkIn(b: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+    for (const item of this.scene.items.values()) {
+      if (item.element.type !== 'stroke') continue;
+      const ib = item.bounds;
+      if (ib.minX <= b.maxX && ib.maxX >= b.minX && ib.minY <= b.maxY && ib.maxY >= b.minY)
+        return true;
+    }
+    return false;
+  }
+
   /** Перейти к фрейму и выделить его. */
   goToFrame(id: string): void {
     const f = this.scene.frames().find((fr) => fr.id === id);

@@ -21,6 +21,9 @@ export const AGENT_GUIDE = `Kayospace — личный бесконечный х
 - Структура: list_projects, create_board, create_project, move_board. Что нового — get_changes.
 - Задачи — это стикеры со статусом, сроком и важностью: list_tasks, update_task; новые — add_elements с task.
   «Мои задачи на сегодня», «что просрочено» — list_tasks.
+- Документы (в list_boards kind: "page", id начинается с «pg_») — страницы с текстом рядом с досками: заголовки,
+  списки, чек-листы, цитаты. Читай read_page, пиши write_page (markdown; по умолчанию дописывает в конец).
+  Фрагмент доски в документе — отдельная строка [[board:<id доски>#<id фрейма>|Название]].
 - Удалённое лежит в корзине 7 дней: list_trash и restore_elements; доски — list_deleted_boards и restore_board.
   delete_board — только когда человек прямо попросил удалить доску.
 - Каждый вызов — одно изменение: человек видит на устройстве, что добавил агент, и может отменить его одним нажатием.

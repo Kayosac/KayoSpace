@@ -300,3 +300,10 @@ export const ChatIcon = () => (
     <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4.5 3.5V17H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
   </Svg>
 );
+
+export const DocIcon = () => (
+  <Svg>
+    <path d="M7 3.5h6.5L18 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z" />
+    <path d="M13 3.5V8h5M9 12h6M9 15.5h6" />
+  </Svg>
+);

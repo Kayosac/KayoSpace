@@ -20,6 +20,7 @@
 - `packages/board` — доска на Yjs: элементы, изменения, экспорт для агентов, шаблоны досок (`templates.ts`),
   задачи-стикеры (`tasks.ts`).
 - `packages/sync` — протокол синхронизации и клиент (браузер и Node).
+- `packages/page` — документы (решение 0020): схема TipTap, markdown ↔ страница, страница в Yjs — общие для приложения и хаба.
 - `packages/canvas` — движок холста без React: камера, сцена, отрисовка, навигация, инструменты (решение 0006);
   упрощённая отрисовка при отдалении, фреймы, экспорт PNG/PDF (решение 0009).
 - `server/hub` — хаб: WebSocket-синк, хранение досок на диске, REST, MCP, OAuth для коннектора Claude,
@@ -29,12 +30,14 @@
   корзина (`trash.ts`), удалённые доски (`deleted-boards.ts`), картинки (`images.ts`, `mcp-images.ts`),
   изменения и проекты (`mcp-extra.ts`) — решение 0016; история версий (`history.ts`), рукописное
   (`handwriting.ts`), OpenAI — картинки, голос, распознавание (`openai.ts`, ключ только на хабе) — решение 0018;
-  задачи (`tasks.ts`), чат с ИИ (`chat.ts`), лимиты OpenAI из приложения — решение 0019.
+  задачи (`tasks.ts`), чат с ИИ (`chat.ts`), лимиты OpenAI из приложения — решение 0019; документы для агентов
+  и картинки фрагментов (`mcp-pages.ts`) — решение 0020.
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк;
   корзина (`TrashPanel.tsx`), презентация (`Presentation.tsx`), импорт PDF (`pdf-import.ts`, pdf.js) — решение 0017;
   история (`HistoryPanel.tsx`), голос (`voice.ts`) — решение 0018; задачи (`TasksPanel.tsx`),
-  чат (`ChatPanel.tsx`), Настройки → OpenAI (`OpenAiSection.tsx`) — решение 0019.
+  чат (`ChatPanel.tsx`), Настройки → OpenAI (`OpenAiSection.tsx`) — решение 0019; канбан (`KanbanView.tsx`),
+  документ (`PageView.tsx`, TipTap) — решение 0020.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
   single-instance, barcode-scanner (Android), свои `plugins/secure-store` (токен устройства в хранилище ОС)
   и `plugins/share-target` («Поделиться» в Android → доска «Входящие»).
@@ -104,3 +107,6 @@
   голос на `/api/voice`. Возврат версии — новой правкой (`History.restore`), не подменой документа.
 - Задача — это стикер с `props.task` (`setTask`), отдельного типа элемента нет. Лимиты OpenAI проверяет хаб
   до запроса (`OpenAi.take`); меняются из приложения (`PUT /api/openai`).
+- Документ — тот же Yjs-документ, что у доски, содержимое в `XmlFragment` «page»; id с `pg_` (`isPageId`).
+  Инструменты доски документ не принимают, агентам — `read_page`/`write_page`. Новый пакет хаба — добавить в оба Dockerfile.
+- ИИ читает сначала область (выделение или видимое — `read_board` с `region`), всю доску — по прямой просьбе.

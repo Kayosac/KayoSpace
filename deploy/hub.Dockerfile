@@ -17,6 +17,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/model/package.json packages/model/
 COPY packages/board/package.json packages/board/
 COPY packages/sync/package.json packages/sync/
+COPY packages/page/package.json packages/page/
 COPY server/hub/package.json server/hub/
 RUN pnpm install --filter "@kayospace/hub..." --prod --no-frozen-lockfile \
     && chmod -R a+rX "$COREPACK_HOME"
@@ -25,6 +26,7 @@ COPY tsconfig.base.json ./
 COPY packages/model packages/model
 COPY packages/board packages/board
 COPY packages/sync packages/sync
+COPY packages/page packages/page
 COPY server/hub server/hub
 
 RUN mkdir -p /data && chown node:node /data

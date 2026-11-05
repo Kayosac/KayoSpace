@@ -30,6 +30,8 @@ import { searchBoards } from './search';
 import { registerLayoutTools } from './mcp-layout';
 import { registerExtraTools } from './mcp-extra';
 import { registerImageTools } from './mcp-images';
+import { registerPageTools } from './mcp-pages';
+import { isPageId, pageMarkdown } from '@kayospace/page';
 import type { Trash } from './trash';
 import type { History } from './history';
 import type { OpenAi } from './openai';
@@ -101,6 +103,7 @@ const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], is
 const boardId = z
   .string()
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+  .refine((id) => !id.startsWith('pg_'), 'Это документ, а не доска: read_page / write_page')
   .describe('id доски: латиница, цифры, «-» и «_» (не в начале)');
 
 /** Файлы картинок на хабе — чтобы показать их агенту на снимке доски. */
@@ -120,9 +123,13 @@ export function createMcp(
     history?: History | null;
     /** Распознанное рукописное (решение 0018): в read_board, fetch и search. */
     handwriting?: {
-      entries(
-        board: string,
-      ): Promise<{ ids: string[]; text: string; bounds: { minX: number; minY: number } }[]>;
+      entries(board: string): Promise<
+        {
+          ids: string[];
+          text: string;
+          bounds: { minX: number; minY: number; maxX: number; maxY: number };
+        }[]
+      >;
     } | null;
     /** OpenAI (решение 0018): генерация картинок, если на хабе есть ключ. */
     openai?: OpenAi | null;
@@ -132,7 +139,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.3.0' },
+      { name: 'kayospace', version: '0.4.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -151,7 +158,8 @@ export function createMcp(
       {
         annotations: { readOnlyHint: true },
         description:
-          'Список досок Kayospace: id, название, число элементов и проект, в котором доска лежит.',
+          'Список досок и документов Kayospace: id, название, kind (board — доска, page — документ), ' +
+          'число элементов и проект. Документы читай read_page, пиши write_page.',
       },
       async () => text(JSON.stringify(await store.list(), null, 2)),
     );
@@ -162,22 +170,40 @@ export function createMcp(
         annotations: { readOnlyHint: true },
         description:
           'Прочитать доску. markdown — для чтения (элементы в порядке чтения, сводка рукописного), ' +
-          'json — все поля элементов для точных правок (точки штрихов опущены).',
+          'json — все поля элементов для точных правок (точки штрихов опущены). region — только эта ' +
+          'область (что человек видит или выделил): на большой доске это намного короче.',
         inputSchema: z.object({
           board: boardId,
           format: z.enum(['markdown', 'json']).optional(),
+          region: z
+            .object({
+              x: z.number(),
+              y: z.number(),
+              w: z.number().positive(),
+              h: z.number().positive(),
+            })
+            .optional()
+            .describe('область доски в её координатах'),
         }),
       },
-      async ({ board, format }) => {
+      async ({ board, format, region }) => {
         if (!(await store.has(board))) return fail(`Доски «${board}» нет. Список — list_boards.`);
         const doc = await store.get(board);
-        const hw = (await opts.handwriting?.entries(board)) ?? [];
+        const inRegion = (e: {
+          bounds: { minX: number; minY: number; maxX: number; maxY: number };
+        }) =>
+          !region ||
+          (e.bounds.minX <= region.x + region.w &&
+            e.bounds.maxX >= region.x &&
+            e.bounds.minY <= region.y + region.h &&
+            e.bounds.maxY >= region.y);
+        const hw = ((await opts.handwriting?.entries(board)) ?? []).filter(inRegion);
         if (format === 'json') {
-          const out = boardToJSON(doc, board) as Record<string, unknown>;
+          const out = boardToJSON(doc, board, { region }) as Record<string, unknown>;
           if (hw.length) out.handwriting = hw.map((e) => ({ strokes: e.ids, text: e.text }));
           return text(JSON.stringify(out, null, 2));
         }
-        return text(boardToMarkdown(doc, board) + handwritingMarkdown(hw));
+        return text(boardToMarkdown(doc, board, { region }) + handwritingMarkdown(hw));
       },
     );
 
@@ -403,6 +429,8 @@ export function createMcp(
     // Корзина, изменения и проекты — только у настоящих досок хаба (у черновиков ИИ их нет).
     if (opts.trash)
       registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who, opts.history ?? null);
+    // Документы (решение 0020) — тоже только у настоящих досок.
+    if (opts.trash) registerPageTools(server, store, MCP_ORIGIN);
     const assets = opts.assets;
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)
@@ -520,6 +548,22 @@ export function createMcp(
       },
       async ({ id }) => {
         const [board, element] = id.split('#');
+        if (board && isPageId(board) && (await store.has(board))) {
+          const doc = await store.get(board);
+          return text(
+            JSON.stringify(
+              {
+                id,
+                title: getBoardName(doc) ?? board,
+                text: pageMarkdown(doc),
+                url: boardLink(board),
+                metadata: { page: board },
+              },
+              null,
+              2,
+            ),
+          );
+        }
         const parsed = boardId.safeParse(board);
         if (!parsed.success || !(await store.has(parsed.data)))
           return fail(`Доски «${board}» нет.`);

@@ -23,6 +23,7 @@ import { DeviceRegistry, isDeviceToken } from './devices';
 import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset, readBody } from './assets';
+import { handleRender } from './mcp-pages';
 import { Backups, handleBackups } from './backups';
 import { handleSearch } from './search';
 import { Trash, handleTrash } from './trash';
@@ -38,7 +39,7 @@ import { MAX_VOICE_BYTES, OpenAi, OpenAiError, type OpenAiConfig } from './opena
 import { loadImages } from './render';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.10.0';
+export const HUB_VERSION = '0.11.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -187,7 +188,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         let handler = draftMcp.get(task.id);
         if (!handler) {
           handler = toNodeHandler(
-            createMcp(ai.draftSource(task), { actorName: 'kayospace-ai', assets, openai }),
+            createMcp(ai.draftSource(task), {
+              actorName: 'kayospace-ai',
+              assets,
+              openai,
+              handwriting: handwriting.enabled ? handwriting : null,
+            }),
           );
           draftMcp.set(task.id, handler);
         }
@@ -286,6 +292,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     )
       return;
     if (await handleHistory(req, res, url, history, (els) => loadImages(els, assets))) return;
+    if (await handleRender(req, res, url, store, assets)) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
