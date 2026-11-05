@@ -39,7 +39,7 @@ describe('удаление досок', () => {
   afterEach(async () => {
     await client.close();
     await hub.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const r = (await client.callTool({ name, arguments: args })) as {

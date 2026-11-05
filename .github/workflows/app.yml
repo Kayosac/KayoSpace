@@ -94,6 +94,8 @@ jobs:
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           pnpm --filter @kayospace/app tauri android init --ci
           pnpm --filter @kayospace/app tauri icon app-icon.png
+          # «Поделиться» и kayospace:// — сами, не полагаясь на build.rs плагинов (их не запускает кэш сборки).
+          node apps/app/scripts/android-manifest.mjs apps/app/src-tauri/gen/android
 
       - name: Подпись APK постоянным ключом
         id: signing
@@ -120,6 +122,15 @@ jobs:
           else
             pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
           fi
+
+      - name: «Поделиться» и kayospace:// в APK — проверка
+        run: |
+          APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          TREE=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree --file AndroidManifest.xml "$APK")
+          for want in android.intent.action.SEND android.intent.action.SEND_MULTIPLE '"kayospace"'; do
+            echo "$TREE" | grep -q -- "$want" || { echo "::error::в APK нет фильтра $want"; exit 1; }
+          done
+          echo "Фильтры на месте"
 
       - name: Подпись APK — проверка
         if: steps.signing.outputs.signed == 'true'
