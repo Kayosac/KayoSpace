@@ -2947,3 +2947,206 @@ p.bad {
     height: 40px;
   }
 }
+
+/* ---------- Панель досок, документов и таблиц (решение 0022) ---------- */
+
+.panel-section + .panel-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.panel-head.compact {
+  margin-bottom: 4px;
+}
+
+.muted.small {
+  font-size: 12.5px;
+}
+
+.name-row {
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.name-row input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+@media (pointer: coarse) {
+  .name-row input {
+    height: 44px;
+    font-size: 16px;
+  }
+}
+
+.create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.create-row .project-chip svg {
+  width: 16px;
+  height: 16px;
+}
+
+.template-picker {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.template-picker .project-input {
+  width: 100%;
+}
+
+.board-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.board-item > button[role='option'] {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.item-icons {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  opacity: 0.55;
+}
+
+.board-item:hover .item-icons,
+.board-item:focus-within .item-icons {
+  opacity: 1;
+}
+
+.item-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.item-icon:hover,
+.item-icon[aria-expanded='true'] {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.item-icon.danger:hover,
+.item-icon.danger[aria-expanded='true'] {
+  color: var(--bad);
+}
+
+.item-menu {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 8px;
+  font-size: 13px;
+}
+
+.item-menu .danger-btn {
+  min-height: 32px;
+}
+
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: 600 13px var(--font-ui);
+  cursor: pointer;
+}
+
+.chev {
+  display: inline-block;
+  width: 12px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.chev.open {
+  transform: rotate(90deg);
+}
+
+.trash-clear {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+@media (pointer: coarse) {
+  .item-icons {
+    opacity: 1;
+  }
+
+  .item-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .item-menu .danger-btn,
+  .item-menu .project-chip {
+    min-height: 40px;
+  }
+}
+
+/* ---------- Фигуры: список вверх и заливка (решение 0022) ---------- */
+
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 40px);
+  gap: 4px;
+}
+
+/* «Прозрачный» — шахматка из клеток в цветах темы, перечёркнутая. */
+.swatch span.transparent,
+.current-swatch.filled.none {
+  background:
+    linear-gradient(
+      135deg,
+      transparent calc(50% - 1px),
+      var(--bad) calc(50% - 1px),
+      var(--bad) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ),
+    repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface) 0% 50%) 0 0 / 8px 8px;
+}
+
+.current-swatch.filled {
+  border-radius: 5px;
+}

@@ -12,6 +12,9 @@ import type * as Y from 'yjs';
 import {
   WORKSPACE_ID,
   addElement,
+  boardToMarkdown,
+  elementsInRegion,
+  type Region,
   freeSpot,
   makeDocCard,
   getBoardName,
@@ -22,7 +25,15 @@ import {
   setBoardProject,
 } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
-import { docExcerpt, docKind, isDocId, isPageId, pageMarkdown, writePage } from '@kayospace/page';
+import {
+  docExcerpt,
+  docKind,
+  isDocId,
+  isPageId,
+  pageMarkdown,
+  tableToMarkdown,
+  writePage,
+} from '@kayospace/page';
 import { boardSvg, contentArea, loadImages, renderPng } from './render';
 import type { BoardInfo } from './store';
 import { json } from './devices-api';
@@ -51,42 +62,46 @@ export function registerPageTools(
   store: Source,
   origin: unknown,
   agentOf: () => Actor = () => ({ kind: 'agent', name: 'mcp' }),
+  /** Черновик ИИ в приложении: документы только читать (решение 0022). */
+  readOnly = false,
 ): void {
-  server.registerTool(
-    'place_doc',
-    {
-      description:
-        'Положить на доску карточку документа или таблицы (решение 0021): название и начало текста; ' +
-        'человек касается карточки — документ открывается поверх доски. Без x/y — справа от занятого.',
-      inputSchema: z.object({
-        board: z
-          .string()
-          .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
-          .refine((id) => !isDocId(id), 'Карточку кладут на доску, а не в документ'),
-        doc: z
-          .string()
-          .regex(/^(pg|tb)_[A-Za-z0-9_-]{1,61}$/)
-          .describe('id документа «pg_…» или таблицы «tb_…»'),
-        x: z.number().optional(),
-        y: z.number().optional(),
-      }),
-    },
-    async ({ board, doc: docId, x, y }) => {
-      if (!(await store.has(docId))) return fail(`Документа «${docId}» нет. Список — list_boards.`);
-      const target = await store.get(board);
-      const d = await store.get(docId);
-      const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(target);
-      const card = makeDocCard(docId, spot, {
-        title: getBoardName(d) ?? undefined,
-        excerpt: docExcerpt(docId, d) || undefined,
-        actor: agentOf(),
-      });
-      addElement(target, card, origin);
-      return text(
-        `Карточка ${docKind(docId) === 'table' ? 'таблицы' : 'документа'} на доске ${board}: ${card.id}.`,
-      );
-    },
-  );
+  if (!readOnly)
+    server.registerTool(
+      'place_doc',
+      {
+        description:
+          'Положить на доску карточку документа или таблицы (решение 0021): название и начало текста; ' +
+          'человек касается карточки — документ открывается поверх доски. Без x/y — справа от занятого.',
+        inputSchema: z.object({
+          board: z
+            .string()
+            .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+            .refine((id) => !isDocId(id), 'Карточку кладут на доску, а не в документ'),
+          doc: z
+            .string()
+            .regex(/^(pg|tb)_[A-Za-z0-9_-]{1,61}$/)
+            .describe('id документа «pg_…» или таблицы «tb_…»'),
+          x: z.number().optional(),
+          y: z.number().optional(),
+        }),
+      },
+      async ({ board, doc: docId, x, y }) => {
+        if (!(await store.has(docId)))
+          return fail(`Документа «${docId}» нет. Список — list_boards.`);
+        const target = await store.get(board);
+        const d = await store.get(docId);
+        const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(target);
+        const card = makeDocCard(docId, spot, {
+          title: getBoardName(d) ?? undefined,
+          excerpt: docExcerpt(docId, d) || undefined,
+          actor: agentOf(),
+        });
+        addElement(target, card, origin);
+        return text(
+          `Карточка ${docKind(docId) === 'table' ? 'таблицы' : 'документа'} на доске ${board}: ${card.id}.`,
+        );
+      },
+    );
 
   server.registerTool(
     'read_page',
@@ -108,6 +123,7 @@ export function registerPageTools(
     },
   );
 
+  if (readOnly) return;
   server.registerTool(
     'write_page',
     {
@@ -181,26 +197,6 @@ export async function handleRender(
     json(res, 200, { frames });
     return true;
   }
-  // Карточки на досках (решение 0021): название и начало текста документов и таблиц.
-  if (url.pathname === '/api/docs' && req.method === 'GET') {
-    const ids = (url.searchParams.get('ids') ?? '')
-      .split(',')
-      .filter((id) => /^(pg|tb)_[A-Za-z0-9_-]{1,61}$/.test(id))
-      .slice(0, 100);
-    const docs = [];
-    for (const id of ids) {
-      if ((await store.isDeleted(id)) || !(await store.has(id))) continue;
-      const d = await store.get(id);
-      docs.push({
-        id,
-        kind: docKind(id),
-        title: getBoardName(d) ?? null,
-        excerpt: docExcerpt(id, d),
-      });
-    }
-    json(res, 200, { docs });
-    return true;
-  }
   const m = /^\/api\/render\/([A-Za-z0-9-][A-Za-z0-9_-]{0,63})\.png$/.exec(url.pathname);
   if (!m || req.method !== 'GET') return false;
   const board = m[1]!;
@@ -236,4 +232,68 @@ export async function handleRender(
   });
   res.end(png);
   return true;
+}
+
+const clip = (s: string, max: number): string =>
+  s.length > max ? `${s.slice(0, max)}\n…(обрезано)` : s;
+
+/**
+ * Что написано в документах и таблицах, чьи карточки лежат в области (решение 0022): помощник видит
+ * их содержимое сразу, вместе с областью, — и фрагменты досок, вставленные в эти документы.
+ */
+export async function docsInRegion(
+  store: { has(id: string): Promise<boolean>; get(id: string): Promise<Y.Doc> },
+  board: Y.Doc,
+  region: Region,
+): Promise<
+  { card: string; doc: string; kind: 'page' | 'table'; title: string; content: string }[]
+> {
+  const out = [];
+  const seen = new Set<string>();
+  for (const el of elementsInRegion(listElements(board), region)) {
+    if (el.type !== 'doc' || seen.has(el.props.doc) || seen.size >= 6) continue;
+    seen.add(el.props.doc);
+    const id = el.props.doc;
+    if (!(await store.has(id))) continue;
+    const d = await store.get(id);
+    const kind = docKind(id) ?? 'page';
+    let content = kind === 'table' ? tableToMarkdown(d) : pageMarkdown(d);
+    if (kind === 'page') {
+      // Фрагменты досок внутри документа — тоже текстом (только то, что во фрейме).
+      const parts: string[] = [];
+      for (const m of content.matchAll(
+        /\[\[board:([A-Za-z0-9_-]+)(?:#([A-Za-z0-9_-]+))?(?:\|[^\]]*)?\]\]/g,
+      )) {
+        if (parts.length >= 3 || !(await store.has(m[1]!))) continue;
+        const b = await store.get(m[1]!);
+        const f = m[2] ? getElement(b, m[2]) : null;
+        const r = f ? { x: f.x, y: f.y, w: f.w, h: f.h } : undefined;
+        parts.push(
+          `Фрагмент ${m[0]}:\n${clip(boardToMarkdown(b, m[1]!, r ? { region: r } : {}), 1500)}`,
+        );
+      }
+      if (parts.length) content += `\n\n${parts.join('\n\n')}`;
+    }
+    out.push({
+      card: el.id,
+      doc: id,
+      kind,
+      title: getBoardName(d) ?? id,
+      content: clip(content, 6000),
+    });
+  }
+  return out;
+}
+
+export function docsMarkdown(docs: Awaited<ReturnType<typeof docsInRegion>>): string {
+  if (!docs.length) return '';
+  return (
+    '\n\n## Документы и таблицы в области (содержимое)\n\n' +
+    docs
+      .map(
+        (d) =>
+          `### ${d.kind === 'table' ? 'Таблица' : 'Документ'} «${d.title}» (${d.doc}, карточка ${d.card})\n\n${d.content}`,
+      )
+      .join('\n\n')
+  );
 }

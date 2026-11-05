@@ -90,10 +90,11 @@ import { HIGHLIGHTER_COLOR, PEN_KINDS, Scene, STROKE_STREAMLINE } from './scene'
 import { isFrame, layoutPages, nextFrameName, PDF_PAGE_MARGIN } from './frames';
 import { buildPdf, type PdfPage } from './pdf';
 import type { Bounds } from '@kayospace/ink';
-import type { TaskInfo } from '@kayospace/model';
+import type { ShapeType, TaskInfo } from '@kayospace/model';
 
 export type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'sticky' | 'text' | 'shape' | 'frame';
-export type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow';
+/** Вид фигуры инструмента «Фигура»: замкнутые фигуры, линия и стрелка (решение 0022). */
+export type ShapeKind = ShapeType | 'arrow';
 
 /** Цвета стикеров — светлые, текст на них тёмный в любой теме. */
 export const STICKY_COLORS = ['#ffe58a', '#ffc4d1', '#b8e3c9', '#bcd7ff', '#dccbff', '#ffd3a8'];
@@ -116,6 +117,10 @@ export interface EngineState {
   /** Фон доски. */
   background: BoardBackground;
   shapeKind: ShapeKind;
+  /** Заливка новых фигур; null — прозрачная (решение 0022). */
+  fill: string | null;
+  /** Выделены фигуры или стрелки: их цвет, заливка и толщина в экранных пикселях. */
+  selectionShapes: { color: string | null; fill: string | null; size: number } | null;
   /** Вид пера: перо, маркер, выделитель. */
   penKind: StrokeTool;
   stickyColor: string;
@@ -157,6 +162,8 @@ export interface EngineOptions {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize?: number;
   shapeKind?: ShapeKind;
+  /** Заливка новых фигур (null — прозрачная). */
+  fill?: string | null;
   penKind?: StrokeTool;
   /** Свои цвет и толщина у ручки, маркера и выделителя (не заданы — color и size). */
   penStyles?: Partial<Record<StrokeTool, Partial<PenStyle>>>;
@@ -210,7 +217,9 @@ type SelectGesture =
   | { kind: 'marquee'; start: Pt; end: Pt }
   | { kind: 'shape'; start: Pt; end: Pt }
   | { kind: 'frame'; start: Pt; end: Pt }
-  | { kind: 'place'; start: Pt; moved: boolean };
+  | { kind: 'place'; start: Pt; end: Pt; moved: boolean }
+  /** Свободный размер надписи (решение 0022): рамка от неподвижного угла до пальца. */
+  | { kind: 'resize'; id: string; anchor: Pt; offset: Pt; moved: boolean };
 
 /** Что экспортировать: выделение, фрейм или всю доску. */
 export type ExportTarget = 'board' | 'selection' | { frame: string };
@@ -265,6 +274,7 @@ export class CanvasEngine {
   /** Shift зажат во время жеста (квадрат, угол 45°). */
   private gestureShift = false;
   private shapeKind: ShapeKind;
+  private fill: string | null;
   private penKind: StrokeTool;
   private stickyColor: string;
   /** Редактируемый стикер или текст; новый ещё не в доске — появится, когда в нём будет текст. */
@@ -311,6 +321,7 @@ export class CanvasEngine {
     };
     this.eraserSize = opts.eraserSize ?? 28;
     this.shapeKind = opts.shapeKind ?? 'rect';
+    this.fill = opts.fill ?? null;
     this.penKind = opts.penKind ?? 'pen';
     this.stickyColor = opts.stickyColor ?? STICKY_COLORS[0]!;
     this.touchDraws = opts.touchDraws ?? false;
@@ -327,7 +338,11 @@ export class CanvasEngine {
       // Картинка готова — перерисовать места, где она стоит (и в предпросмотре ИИ).
       for (const scene of this.ai ? [this.scene, this.ai.scene] : [this.scene]) {
         for (const item of scene.items.values()) {
-          if (item.element.type === 'image' && item.element.props.assetId === assetId) {
+          const el = item.element;
+          if (
+            (el.type === 'image' && el.props.assetId === assetId) ||
+            (el.type === 'doc' && el.props.thumb === assetId)
+          ) {
             this.renderer.invalidateWorld(this.camera, item.bounds);
           }
         }
@@ -388,7 +403,7 @@ export class CanvasEngine {
             this.gestureShift = info.event.shiftKey;
             this.gesture = { kind: 'frame', start: p, end: p };
           } else if (this.tool === 'sticky' || this.tool === 'text') {
-            this.gesture = { kind: 'place', start: p, moved: false };
+            this.gesture = { kind: 'place', start: p, end: p, moved: false };
           } else {
             this.startDraw(p, info.hasPressure);
           }
@@ -634,9 +649,55 @@ export class CanvasEngine {
 
   setSize(size: number): void {
     if (!(size > 0) || !Number.isFinite(size)) return;
+    // Выделены фигуры или стрелки — меняем толщину их контура (решение 0022).
+    if (this.tool === 'select' && this.selectionShapeIds().length > 0) {
+      const world = size / this.camera.zoom;
+      this.restyleSelection((el) =>
+        el.type === 'shape' || el.type === 'arrow' ? { ...el.style, size: world } : null,
+      );
+      return;
+    }
     if (this.tool !== 'pen' && this.tool !== 'shape') this.setTool('pen');
     this.style.size = size;
     this.emit();
+  }
+
+  /** Заливка: перекрашивает выделенные фигуры или задаёт заливку новых (null — прозрачная). */
+  setFill(fill: string | null): void {
+    if (this.tool === 'select' && this.selectionShapeIds().length > 0) {
+      this.restyleSelection((el) => {
+        if (el.type !== 'shape') return null;
+        const style = { ...el.style };
+        if (fill) style.fill = fill;
+        else delete style.fill;
+        return style;
+      });
+      return;
+    }
+    this.fill = fill;
+    if (this.tool !== 'shape') this.setTool('shape');
+    this.emit();
+  }
+
+  /** Стиль первой выделенной фигуры или стрелки — чтобы панель показала, что сейчас выбрано. */
+  private selectionShapeStyle(): EngineState['selectionShapes'] {
+    if (this.tool !== 'select') return null;
+    const id = this.selectionShapeIds()[0];
+    const el = id ? this.scene.items.get(id)?.element : undefined;
+    if (!el) return null;
+    return {
+      color: el.style.color ?? null,
+      fill: el.type === 'shape' ? (el.style.fill ?? null) : null,
+      size: (el.style.size ?? 2) * this.camera.zoom,
+    };
+  }
+
+  /** Выделенные фигуры и стрелки. */
+  private selectionShapeIds(): string[] {
+    return [...this.selection].filter((id) => {
+      const t = this.scene.items.get(id)?.element.type;
+      return t === 'shape' || t === 'arrow';
+    });
   }
 
   setShapeKind(kind: ShapeKind): void {
@@ -865,8 +926,8 @@ export class CanvasEngine {
   }
 
   /** Карточки документов на доске. */
-  docCards(): { id: string; doc: string; title?: string; excerpt?: string }[] {
-    const out: { id: string; doc: string; title?: string; excerpt?: string }[] = [];
+  docCards(): { id: string; doc: string; title?: string; excerpt?: string; thumb?: string }[] {
+    const out: { id: string; doc: string; title?: string; excerpt?: string; thumb?: string }[] = [];
     for (const item of this.scene.items.values()) {
       const el = item.element;
       if (el.type === 'doc') out.push({ id: el.id, ...el.props });
@@ -878,14 +939,17 @@ export class CanvasEngine {
    * Обновить копию названия и начала текста у карточек документа (не своя правка — не отменяется).
    * Возвращает, сколько карточек изменилось.
    */
-  refreshDocCards(doc: string, info: { title?: string; excerpt?: string }): number {
+  refreshDocCards(doc: string, info: { title?: string; excerpt?: string; thumb?: string }): number {
     let n = 0;
     this.doc.transact(() => {
       for (const card of this.docCards()) {
         if (card.doc !== doc) continue;
+        // Миниатюру меняет только хаб: без неё в info — оставляем прежнюю.
+        const thumb = 'thumb' in info ? info.thumb : card.thumb;
         if (
           (card.title ?? '') === (info.title ?? '') &&
-          (card.excerpt ?? '') === (info.excerpt ?? '')
+          (card.excerpt ?? '') === (info.excerpt ?? '') &&
+          (card.thumb ?? '') === (thumb ?? '')
         )
           continue;
         const el = getElement(this.doc, card.id);
@@ -896,6 +960,7 @@ export class CanvasEngine {
             doc,
             ...(info.title ? { title: info.title } : {}),
             ...(info.excerpt ? { excerpt: info.excerpt } : {}),
+            ...(thumb ? { thumb } : {}),
           },
         });
         n++;
@@ -1320,6 +1385,8 @@ export class CanvasEngine {
     const assets: string[] = [];
     for (const item of this.scene.query(area)) {
       if (item.element.type === 'image') assets.push(item.element.props.assetId);
+      if (item.element.type === 'doc' && item.element.props.thumb)
+        assets.push(item.element.props.thumb);
     }
     await this.images.ready(assets);
     return this.renderer.exportRegion(this.scene, area, k, EXPORT_COLORS);
@@ -1465,8 +1532,8 @@ export class CanvasEngine {
         this.selection.delete(el.id);
       } else if (content !== el.props.content || ed.draft) {
         const { height } = this.renderer.measureNote(el, content);
-        // Стикер не растёт: шрифт сам подбирается под его размер.
-        const h = el.type === 'sticky' ? el.h : height;
+        // Стикер и надпись в рамке не растут: шрифт сам подбирается под их размер.
+        const h = el.type === 'sticky' || (el.type === 'text' && el.props.fit) ? el.h : height;
         const next = {
           ...el,
           h,
@@ -1481,6 +1548,30 @@ export class CanvasEngine {
         this.selection.add(next.id);
       }
     }
+    this.selectionChanged();
+  }
+
+  /** Надпись в рамке (решение 0022): рамку протянули инструментом «Текст» — сразу правка. */
+  private placeTextBox(r: { minX: number; minY: number; maxX: number; maxY: number }): void {
+    const z = this.camera.zoom;
+    const min = 24 / z;
+    const draft: CanvasElement = {
+      ...makeText('', {
+        x: r.minX,
+        y: r.minY,
+        w: Math.max(min, r.maxX - r.minX),
+        actor: this.opts.actor,
+        ...(this.color ? { color: this.color } : {}),
+      }),
+      h: Math.max(min, r.maxY - r.minY),
+    };
+    if (draft.type === 'text') draft.props = { ...draft.props, fit: true };
+    if (this.editing) this.finishEditing(null);
+    this.editing = { id: draft.id, draft };
+    this.tool = 'select';
+    this.nav.handTool = false;
+    this.updateCursor();
+    this.selection.clear();
     this.selectionChanged();
   }
 
@@ -1548,6 +1639,7 @@ export class CanvasEngine {
     const color = this.color ?? undefined;
     const tiny = Math.hypot(g.end.x - g.start.x, g.end.y - g.start.y) * z < 4;
     const opts = { size, actor, ...(color ? { color } : {}) };
+    const fill = this.fill ?? undefined;
     if (this.shapeKind === 'line' || this.shapeKind === 'arrow') {
       if (tiny) return null;
       const end = this.gestureShift ? snapAngle(g.start, g.end) : g.end;
@@ -1571,7 +1663,7 @@ export class CanvasEngine {
       box = this.viewBox(g.start, b.x + b.w / 2, b.y + b.h / 2, b.w, b.h);
     }
     const { rotation, ...rect } = box;
-    return { ...makeShape(this.shapeKind, rect, opts), rotation };
+    return { ...makeShape(this.shapeKind, rect, { ...opts, ...(fill ? { fill } : {}) }), rotation };
   }
 
   /** Фрейм по жесту: протянули — по рамке, тап — 960 × 600 экранных пикселей с центром в точке. */
@@ -1673,6 +1765,22 @@ export class CanvasEngine {
         // Неподвижен противоположный угол самих элементов (без отступа рамки);
         // масштаб считаем от точки, где схватили ручку, — в начале он ровно 1.
         const anchor = corners(b)[(h + 2) % 4]!;
+        // Одна неповёрнутая надпись — рамка тянется свободно, шрифт подбирается под неё.
+        const only = this.selection.size === 1 ? [...this.selection][0]! : null;
+        const el = only ? getElement(this.doc, only) : undefined;
+        if (el?.type === 'text' && !el.rotation) {
+          const c = corners(b)[h]!;
+          this.undoManager.stopCapturing();
+          this.gesture = {
+            kind: 'resize',
+            id: el.id,
+            anchor,
+            offset: { x: p.x - c.x, y: p.y - c.y },
+            moved: false,
+          };
+          this.selectionChanged();
+          return;
+        }
         this.gesture = { kind: 'scale', anchor, corner: p, t: IDENTITY, moved: false };
         this.selectionChanged();
         return;
@@ -1755,8 +1863,39 @@ export class CanvasEngine {
     } else if (g.kind === 'shape' || g.kind === 'frame') {
       g.end = p;
     } else if (g.kind === 'place') {
+      g.end = p;
       if (Math.hypot(p.x - g.start.x, p.y - g.start.y) * z > 8) g.moved = true;
+      // Надпись рамкой (решение 0022): видно, какую область выделяют.
+      if (g.moved && this.tool === 'text') {
+        this.renderer.invalidateAll();
+        this.schedule();
+      }
       return;
+    } else if (g.kind === 'resize') {
+      const el = getElement(this.doc, g.id);
+      if (el?.type !== 'text') return;
+      const q = { x: p.x - g.offset.x, y: p.y - g.offset.y };
+      const min = 12 / z;
+      const r = rectFromPoints(g.anchor, q);
+      const w = Math.max(min, r.maxX - r.minX);
+      const h = Math.max(min, r.maxY - r.minY);
+      const x = q.x < g.anchor.x ? g.anchor.x - w : g.anchor.x;
+      const y = q.y < g.anchor.y ? g.anchor.y - h : g.anchor.y;
+      g.moved = true;
+      addElement(
+        this.doc,
+        {
+          ...el,
+          x,
+          y,
+          w,
+          h,
+          props: { ...el.props, fit: true },
+          updatedBy: this.opts.actor,
+          updatedAt: Date.now(),
+        },
+        LOCAL_ORIGIN,
+      );
     } else if (g.kind === 'lasso') {
       const last = g.points[g.points.length - 1]!;
       if (Math.hypot(p.x - last.x, p.y - last.y) * z < 2) return;
@@ -1808,6 +1947,11 @@ export class CanvasEngine {
         this.updateCursor();
         this.selection.clear();
         this.selection.add(frame.id);
+      } else if (g.kind === 'resize') {
+        this.undoManager.stopCapturing();
+      } else if (g.kind === 'place' && g.moved && this.tool === 'text') {
+        this.placeTextBox(rectFromPoints(g.start, g.end));
+        return;
       } else if (g.kind === 'place' && !g.moved) {
         const kind = this.tool === 'text' ? 'text' : 'sticky';
         const z = this.camera.zoom;
@@ -2160,7 +2304,11 @@ export class CanvasEngine {
               handles:
                 this.tool === 'select' &&
                 !this.editing &&
-                (!g || g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate'),
+                (!g ||
+                  g.kind === 'move' ||
+                  g.kind === 'scale' ||
+                  g.kind === 'rotate' ||
+                  g.kind === 'resize'),
             };
           }
         }
@@ -2175,6 +2323,8 @@ export class CanvasEngine {
         } else if (g?.kind === 'lasso') {
           overlay.lasso = g.points;
         } else if (g?.kind === 'marquee') {
+          overlay.marquee = rectFromPoints(g.start, g.end);
+        } else if (g?.kind === 'place' && g.moved && this.tool === 'text') {
           overlay.marquee = rectFromPoints(g.start, g.end);
         }
         const ai = this.ai;
@@ -2253,6 +2403,8 @@ export class CanvasEngine {
       size: this.size,
       eraserSize: this.eraserSize,
       shapeKind: this.shapeKind,
+      fill: this.fill,
+      selectionShapes: this.selectionShapeStyle(),
       penKind: this.penKind,
       stickyColor: this.stickyColor,
       background: this.renderer.background,

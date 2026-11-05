@@ -141,7 +141,13 @@ describe('документы (решение 0020)', () => {
       await fetch(`http://127.0.0.1:${hub.port}/api/docs?ids=tb_buy,pg_none`)
     ).json()) as { docs: unknown[] };
     expect(docs.docs).toEqual([
-      { id: 'tb_buy', kind: 'table', title: 'Закупки', excerpt: '2 строки · Что, Цена, Куплено' },
+      {
+        id: 'tb_buy',
+        kind: 'table',
+        title: 'Закупки',
+        excerpt: '2 строки · Что, Цена, Куплено',
+        thumb: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
     ]);
     // Картинка доски с карточкой рисуется.
     const png = await fetch(`http://127.0.0.1:${hub.port}/api/render/home.png`);

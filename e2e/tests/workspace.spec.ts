@@ -279,7 +279,7 @@ test('планшет без клавиатуры: проекты, доски и 
   await page.getByTestId('add-project').tap();
   await page.getByTestId('new-project-name').fill('Ремонт');
   // Клавиатуру спрятали, тапнув по пустому месту панели, — ввод не пропадает.
-  await panel.getByRole('heading', { name: 'Доски' }).tap();
+  await panel.getByText('Название этой доски').tap();
   await expect(page.getByTestId('new-project-name')).toHaveValue('Ремонт');
   await page.getByTestId('new-project-create').tap();
   const tabs = page.getByTestId('projects');
@@ -295,10 +295,12 @@ test('планшет без клавиатуры: проекты, доски и 
   await panel.getByRole('button', { name: 'Закрыть' }).tap();
   await expect(page.getByTestId('board-title')).toHaveText('Кухня');
 
-  // Новая доска — кнопкой в списке, в выбранном проекте.
+  // Новая доска — кнопкой «Доска» над списком: название и шаблон «Пустой», в выбранном проекте.
   await page.getByTestId('board-title').tap();
-  await page.getByLabel('Найти или создать доску').fill('Смета');
-  await page.getByRole('button', { name: /Создать «Смета» в «Ремонт кухни»/ }).tap();
+  await page.getByTestId('create-board').tap();
+  await page.getByTestId('new-board-name').fill('Смета');
+  await expect(page.getByTestId('templates')).toContainText('Появится в проекте «Ремонт кухни»');
+  await page.getByTestId('templates').getByRole('button', { name: 'Пустой' }).tap();
   await expect(page.getByTestId('board-title')).toHaveText('Смета');
   await page.getByTestId('board-title').tap();
   await expect(page.getByRole('option', { name: /Смета/ })).toHaveCount(1);
@@ -500,10 +502,11 @@ test('стикеры, текст, фигуры, стрелка с привязк
       )?.name;
     })
     .toBe('Мысли');
-  // Панель ещё открыта — сразу ищем/создаём доску.
-  await page.getByLabel('Найти или создать доску').fill('Вторая доска');
+  // Панель ещё открыта — сразу создаём доску.
+  await page.getByTestId('create-board').click();
+  await page.getByTestId('new-board-name').fill('Вторая доска');
   await page.screenshot({ path: shot('workspace-boards.png') });
-  await page.keyboard.press('Enter');
+  await page.getByTestId('templates').getByRole('button', { name: 'Пустой' }).click();
   await expect(page.getByTestId('board-title')).toHaveText('Вторая доска');
   await expect.poll(() => elements(page)).toBe(0);
   await page.keyboard.press('Control+k');
@@ -1082,18 +1085,25 @@ test('фреймы, выделитель, порядок слоёв, вырав�
   // Экспорт: PNG доски и PDF — по странице на фрейм.
   await page.keyboard.press('Escape');
   await page.getByTestId('board-title').click();
+  // Список фреймов свёрнут — раскрывается по заголовку.
+  await expect(page.getByTestId('frames-list')).toHaveCount(0);
+  await page.getByTestId('frames-toggle').click();
   await expect(page.getByTestId('frames-list')).toContainText('Неделя');
+  // Экспорт — иконкой у пункта списка: PNG или PDF.
+  const row = page.locator('.board-item').filter({ has: page.locator('button.current') });
+  await row.getByTestId('item-export').click();
   const [png] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-png').click(),
+    row.getByTestId('item-export-menu').getByRole('button', { name: 'PNG' }).click(),
   ]);
   expect(png.suggestedFilename()).toBe('e2e-frames.png');
   const pngBytes = readFileSync((await png.path())!);
   expect(pngBytes.subarray(1, 4).toString()).toBe('PNG');
   // Панель досок остаётся открытой — сразу PDF.
+  await row.getByTestId('item-export').click();
   const [pdf] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-pdf').click(),
+    row.getByTestId('item-export-menu').getByRole('button', { name: 'PDF' }).click(),
   ]);
   const pdfText = readFileSync((await pdf.path())!).toString('latin1');
   expect(pdfText.startsWith('%PDF-1.4')).toBe(true);
@@ -1122,9 +1132,10 @@ test('проекты: создать, положить доску, новая д
   await a.getByTestId('board-project').selectOption({ label: 'Ремонт' });
   await expect(a.getByRole('option', { name: /e2e-proj-a/ })).toHaveCount(1);
   // Новая доска создаётся в выбранном проекте.
-  await a.getByLabel('Найти или создать доску').fill('Смета');
+  await a.getByTestId('create-board').click();
+  await a.getByTestId('new-board-name').fill('Смета');
   await a.screenshot({ path: shot('projects.png') });
-  await a.keyboard.press('Enter');
+  await a.getByTestId('templates').getByRole('button', { name: 'Пустой' }).click();
   await expect(a.getByTestId('board-title')).toHaveText('Смета');
   await drawWave(a, 300, 300);
 
@@ -1388,7 +1399,7 @@ test('поиск по всем доскам ведёт к стикеру; фон
   const b = await openDevice(browser, { ...synced, board: 'e2e-find-b' });
   await expect(b.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
   await b.getByTestId('board-title').click();
-  await b.getByLabel('Найти или создать доску').fill('квартал');
+  await b.getByLabel('Найти').fill('квартал');
   const found = b.getByTestId('found');
   await expect(found.getByRole('button')).toHaveCount(1);
   await expect(found).toContainText('Квартальный отчёт');
@@ -1519,15 +1530,14 @@ test('планшет: корзина, удаление и возврат дос�
   await expect(trash).toHaveCount(0);
   await trashPanel.getByRole('button', { name: 'Закрыть' }).tap();
 
-  // Удалить доску — в два касания; открывается другая, удалённую можно вернуть из корзины.
+  // Удалить доску — иконкой у пункта списка, с вопросом; открывается другая, удалённую можно вернуть.
   await page.getByTestId('board-title').tap();
-  const del = page.getByTestId('delete-board');
-  await del.tap();
-  await expect(del).toHaveText('Точно удалить доску?');
-  await del.tap();
+  const row = page.locator('.board-item').filter({ hasText: 'Первая' });
+  await row.getByTestId('item-delete').tap();
+  await expect(row.getByTestId('item-delete-menu')).toContainText('Точно удалить?');
+  await row.getByTestId('item-delete-confirm').tap();
   await expect(page.getByTestId('board-title')).toHaveText('Вторая');
   await expect(page.getByRole('option', { name: /Первая/ })).toHaveCount(0);
-  await expect(page.getByTestId('open-trash')).toContainText('досок: 1');
   await expect.poll(async () => (await call('list_boards', {})).content[0]!.text).not.toContain(a);
   await page.getByTestId('open-trash').tap();
   const gone = page.getByTestId('deleted-boards');
@@ -1554,6 +1564,19 @@ test('планшет: корзина, удаление и возврат дос�
   await expect.poll(() => elements(page)).toBe(3);
   await expect.poll(() => hubElements(request, a)).toBe(3);
   await page.screenshot({ path: shot('agent-image.png') });
+
+  // «Очистить корзину» — с вопросом; пустая корзина — кнопки «Корзина» в панели нет.
+  await call('delete_elements', { board: a, ids: [ids[0]!.id] });
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('open-trash').tap();
+  await trashPanel.getByTestId('trash-clear').tap();
+  await trashPanel.getByTestId('trash-clear-confirm').tap();
+  await expect(trashPanel).toContainText('Корзина пуста');
+  await trashPanel.getByRole('button', { name: 'Закрыть' }).tap();
+  await page.getByTestId('board-title').tap();
+  await expect(page.getByTestId('boards-panel')).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId('open-trash')).toHaveCount(0);
   await client.close();
   await context.close();
 });
@@ -1611,7 +1634,8 @@ test('планшет: доска из шаблона, PDF страницами, 
 
   // Новая доска из шаблона «Ретро» — колонки уже на месте; канбана среди шаблонов нет.
   await page.getByTestId('board-title').tap();
-  await page.getByLabel('Найти или создать доску').fill('Спринт');
+  await page.getByTestId('create-board').tap();
+  await page.getByTestId('new-board-name').fill('Спринт');
   await expect(page.getByTestId('templates').getByRole('button', { name: 'Канбан' })).toHaveCount(
     0,
   );
@@ -1980,13 +2004,14 @@ test('планшет: документ — заголовок, чек-лист �
   await page.goto(WORKSPACE_URL);
   await page.waitForFunction(() => window.__kayospace?.engine);
 
-  // Новый документ — из списка досок.
+  // Новый документ — кнопкой «Документ» над списком; название — в самом документе.
   await page.getByTestId('board-title').tap();
-  await page.getByLabel('Найти или создать доску').fill('План ремонта');
   await page.getByTestId('create-page').tap();
   const view = page.getByTestId('page-view');
   await expect(view).toBeVisible();
-  await expect(page.getByTestId('page-title')).toHaveValue('План ремонта');
+  await expect(page.getByTestId('page-title')).toHaveValue('Новый документ');
+  await page.getByTestId('page-title').fill('План ремонта');
+  await page.getByTestId('page-editor').tap();
   await expect(page.getByTestId('board-title')).toHaveText('План ремонта');
 
   // Текст и заголовок — кнопкой.
@@ -2061,7 +2086,13 @@ const docCards = (page: Page) =>
   page.evaluate(() =>
     (
       window.__kayospace!.engine as unknown as {
-        docCards(): { id: string; doc: string; title?: string; excerpt?: string }[];
+        docCards(): {
+          id: string;
+          doc: string;
+          title?: string;
+          excerpt?: string;
+          thumb?: string;
+        }[];
       }
     ).docCards(),
   );
@@ -2072,11 +2103,13 @@ test('планшет: таблица — колонки по типам, яче�
   const page = await tabletPage(browser, `e2e-table-start-${Date.now()}`);
   const { client, call } = await mcpClient('e2e-tables');
   await page.getByTestId('board-title').tap();
-  await page.getByLabel('Найти или создать доску').fill('Смета кухни');
   await page.getByTestId('create-table').tap();
   const view = page.getByTestId('table-view');
   await expect(view).toBeVisible();
-  await expect(page.getByTestId('page-title')).toHaveValue('Смета кухни');
+  await expect(page.getByTestId('page-title')).toHaveValue('Новая таблица');
+  await page.getByTestId('page-title').fill('Смета кухни');
+  await view.getByLabel('Найти в таблице').tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Смета кухни');
   const heads = view.getByTestId('column-head');
   await expect(heads).toHaveText([/Название/, /Готово/]);
 
@@ -2181,11 +2214,139 @@ test('планшет: документ и таблица карточками н
   await expect(overlay.getByTestId('column-head')).toHaveCount(2);
   await overlay.getByTestId('doc-close').tap();
   await expect.poll(async () => (await docCards(page)).length).toBe(2);
+  // Миниатюра — картинкой с хаба, когда правки до него дошли.
+  await expect
+    .poll(async () => (await docCards(page)).find((c) => c.doc.startsWith('pg_'))?.thumb, {
+      timeout: 15_000,
+    })
+    .toMatch(/^[0-9a-f]{64}$/);
+  await page.screenshot({ path: shot('doc-thumbs.png') });
   const tableCard = (await docCards(page)).find((c) => c.doc.startsWith('tb_'))!;
   expect(tableCard.excerpt).toBe('0 строк · Название, Готово');
   await call('place_doc', { board, doc: docId, x: 2000, y: 0 });
   await expect.poll(async () => (await docCards(page)).length).toBe(3);
   expect(await call('read_board', { board })).toContain('Документ «План работ»');
   await client.close();
+  await page.context().close();
+});
+
+test('надпись рамкой и свободный размер; фигуры списком вверх, заливка и правка контура; полоски при отдалении', async ({
+  browser,
+}) => {
+  const board = `e2e-text-shapes-${Date.now()}`;
+  const page = await openDevice(browser, { ...synced, board });
+  const all = () =>
+    page.evaluate(() =>
+      [
+        ...(
+          window.__kayospace!.engine as unknown as {
+            scene: {
+              items: Map<
+                string,
+                {
+                  element: {
+                    id: string;
+                    type: string;
+                    x: number;
+                    y: number;
+                    w: number;
+                    h: number;
+                    style: Record<string, unknown>;
+                    props: Record<string, unknown>;
+                  };
+                }
+              >;
+            };
+          }
+        ).scene.items.values(),
+      ].map((i) => i.element),
+    );
+  const tools = page.locator('.toolbar');
+
+  // Надпись рамкой: протянули инструментом «Текст» — текст внутри рамки, шрифт под неё.
+  await tools.getByRole('radio', { name: 'Текст' }).click();
+  await page.mouse.move(300, 200);
+  await page.mouse.down();
+  await page.mouse.move(700, 330, { steps: 8 });
+  await page.mouse.up();
+  const editor = page.getByTestId('note-editor');
+  await expect(editor).toBeVisible();
+  await editor.fill('Большой заголовок');
+  await page.mouse.click(1100, 700);
+  await expect.poll(async () => (await all()).filter((e) => e.type === 'text').length).toBe(1);
+  let text = (await all()).find((e) => e.type === 'text')!;
+  expect(text.props.fit).toBe(true);
+  expect(Math.round(text.w)).toBe(400);
+  expect(Math.round(text.h)).toBe(130);
+
+  // Свободный размер: тянем угол — уже и выше, пропорции меняются.
+  await tools.getByRole('radio', { name: 'Выделение' }).click();
+  await page.mouse.click(500, 265);
+  await page.mouse.move(706, 336);
+  await page.mouse.down();
+  await page.mouse.move(556, 486, { steps: 6 });
+  await page.mouse.up();
+  text = (await all()).find((e) => e.type === 'text')!;
+  expect(Math.round(text.w)).toBe(250);
+  expect(Math.round(text.h)).toBe(280);
+  expect(text.props.fit).toBe(true);
+
+  // Простое касание инструментом «Текст» — обычная надпись, как раньше.
+  await tools.getByRole('radio', { name: 'Текст' }).click();
+  await page.mouse.click(250, 620);
+  await editor.fill('Обычная');
+  await page.mouse.click(1100, 700);
+  await expect.poll(async () => (await all()).filter((e) => e.type === 'text').length).toBe(2);
+  expect((await all()).find((e) => e.props.content === 'Обычная')!.props.fit).toBeUndefined();
+
+  // Фигуры — списком вверх от кнопки «Фигуры»; заливка — отдельным цветом.
+  await tools.getByRole('radio', { name: 'Фигуры' }).click();
+  const shapes = page.getByTestId('shapes-popover');
+  await expect(shapes).toBeVisible();
+  await expect(shapes.getByRole('radio')).toHaveCount(11);
+  const sp = (await shapes.boundingBox())!;
+  const btn = (await tools.getByRole('radio', { name: 'Фигуры' }).boundingBox())!;
+  expect(sp.y + sp.height).toBeLessThanOrEqual(btn.y + 1);
+  await shapes.getByRole('radio', { name: 'Звезда' }).click();
+  await expect(shapes).toHaveCount(0);
+  await page.getByTestId('fill-button').click();
+  await page.getByTestId('fill-popover').getByRole('radio', { name: 'Жёлтый' }).click();
+  await page.mouse.move(800, 150);
+  await page.mouse.down();
+  await page.mouse.move(950, 300, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => (await all()).filter((e) => e.type === 'shape').length).toBe(1);
+  let star = (await all()).find((e) => e.type === 'shape')!;
+  expect(star.props.shape).toBe('star');
+  expect(star.style.fill).toBe('#ffe58a');
+  await page.screenshot({ path: shot('shapes-fill.png') });
+
+  // Уже нарисованная фигура: заливка, цвет контура и толщина — у выделенной.
+  await tools.getByRole('radio', { name: 'Выделение' }).click();
+  await page.mouse.click(875, 230);
+  await page.getByTestId('fill-button').click();
+  await page.getByTestId('fill-popover').getByRole('radio', { name: 'Прозрачный' }).click();
+  await page.getByTestId('color-button').click();
+  await page.getByTestId('color-popover').getByRole('radio', { name: 'Красный' }).click();
+  await page.getByTestId('size-button').click();
+  await page.getByTestId('size-popover').getByRole('radio', { name: 'Толстое' }).click();
+  star = (await all()).find((e) => e.type === 'shape')!;
+  expect(star.style.fill).toBeUndefined();
+  expect(star.style.color).toBe('#e5484d');
+  expect(star.style.size).toBe(7);
+  expect((await all()).filter((e) => e.type === 'shape')).toHaveLength(1);
+  await page.screenshot({ path: shot('shapes-edit.png') });
+
+  // Сильно отдалились — вместо пустоты полоски текста.
+  await page.evaluate(() => {
+    const e = window.__kayospace!.engine as unknown as {
+      zoomToFit(): void;
+      zoomBy(f: number): void;
+    };
+    e.zoomToFit();
+    e.zoomBy(0.05);
+  });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: shot('far-text.png') });
   await page.context().close();
 });

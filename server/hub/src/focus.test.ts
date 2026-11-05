@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { addElements, makeSticky } from '@kayospace/board';
+import { addElements, makeDocCard, makeSticky, setBoardName } from '@kayospace/board';
+import { writePage } from '@kayospace/page';
 import type { Actor } from '@kayospace/model';
 import { buildPrompt } from './ai';
 import { chatContext, type ChatMessage } from './chat';
@@ -91,5 +92,34 @@ describe('read_board с region', () => {
     expect(json.elements).toHaveLength(1);
     expect(json.totalElements).toBe(2);
     expect(await read({})).toContain('Далеко');
+  });
+
+  it('карточка документа в области — сразу с содержимым и фрагментом доски', async () => {
+    const page = await hub.store.get('pg_notes');
+    setBoardName(page, 'Заметки');
+    writePage(page, '# Смета\n\nПлитка — 1200\n\n[[board:big|Схема]]');
+    const doc = await hub.store.get('big');
+    addElements(doc, [
+      makeSticky('На схеме', { x: 0, y: 0, actor: me }),
+      makeDocCard('pg_notes', { x: 300, y: 0 }, { title: 'Заметки', actor: me }),
+    ]);
+    const call = async (args: Record<string, unknown>) =>
+      (
+        (await client.callTool({ name: 'read_board', arguments: { board: 'big', ...args } })) as {
+          content: { text: string }[];
+        }
+      ).content[0]!.text;
+    const md = await call({ region: { x: -50, y: -50, w: 800, h: 400 } });
+    expect(md).toContain('Документ «Заметки»');
+    expect(md).toContain('Плитка — 1200');
+    expect(md).toContain('На схеме');
+    // Вне области — содержимого нет.
+    expect(await call({ region: { x: 5000, y: 5000, w: 10, h: 10 } })).not.toContain('Плитка');
+    const json = JSON.parse(
+      await call({ format: 'json', region: { x: 250, y: -10, w: 400, h: 300 } }),
+    ) as {
+      documents: { doc: string }[];
+    };
+    expect(json.documents.map((d) => d.doc)).toEqual(['pg_notes']);
   });
 });

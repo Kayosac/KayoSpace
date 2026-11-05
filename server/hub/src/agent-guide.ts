@@ -27,6 +27,8 @@ export const AGENT_GUIDE = `Kayospace — личный бесконечный х
 - Таблицы (kind: "table", id «tb_…») — колонки с типами (текст, число, флажок, дата, выбор, ссылка): read_table
   (json — с id строк), write_table (колонки по названию, строки: с id — изменить, без id — добавить).
 - Документ или таблицу можно положить на доску карточкой: place_doc; человек открывает её касанием.
+  read_board с region сразу показывает содержимое документов и таблиц, чьи карточки в области.
+- Фигуры: add_shape — rect, roundRect, ellipse, triangle, diamond, hexagon, star, blockArrow, bubble; fill — заливка.
 - Удалённое лежит в корзине 7 дней: list_trash и restore_elements; доски — list_deleted_boards и restore_board.
   delete_board — только когда человек прямо попросил удалить доску.
 - Каждый вызов — одно изменение: человек видит на устройстве, что добавил агент, и может отменить его одним нажатием.

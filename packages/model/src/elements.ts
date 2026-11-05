@@ -1,3 +1,5 @@
+import type { ShapeType } from './shapes';
+
 /**
  * Модель данных холста (см. docs/PLAN.md, раздел 5).
  * Воркспейс → Проект → Доска → Элемент. Каждая доска — отдельный Yjs-документ.
@@ -19,6 +21,8 @@ export interface Actor {
 
 export interface Style {
   color?: string;
+  /** Заливка замкнутой фигуры (решение 0022); нет — прозрачная. */
+  fill?: string;
   size?: number;
   opacity?: number;
   font?: string;
@@ -64,6 +68,11 @@ export interface StrokeProps {
 export interface TextProps {
   /** В Yjs это Y.XmlFragment (TipTap); здесь — сериализованный вид для экспорта. */
   content: string;
+  /**
+   * Надпись в рамке (решение 0022): размер рамки задаёт человек, шрифт подбирается под неё.
+   * Нет — обычная надпись: шрифт задан, высота растёт по тексту.
+   */
+  fit?: boolean;
 }
 
 export type TaskStatus = 'todo' | 'doing' | 'done';
@@ -108,7 +117,7 @@ export interface ArrowProps {
 }
 
 export interface ShapeProps {
-  shape: 'rect' | 'ellipse' | 'line';
+  shape: ShapeType;
   label?: string;
 }
 
@@ -120,6 +129,8 @@ export interface DocProps {
   doc: string;
   title?: string;
   excerpt?: string;
+  /** Миниатюра — картинка (id содержимого), её делает хаб (решение 0022). */
+  thumb?: AssetId;
 }
 
 export type StrokeElement = BaseElement<'stroke', StrokeProps>;

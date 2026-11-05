@@ -25,12 +25,12 @@ import {
   makeText,
   setBoardName,
 } from '@kayospace/board';
-import type { ArrowEnd, CanvasElement } from '@kayospace/model';
+import { CLOSED_SHAPES, type ArrowEnd, type CanvasElement, type ShapeType } from '@kayospace/model';
 import { searchBoards } from './search';
 import { registerLayoutTools } from './mcp-layout';
 import { registerExtraTools } from './mcp-extra';
 import { registerImageTools } from './mcp-images';
-import { registerPageTools } from './mcp-pages';
+import { docsInRegion, docsMarkdown, registerPageTools } from './mcp-pages';
 import { registerTableTools, tableText } from './mcp-tables';
 import { isPageId, isTableId, pageMarkdown } from '@kayospace/page';
 import type { Trash } from './trash';
@@ -143,7 +143,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.5.0' },
+      { name: 'kayospace', version: '0.6.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -202,12 +202,17 @@ export function createMcp(
             e.bounds.minY <= region.y + region.h &&
             e.bounds.maxY >= region.y);
         const hw = ((await opts.handwriting?.entries(board)) ?? []).filter(inRegion);
+        // Карточки документов и таблиц в области — сразу с содержимым (решение 0022).
+        const docs = region ? await docsInRegion(store, doc, region) : [];
         if (format === 'json') {
           const out = boardToJSON(doc, board, { region }) as Record<string, unknown>;
           if (hw.length) out.handwriting = hw.map((e) => ({ strokes: e.ids, text: e.text }));
+          if (docs.length) out.documents = docs;
           return text(JSON.stringify(out, null, 2));
         }
-        return text(boardToMarkdown(doc, board, { region }) + handwritingMarkdown(hw));
+        return text(
+          boardToMarkdown(doc, board, { region }) + handwritingMarkdown(hw) + docsMarkdown(docs),
+        );
       },
     );
 
@@ -265,21 +270,32 @@ export function createMcp(
       'add_shape',
       {
         description:
-          'Добавить прямоугольник или эллипс (рамку без заливки) по координатам и размеру.',
+          'Добавить фигуру по координатам и размеру: rect — прямоугольник, roundRect — скруглённый, ellipse, ' +
+          'triangle, diamond — ромб, hexagon, star, blockArrow — стрелка-фигура вправо, bubble — выноска для реплики. ' +
+          'fill — цвет заливки (#rrggbb), без него — только контур.',
         inputSchema: z.object({
           board: boardId,
-          shape: z.enum(['rect', 'ellipse']),
+          shape: z.enum(CLOSED_SHAPES as [ShapeType, ...ShapeType[]]),
           x: z.number(),
           y: z.number(),
           w: z.number().positive(),
           h: z.number().positive(),
           color: z.string().optional(),
+          fill: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{3,8}$/)
+            .optional()
+            .describe('заливка'),
           lineWidth: z.number().positive().optional().describe('толщина линии, по умолчанию 2'),
         }),
       },
-      async ({ board, shape, x, y, w, h, color, lineWidth }) => {
+      async ({ board, shape, x, y, w, h, color, fill, lineWidth }) => {
         const doc = await store.get(board);
-        const el = makeShape(shape, { x, y, w, h }, { size: lineWidth ?? 2, color, actor: who() });
+        const el = makeShape(
+          shape,
+          { x, y, w, h },
+          { size: lineWidth ?? 2, color, ...(fill ? { fill } : {}), actor: who() },
+        );
         addElement(doc, el, MCP_ORIGIN);
         return text(`Фигура добавлена: ${el.id}.`);
       },
@@ -434,10 +450,9 @@ export function createMcp(
     if (opts.trash)
       registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who, opts.history ?? null);
     // Документы (решение 0020) — тоже только у настоящих досок.
-    if (opts.trash) {
-      registerPageTools(server, store, MCP_ORIGIN, who);
-      registerTableTools(server, store, MCP_ORIGIN);
-    }
+    // Документы и таблицы; в черновике ИИ — только чтение (решение 0022).
+    registerPageTools(server, store, MCP_ORIGIN, who, !opts.trash);
+    registerTableTools(server, store, MCP_ORIGIN, !opts.trash);
     const assets = opts.assets;
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)

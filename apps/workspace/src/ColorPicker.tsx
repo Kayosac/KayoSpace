@@ -27,12 +27,15 @@ export function ColorPicker({
   presets,
   recent,
   pastel = false,
+  transparentNull = false,
   onPick,
 }: {
   value: string | null;
   presets: Swatch[];
   recent: string[];
   pastel?: boolean;
+  /** null — «Прозрачный» (заливка фигур, решение 0022), а не цвет чернил. */
+  transparentNull?: boolean;
   /** custom — свой цвет из круга или поля (попадает в недавние); close — выбор окончен. */
   onPick: (color: string | null, opts: { custom: boolean; close: boolean }) => void;
 }) {
@@ -105,7 +108,12 @@ export function ColorPicker({
             title={name}
             onClick={() => onPick(v, { custom: false, close: true })}
           >
-            <span style={{ background: v ?? 'var(--canvas-ink)' }} />
+            <span
+              className={v === null && transparentNull ? 'transparent' : undefined}
+              style={
+                v === null && transparentNull ? undefined : { background: v ?? 'var(--canvas-ink)' }
+              }
+            />
           </button>
         ))}
       </div>

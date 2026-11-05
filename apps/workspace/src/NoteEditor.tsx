@@ -31,7 +31,7 @@ export function NoteEditor({ engine, state }: { engine: CanvasEngine; state: Eng
     setText(content);
     ta.focus({ preventScroll: true });
     ta.setSelectionRange(ta.value.length, ta.value.length);
-    if (el?.type === 'text') grow(ta);
+    if (el?.type === 'text' && !el.props.fit) grow(ta);
     engine.setEditTextSource(() => ta.value);
     return () => engine.setEditTextSource(null);
     // content читаем только в момент начала правки — он не в зависимостях.
@@ -63,11 +63,17 @@ export function NoteEditor({ engine, state }: { engine: CanvasEngine; state: Eng
     // Текст стикера — по центру по вертикали, как на холсте.
     const lines = Math.max(1, fit.lines.length);
     padTop = Math.max(fit.pad, (el.h - band - lines * fit.size * LINE_HEIGHT) / 2);
+  } else if (el.props.fit) {
+    // Надпись в рамке (решение 0022): шрифт подбирается под рамку прямо во время набора.
+    font = engine.renderer.fitText(text, el.w, el.h).size;
+    padX = 0;
+    padTop = 0;
   } else {
     font = fontSizeOf(el);
     padX = 0;
     padTop = 0;
   }
+  const boxed = sticky || (el.type === 'text' && el.props.fit === true);
   const finish = (): void => {
     if (ref.current) engine.finishEditing(ref.current.value);
   };
@@ -83,7 +89,7 @@ export function NoteEditor({ engine, state }: { engine: CanvasEngine; state: Eng
         left: p.x,
         top: p.y,
         width: el.w * z,
-        ...(sticky ? { height: el.h * z } : { minHeight: el.h * z }),
+        ...(boxed ? { height: el.h * z } : { minHeight: el.h * z }),
         padding: `${padTop * z}px ${padX * z}px 0`,
         fontSize: font * z,
         lineHeight: LINE_HEIGHT,
@@ -98,7 +104,7 @@ export function NoteEditor({ engine, state }: { engine: CanvasEngine; state: Eng
       }}
       onInput={(e) => {
         setText(e.currentTarget.value);
-        if (!sticky) grow(e.currentTarget);
+        if (!boxed) grow(e.currentTarget);
       }}
       onBlur={finish}
       onKeyDown={(e) => {

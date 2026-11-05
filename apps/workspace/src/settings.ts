@@ -1,7 +1,7 @@
 /** Настройки приложения: хранятся только на этом устройстве (localStorage). */
 
 import type { Camera, PenStyle, ShapeKind, Tool } from '@kayospace/canvas';
-import type { StrokeTool } from '@kayospace/model';
+import { isShapeType, type StrokeTool } from '@kayospace/model';
 import { STORAGE_NS } from './config';
 
 export interface WorkspaceSettings {
@@ -30,6 +30,8 @@ export interface WorkspaceSettings {
   /** Диаметр ластика в экранных пикселях. */
   eraserSize: number;
   shapeKind: ShapeKind;
+  /** Заливка новых фигур; null — прозрачная (решение 0022). */
+  shapeFill: string | null;
   /** Вид пера: ручка или выделитель (маркер убран — решение 0016; старые штрихи маркером остаются). */
   penKind: StrokeTool;
   /** Свои цвет и толщина у каждого вида пера (color и size выше — у того, что выбран сейчас). */
@@ -75,6 +77,7 @@ export const defaultSettings: WorkspaceSettings = {
   size: 3,
   eraserSize: 28,
   shapeKind: 'rect',
+  shapeFill: null,
   penKind: 'pen',
   penStyles: {},
   recentColors: [],
@@ -107,7 +110,9 @@ export function loadSettings(kv: KeyValue | null = storage()): WorkspaceSettings
     if (!raw) return { ...defaultSettings };
     const parsed = JSON.parse(raw) as Partial<WorkspaceSettings>;
     const s = { ...defaultSettings, ...parsed };
-    if (!['rect', 'ellipse', 'line', 'arrow'].includes(s.shapeKind)) s.shapeKind = 'rect';
+    const kind: unknown = s.shapeKind;
+    if (!(isShapeType(kind) || kind === 'line' || kind === 'arrow')) s.shapeKind = 'rect';
+    if (s.shapeFill !== null && !/^#[0-9a-f]{3,8}$/i.test(String(s.shapeFill))) s.shapeFill = null;
     // Маркера в интерфейсе больше нет: выбранный когда-то маркер становится ручкой.
     if (!['pen', 'highlighter'].includes(s.penKind)) s.penKind = 'pen';
     if (!['select', 'pen', 'eraser', 'hand', 'sticky', 'text', 'shape', 'frame'].includes(s.tool)) {

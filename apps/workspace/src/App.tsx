@@ -43,13 +43,14 @@ import {
   type TemplateId,
   addProject,
   markBoardDeleted,
+  markBoardPurged,
   removeProject,
   renameProject,
   restorableBoards,
   restoreDeletedBoard,
   setBoardProject,
 } from '@kayospace/board';
-import { boardIdFromName } from '@kayospace/sync';
+import { boardIdFromName, hubHttpUrl } from '@kayospace/sync';
 import type { ExportTarget } from '@kayospace/canvas';
 import { SelectionMenu } from './SelectionMenu';
 import { AiController, type AiAction, type AiState } from './ai';
@@ -275,6 +276,7 @@ export function App() {
       size: s.size,
       eraserSize: s.eraserSize,
       shapeKind: s.shapeKind,
+      fill: s.shapeFill,
       penKind: s.penKind,
       penStyles: s.penStyles,
       stickyColor: s.stickyColor,
@@ -338,6 +340,7 @@ export function App() {
       s.size !== engineState.size ||
       s.eraserSize !== engineState.eraserSize ||
       s.shapeKind !== engineState.shapeKind ||
+      s.shapeFill !== engineState.fill ||
       s.penKind !== engineState.penKind ||
       s.stickyColor !== engineState.stickyColor
     ) {
@@ -347,6 +350,7 @@ export function App() {
         size: engineState.size,
         eraserSize: engineState.eraserSize,
         shapeKind: engineState.shapeKind,
+        shapeFill: engineState.fill,
         penKind: engineState.penKind,
         stickyColor: engineState.stickyColor,
         penStyles: engine?.getPenStyles() ?? s.penStyles,
@@ -491,6 +495,44 @@ export function App() {
       }
     },
     [engine, board, boardName, showToast],
+  );
+
+  /**
+   * Экспорт из списка (решение 0022): открытая доска — с устройства (работает и без сети),
+   * остальное, а также документы и таблицы — картинкой или PDF с хаба.
+   */
+  const exportItem = useCallback(
+    async (id: string, name: string | null, format: 'png' | 'pdf') => {
+      if (id === board && engine && !isDocId(id))
+        return exportTo(format === 'png' ? 'board' : 'pdf');
+      const base = hubForPanels ? hubHttpUrl(hubForPanels.url) : null;
+      if (!base || !hubForPanels) {
+        showToast('Экспорт неоткрытого — через хаб: подключите синхронизацию');
+        return;
+      }
+      showToast('Готовлю файл…', 0);
+      try {
+        const path =
+          format === 'png'
+            ? `/api/render/${encodeURIComponent(id)}.png?max=2048`
+            : `/api/export/${encodeURIComponent(id)}.pdf`;
+        const r = await fetch(`${base}${path}`, {
+          headers: hubForPanels.token ? { Authorization: `Bearer ${hubForPanels.token}` } : {},
+        });
+        if (r.status === 404) throw new Error('пусто или нет на хабе');
+        if (!r.ok) throw new Error(`хаб ответил ${r.status}`);
+        const title = name ?? id;
+        const saved = await saveFile(
+          await r.blob(),
+          fileName(title, format),
+          format === 'png' ? 'image/png' : 'application/pdf',
+        );
+        showToast(saved ? 'Файл сохранён' : null, 2500);
+      } catch (e) {
+        showToast(e instanceof Error ? `Не сохранилось: ${e.message}` : 'Не сохранилось');
+      }
+    },
+    [board, engine, exportTo, hubForPanels, showToast],
   );
 
   /** Почему ИИ недоступен (null — доступен). */
@@ -718,7 +760,7 @@ export function App() {
   }, [openBoard]);
   const boardLoaded = sessionState?.loaded ?? false;
   // Карточки документов на доске: название и начало текста — с хаба (решение 0021).
-  useDocCards(engine, hubForPanels, boardLoaded);
+  const refreshDocCards = useDocCards(engine, hubForPanels, boardLoaded);
   const overlayId = overlay?.id ?? null;
   const onDocSummary = useCallback(
     (sum: DocSummary) => {
@@ -905,6 +947,7 @@ export function App() {
               onExisting={(id, name) => {
                 close();
                 engine.insertDocCard(id, name ? { title: name } : {});
+                refreshDocCards(300);
               }}
             />
           )}
@@ -944,7 +987,11 @@ export function App() {
           boards={settings.recentBoards}
           {...(overlay.name ? { initialName: overlay.name } : {})}
           onSummary={onDocSummary}
-          onClose={() => setOverlay(null)}
+          onClose={() => {
+            setOverlay(null);
+            // Миниатюру делает хаб — когда правки дойдут до него.
+            refreshDocCards(1500);
+          }}
           onOpenBoard={(id, frame, title) => findElement(id, frame ?? '', title)}
         />
       )}
@@ -970,7 +1017,6 @@ export function App() {
             engine?.goToFrame(id);
             setPanel(null);
           }}
-          onExport={(t) => void exportTo(t)}
           projects={workspace.projects}
           membership={workspace.membership}
           project={
@@ -991,8 +1037,9 @@ export function App() {
           }}
           onMoveBoard={(project) => wsDoc && setBoardProject(wsDoc, board, project)}
           deleted={deleted}
-          trashCount={restorable.length}
-          onDeleteBoard={() => wsDoc && markBoardDeleted(wsDoc, board, boardName)}
+          trashBoards={restorable.length}
+          onExportItem={(id, name, format) => void exportItem(id, name, format)}
+          onDeleteItem={(id, name) => wsDoc && markBoardDeleted(wsDoc, id, name)}
           onTrash={() => setPanel('trash')}
           onHistory={() => setPanel('history')}
           onPresent={() => {
@@ -1054,15 +1101,17 @@ export function App() {
             if (wsDoc && restoreDeletedBoard(wsDoc, id)) openBoard(id, name, false);
           }}
           onOpenBoard={(id, name) => openBoard(id, name, false)}
+          onClearBoards={() => {
+            if (!wsDoc) return;
+            for (const d of restorable) markBoardPurged(wsDoc, d.id);
+          }}
           onClose={() => setPanel(null)}
         />
       )}
       {panel === 'settings' && (
         <SettingsPanel
           settings={settings}
-          state={sessionState}
           connection={conn}
-          onApply={(patch) => update(patch)}
           onConnect={() => {
             setPanel(null);
             setConnectUi({ reason: 'manual' });

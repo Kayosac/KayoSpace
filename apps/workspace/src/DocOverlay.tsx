@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getBoardName } from '@kayospace/board';
 import type { CanvasEngine } from '@kayospace/canvas';
 import { docExcerpt, docKind, hasTable, initTable, isDocId } from '@kayospace/page';
@@ -188,35 +188,46 @@ export function DocMenu({
 }
 
 /**
- * Карточки документов на доске (решение 0021): название и начало текста — с хаба, при открытии доски
- * и раз в минуту. Правка не своя — «Отменить» её не трогает.
+ * Карточки документов на доске (решения 0021, 0022): название, начало текста и миниатюра — с хаба,
+ * при открытии доски, раз в минуту и по просьбе (после правки документа). Правка не своя —
+ * «Отменить» её не трогает. Возвращает «обновить сейчас».
  */
-export function useDocCards(engine: CanvasEngine | null, hub: Hub | null, loaded: boolean): void {
+export function useDocCards(
+  engine: CanvasEngine | null,
+  hub: Hub | null,
+  loaded: boolean,
+): (delayMs?: number) => void {
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
-    if (!engine || !hub || !loaded) return;
+    if (!engine || !hub || !loaded) {
+      refreshRef.current = async () => {};
+      return;
+    }
     const base = hubHttpUrl(hub.url);
     if (!base) return;
     let stopped = false;
     const refresh = async (): Promise<void> => {
       const ids = [...new Set(engine.docCards().map((c) => c.doc))];
-      if (!ids.length) return;
+      if (!ids.length || stopped) return;
       try {
         const r = await fetch(`${base}/api/docs?ids=${encodeURIComponent(ids.join(','))}`, {
           headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
         });
         if (!r.ok || stopped) return;
         const { docs } = (await r.json()) as {
-          docs: { id: string; title: string | null; excerpt: string }[];
+          docs: { id: string; title: string | null; excerpt: string; thumb?: string | null }[];
         };
         for (const d of docs)
           engine.refreshDocCards(d.id, {
             ...(d.title ? { title: d.title } : {}),
             ...(d.excerpt ? { excerpt: d.excerpt } : {}),
+            ...(d.thumb ? { thumb: d.thumb } : {}),
           });
       } catch {
         // Хаб недоступен — карточки покажут то, что уже записано.
       }
     };
+    refreshRef.current = refresh;
     const first = setTimeout(() => void refresh(), 1500);
     const t = setInterval(() => void refresh(), 60_000);
     return () => {
@@ -225,4 +236,7 @@ export function useDocCards(engine: CanvasEngine | null, hub: Hub | null, loaded
       clearInterval(t);
     };
   }, [engine, hub, loaded]);
+  return useCallback((delayMs = 0) => {
+    setTimeout(() => void refreshRef.current(), delayMs);
+  }, []);
 }

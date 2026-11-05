@@ -8,6 +8,7 @@ import {
   type FrameElement,
   type ImageElement,
   type DocElement,
+  type ShapeType,
   type ShapeElement,
   type StickyElement,
   type StrokeElement,
@@ -109,18 +110,22 @@ export function makeText(
   };
 }
 
-/** Прямоугольник или эллипс по рамке (мировые координаты); size — толщина линии. */
+/** Фигура по рамке (мировые координаты); size — толщина линии, fill — заливка (нет — прозрачная). */
 export function makeShape(
-  shape: 'rect' | 'ellipse',
+  shape: ShapeType,
   box: { x: number; y: number; w: number; h: number },
-  opts: { color?: string; size: number; actor: Actor; now?: number },
+  opts: { color?: string; fill?: string; size: number; actor: Actor; now?: number },
 ): ShapeElement {
   const now = opts.now ?? Date.now();
   return {
     ...base(opts.actor, now),
     type: 'shape',
     ...box,
-    style: { size: opts.size, ...(opts.color ? { color: opts.color } : {}) },
+    style: {
+      size: opts.size,
+      ...(opts.color ? { color: opts.color } : {}),
+      ...(opts.fill ? { fill: opts.fill } : {}),
+    },
     props: { shape },
   };
 }
