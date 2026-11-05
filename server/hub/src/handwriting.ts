@@ -123,6 +123,9 @@ export class Handwriting {
     },
     private readonly reader: {
       readHandwriting(images: readonly Buffer[]): Promise<string[]>;
+      left?(kind: 'handwriting'): Promise<number>;
+      /** Выключатель из приложения: проверяется перед каждым проходом. */
+      readonly handwritingEnabled?: boolean;
     } | null,
     private readonly opts: { quietMs?: number; now?: () => number } = {},
   ) {
@@ -177,7 +180,8 @@ export class Handwriting {
   }
 
   private async doIndex(board: string): Promise<number> {
-    if (!this.reader || (await this.store.isDeleted(board))) return 0;
+    if (!this.reader || this.reader.handwritingEnabled === false) return 0;
+    if (await this.store.isDeleted(board)) return 0;
     const doc = await this.store.get(board);
     const els = listElements(doc);
     const groups = strokeGroups(els);
@@ -190,7 +194,11 @@ export class Handwriting {
         changed = true;
       }
     }
-    const fresh = groups.filter((g) => !known.has(g.key)).slice(0, BATCH * MAX_BATCHES);
+    // Не больше, чем осталось в дневном потолке: остальное распознаем завтра.
+    const left = this.reader.left ? await this.reader.left('handwriting') : Infinity;
+    const fresh = groups
+      .filter((g) => !known.has(g.key))
+      .slice(0, Math.min(BATCH * MAX_BATCHES, left));
     let done = 0;
     for (let i = 0; i < fresh.length; i += BATCH) {
       const batch = fresh.slice(i, i + BATCH);

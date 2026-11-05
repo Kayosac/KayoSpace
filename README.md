@@ -100,6 +100,8 @@ pnpm app:build                  # .app и .dmg в apps/app/src-tauri/target/rele
 - ✦ ИИ (Ctrl/⌘ J): «вставь картинку … сюда» — ИИ найдёт её в интернете; «нарисуй …» — нарисует
   (OpenAI, если на хабе есть ключ, иначе схемой SVG); микрофон — сказать просьбу голосом (с ключом OpenAI).
 - История доски («Доски» → «История»): версии картинками, «Вернуть» и «Копией».
+- Задачи: выделите стикер → «Задача» — статус, срок, важность прямо на стикере; панель «Задачи» — со всех досок.
+- Чат с ИИ (кнопка на панели): разговор на доске, помощник помнит прошлые реплики, правки — предпросмотром.
 - Рукописное распознаётся (с ключом OpenAI на хабе): находится поиском, агенты его читают.
 - Мини-карта в правом верхнем углу; поворот холста двумя пальцами.
 - Доска на 20 000 объектов листается и масштабируется на 60 кадрах (замер — `pnpm e2e:bench`).
@@ -125,7 +127,7 @@ claude mcp add --transport http kayospace http://localhost:4000/mcp
 `search`, `fetch`, `add_elements` (пачкой с раскладкой сеткой, рядом, столбцом, во фрейм), `arrange_elements`,
 `move_elements`, `add_sticky`, `add_text`, `add_shape`, `add_arrow`, `add_frame`, `update_element`,
 `delete_elements`; картинки — `add_images` (по ссылке, файлом или SVG), `add_image_file` (из чата ChatGPT), `generate_image`
-(OpenAI), `get_image`; история — `list_versions`, `restore_version`; корзина — `list_trash`,
+(OpenAI), `get_image`; история — `list_versions`, `restore_version`; задачи — `list_tasks`, `update_task`; корзина — `list_trash`,
 `restore_elements`; что нового — `get_changes`; проекты и доски — `list_projects`, `create_project`,
 `create_board`, `move_board`, `delete_board`, `list_deleted_boards`, `restore_board`.
 Что агент изменил, видно на устройстве — и отменяется одним нажатием (решение 0015); удалённое 7 дней лежит

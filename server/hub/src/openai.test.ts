@@ -9,7 +9,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { addElements, listElements, makeStroke } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
 import { strokeGroups } from './handwriting';
-import { openAiFromEnv } from './openai';
+import { OpenAi, openAiFromEnv } from './openai';
 import { startHub, type Hub } from './hub';
 
 const png = new Resvg(
@@ -98,9 +98,35 @@ describe('OpenAI: картинки и голос', () => {
     await rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
 
-  it('без ключа OpenAI выключен', () => {
+  it('без ключа OpenAI выключен; лимиты и выключатель рукописного — из окружения', () => {
     expect(openAiFromEnv({})).toBeNull();
     expect(openAiFromEnv({ OPENAI_API_KEY: '  ' })).toBeNull();
+    const cfg = openAiFromEnv({
+      OPENAI_API_KEY: 'k',
+      OPENAI_LIMIT_IMAGES: '5',
+      OPENAI_HANDWRITING: 'off',
+    })!;
+    expect(cfg.limits).toEqual({ images: 5 });
+    expect(cfg.handwriting).toBe(false);
+  });
+
+  it('дневной потолок: сверх лимита запрос в OpenAI не уходит; новый день — заново', async () => {
+    let now = Date.parse('2026-11-05T10:00:00Z');
+    const ai = new OpenAi(
+      {
+        apiKey: 'sk-test',
+        baseUrl: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
+        limits: { images: 2 },
+      },
+      () => now,
+    );
+    await ai.generateImage('a');
+    await ai.generateImage('b');
+    await expect(ai.generateImage('c')).rejects.toThrow('Дневной лимит картинок');
+    expect(calls.filter((c) => c.path === '/v1/images/generations')).toHaveLength(2);
+    now += 24 * 3_600_000;
+    await ai.generateImage('d');
+    expect((await ai.usageToday()).images).toEqual({ used: 1, limit: 2 });
   });
 
   it('generate_image: картинка от OpenAI ложится на доску; отказ — понятной ошибкой', async () => {
@@ -140,10 +166,11 @@ describe('OpenAI: картинки и голос', () => {
 
   it('голос: запись → текст; возможности хаба видны приложению', async () => {
     const base = `http://127.0.0.1:${hub.port}`;
-    expect(await (await fetch(`${base}/api/features`)).json()).toEqual({
+    expect(await (await fetch(`${base}/api/features`)).json()).toMatchObject({
       imageGen: true,
       voice: true,
       handwriting: true,
+      usage: { images: { used: 0, limit: 30 }, voice: { used: 0, limit: 100 } },
     });
     const res = await fetch(`${base}/api/voice`, {
       method: 'POST',
@@ -201,6 +228,34 @@ describe('OpenAI: картинки и голос', () => {
     expect(read.content[0]!.text).toContain('## Рукописное (распознано)');
     expect(read.content[0]!.text).toContain('Купить молоко');
     await client.close();
+  });
+});
+
+describe('лимиты OpenAI из приложения', () => {
+  it('GET/PUT /api/openai: лимиты и рукописное меняются и переживают перезапуск', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kayospace-openai-cfg-'));
+    const cfg = { apiKey: 'sk-test', baseUrl: 'http://127.0.0.1:9' };
+    let hub = await startHub({ dataDir: dir, port: 0, host: '127.0.0.1', openai: cfg });
+    const base = () => `http://127.0.0.1:${hub.port}/api/openai`;
+    const get = async () => (await (await fetch(base())).json()) as Record<string, unknown>;
+    expect(await get()).toMatchObject({
+      limits: { images: 30, voice: 100, handwriting: 500 },
+      handwriting: true,
+      usage: { images: { used: 0, limit: 30 } },
+    });
+    const put = (body: unknown) => fetch(base(), { method: 'PUT', body: JSON.stringify(body) });
+    expect((await put({ limits: { images: 5 }, handwriting: false })).status).toBe(200);
+    expect((await put({ limits: { images: -1 } })).status).toBe(400);
+    expect((await put({ limits: { images: 99999 } })).status).toBe(400);
+    await hub.close();
+    hub = await startHub({ dataDir: dir, port: 0, host: '127.0.0.1', openai: cfg });
+    expect(await get()).toMatchObject({ limits: { images: 5, voice: 100 }, handwriting: false });
+    const features = (await (await fetch(`http://127.0.0.1:${hub.port}/api/features`)).json()) as {
+      handwriting: boolean;
+    };
+    expect(features.handwriting).toBe(false);
+    await hub.close();
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
 });
 

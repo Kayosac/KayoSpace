@@ -5,10 +5,10 @@ import {
   type EngineState,
   type ExportTarget,
 } from '@kayospace/canvas';
-import type { AlignMode } from '@kayospace/board';
+import { TASK_STATUSES, TASK_STATUS_NAMES, type AlignMode } from '@kayospace/board';
 import { AI_MENU, type AiAction } from './ai';
 import { CommitInput } from './CommitInput';
-import { CopyIcon, DuplicateIcon, MoreIcon, SparkleIcon, TrashIcon } from './icons';
+import { CopyIcon, DuplicateIcon, MoreIcon, SparkleIcon, TaskIcon, TrashIcon } from './icons';
 
 const ALIGN: { mode: AlignMode; name: string; min: number }[] = [
   { mode: 'left', name: 'По левому краю', min: 2 },
@@ -64,16 +64,21 @@ export function SelectionMenu({
   useEffect(() => engine.onCamera(bump), [engine]);
   const [aiOpen, setAiOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   // Выделение сняли — списки действий закрываются.
   const none = state.selected === 0;
   useEffect(() => {
     if (none) {
       setAiOpen(false);
       setMoreOpen(false);
+      setTaskOpen(false);
     }
   }, [none]);
   const frame = state.selectedFrame;
   const frameName = frame ? frameNameOf(engine, frame) : '';
+  // Задачи (решение 0019): только для стикеров.
+  const stickies = !none && engine.selectionIsStickies();
+  const task = stickies ? engine.getSelectedTask() : null;
 
   if (
     state.selected === 0 ||
@@ -131,12 +136,31 @@ export function SelectionMenu({
         aria-expanded={aiOpen}
         onClick={() => {
           setMoreOpen(false);
+          setTaskOpen(false);
           setAiOpen((o) => !o);
         }}
       >
         <SparkleIcon />
         <span>ИИ</span>
       </button>
+      {stickies && (
+        <button
+          className={task ? 'task on' : 'task'}
+          title="Задача: статус, срок, важность"
+          aria-expanded={taskOpen}
+          data-testid="task-button"
+          onClick={() => {
+            setAiOpen(false);
+            setMoreOpen(false);
+            // Стикер ещё не задача — сразу делаем задачей и показываем её поля.
+            if (!task) engine.setTask({ status: 'todo' });
+            setTaskOpen((o) => !o || !task);
+          }}
+        >
+          <TaskIcon />
+          <span>Задача</span>
+        </button>
+      )}
       <button title="Дублировать (Ctrl/⌘ D)" onClick={() => engine.duplicateSelection()}>
         <DuplicateIcon />
         <span>Дублировать</span>
@@ -156,6 +180,7 @@ export function SelectionMenu({
         data-testid="selection-more"
         onClick={() => {
           setAiOpen(false);
+          setTaskOpen(false);
           setMoreOpen((o) => !o);
         }}
       >
@@ -205,6 +230,53 @@ export function SelectionMenu({
             }}
           >
             {frame ? 'Сохранить фрейм как PNG' : 'Сохранить выделенное как PNG'}
+          </button>
+        </div>
+      )}
+      {taskOpen && task && (
+        <div className="ai-actions task-actions" aria-label="Задача" data-testid="task-panel">
+          <div className="task-statuses" role="radiogroup" aria-label="Статус">
+            {TASK_STATUSES.map((st) => (
+              <button
+                key={st}
+                role="radio"
+                aria-checked={task.status === st}
+                onClick={() => engine.setTask({ status: st })}
+              >
+                {TASK_STATUS_NAMES[st]}
+              </button>
+            ))}
+          </div>
+          <label className="task-due">
+            <span>Срок</span>
+            <input
+              type="date"
+              value={task.due ?? ''}
+              onChange={(e) => engine.setTask({ due: e.currentTarget.value || undefined })}
+              data-testid="task-due"
+            />
+            {task.due && (
+              <button onClick={() => engine.setTask({ due: undefined })} aria-label="Убрать срок">
+                Без срока
+              </button>
+            )}
+          </label>
+          <button
+            role="checkbox"
+            aria-checked={!!task.high}
+            className="task-high"
+            onClick={() => engine.setTask({ high: !task.high })}
+          >
+            {task.high ? '! Важная' : 'Отметить важной'}
+          </button>
+          <hr />
+          <button
+            onClick={() => {
+              setTaskOpen(false);
+              engine.setTask(null);
+            }}
+          >
+            Не задача — обычный стикер
           </button>
         </div>
       )}

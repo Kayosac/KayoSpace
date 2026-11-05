@@ -9,3 +9,4 @@ export * from './order';
 export * from './workspace';
 export * from './layout';
 export * from './templates';
+export * from './tasks';

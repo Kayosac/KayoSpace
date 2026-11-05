@@ -33,6 +33,7 @@ import {
   alignDeltas,
   makeFrame,
   reorder,
+  setTask,
   rotateAbout,
   type AlignMode,
   scaleAbout,
@@ -87,6 +88,7 @@ import { HIGHLIGHTER_COLOR, PEN_KINDS, Scene, STROKE_STREAMLINE } from './scene'
 import { isFrame, layoutPages, nextFrameName, PDF_PAGE_MARGIN } from './frames';
 import { buildPdf, type PdfPage } from './pdf';
 import type { Bounds } from '@kayospace/ink';
+import type { TaskInfo } from '@kayospace/model';
 
 export type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'sticky' | 'text' | 'shape' | 'frame';
 export type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow';
@@ -906,6 +908,37 @@ export class CanvasEngine {
   }
 
   // ---------- Порядок слоёв и выравнивание ----------
+
+  /**
+   * Задача (решение 0019): выделенные стикеры — задачами с этими полями (null — снова стикеры).
+   * Одним шагом отмены. Возвращает, сколько стикеров поменялось.
+   */
+  setTask(patch: Partial<TaskInfo> | null, ids: Iterable<string> = this.selection): number {
+    this.undoManager.stopCapturing();
+    let n = 0;
+    this.doc.transact(() => {
+      for (const id of ids) if (setTask(this.doc, id, patch, this.opts.actor, LOCAL_ORIGIN)) n++;
+    }, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    this.emit();
+    return n;
+  }
+
+  /** Задача выделенного стикера (первого) — для меню выделения; null — не задача. */
+  getSelectedTask(): TaskInfo | null {
+    for (const id of this.selection) {
+      const el = getElement(this.doc, id);
+      if (el?.type === 'sticky' && el.props.task) return el.props.task;
+    }
+    return null;
+  }
+
+  /** Все выделенные — стикеры (им можно сделать задачу). */
+  selectionIsStickies(): boolean {
+    if (this.selection.size === 0) return false;
+    for (const id of this.selection) if (getElement(this.doc, id)?.type !== 'sticky') return false;
+    return true;
+  }
 
   /** Выделенное — поверх всего (front) или под всё (back). Фреймы остаются под элементами. */
   arrange(where: 'front' | 'back'): void {

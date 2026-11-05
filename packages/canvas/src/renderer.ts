@@ -141,6 +141,21 @@ export const LINE_HEIGHT = 1.3;
 export const STICKY_INK = '#1c1f26';
 export const NOTE_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
+/** Срок коротко: «сегодня», «12.11» (другой год — «12.11.27»). */
+export function shortDue(due: string, today: string): string {
+  if (due === today) return 'сегодня';
+  const [y, m, d] = due.split('-');
+  return `${d}.${m}${y === today.slice(0, 4) ? '' : `.${y!.slice(2)}`}`;
+}
+
+/** Полоса задачи внизу стикера (решение 0019): статус, срок, важность. 0 — не задача. */
+export function taskBand(el: CanvasElement): number {
+  return el.type === 'sticky' && el.props.task ? el.h * 0.17 : 0;
+}
+
+const TASK_RED = '#d93d42';
+const TASK_DONE = '#2f9e66';
+
 /** Перенос строк по ширине (по словам; длинное слово режется). */
 export function wrapText(
   ctx: { measureText(s: string): { width: number } },
@@ -1038,7 +1053,7 @@ export class Renderer {
   /** Строки и высота текста стикера или заметки при данной ширине (для подгонки рамки). */
   measureNote(el: CanvasElement, content: string): { lines: string[]; height: number } {
     if (el.type === 'sticky') {
-      const fit = this.fitSticky(content, el.w, el.h);
+      const fit = this.fitSticky(content, el.w, el.h - taskBand(el));
       return { lines: fit.lines, height: el.h };
     }
     const size = fontSizeOf(el);
@@ -1126,10 +1141,11 @@ export class Renderer {
     let size: number;
     let pad: number;
     let lines: string[];
+    const band = taskBand(el);
     if (sticky) {
-      const key = `${el.w}|${el.h}|${el.props.content}`;
+      const key = `${el.w}|${el.h}|${band}|${el.props.content}`;
       if (item.fit?.key !== key)
-        item.fit = { key, ...this.fitSticky(el.props.content, el.w, el.h) };
+        item.fit = { key, ...this.fitSticky(el.props.content, el.w, el.h - band) };
       ({ size, pad, lines } = item.fit);
     } else {
       size = fontSizeOf(el);
@@ -1137,15 +1153,87 @@ export class Renderer {
       item.lines ??= wrapText(scaled(this.measurer(400), size), el.props.content, el.w);
       lines = item.lines;
     }
+    if (el.type === 'sticky' && el.props.task && band * zoom >= 6) this.drawTaskBand(el, band);
     if (size * zoom < 3 || lines.length === 0) return; // текст неразличим — не тратим время
+    const done = el.type === 'sticky' && el.props.task?.status === 'done';
+    if (done) ctx.globalAlpha = 0.5;
     ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;
     // Середина строки — как в поле ввода (CSS делит межстрочный интервал поровну сверху и снизу).
     ctx.textBaseline = 'middle';
     ctx.fillStyle = sticky ? STICKY_INK : (item.color ?? this.colors.ink);
     const lh = size * LINE_HEIGHT;
     // Стикер: блок текста — по центру по вертикали.
-    const top = sticky ? el.y + (el.h - lines.length * lh) / 2 : el.y;
+    const top = sticky ? el.y + (el.h - band - lines.length * lh) / 2 : el.y;
     lines.forEach((line, i) => ctx.fillText(line, el.x + pad, top + (i + 0.5) * lh));
+    if (done) ctx.globalAlpha = 1;
+  }
+
+  /** Полоса задачи: значок статуса, срок (просроченный — красным), «!» у важной. */
+  private drawTaskBand(el: CanvasElement & { type: 'sticky' }, band: number): void {
+    const t = el.props.task!;
+    const ctx = this.ctx;
+    const pad = stickyPad(el.w);
+    const cy = el.y + el.h - band / 2 - pad * 0.25;
+    const r = band * 0.24;
+    const cx = el.x + pad + r;
+    ctx.lineWidth = r * 0.28;
+    ctx.strokeStyle = t.status === 'done' ? TASK_DONE : STICKY_INK;
+    ctx.globalAlpha = t.status === 'done' ? 1 : 0.7;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    if (t.status === 'done') {
+      ctx.fillStyle = TASK_DONE;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.5, cy);
+      ctx.lineTo(cx - r * 0.1, cy + r * 0.42);
+      ctx.lineTo(cx + r * 0.55, cy - r * 0.4);
+      ctx.stroke();
+    } else {
+      ctx.stroke();
+      if (t.status === 'doing') {
+        // Наполовину закрашенный кружок — «в работе».
+        ctx.fillStyle = STICKY_INK;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    const size = band * 0.42;
+    ctx.font = `500 ${size}px ${NOTE_FONT}`;
+    ctx.textBaseline = 'middle';
+    let x = cx + r * 2;
+    const status = t.status === 'done' ? 'Готово' : t.status === 'doing' ? 'В работе' : 'Сделать';
+    const today = this.today();
+    const overdue = t.status !== 'done' && !!t.due && t.due < today;
+    const label = t.due ? `${status} · ${shortDue(t.due, today)}` : status;
+    ctx.fillStyle = overdue ? TASK_RED : STICKY_INK;
+    ctx.globalAlpha = overdue ? 1 : 0.72;
+    ctx.fillText(label, x, cy);
+    x += ctx.measureText(label).width;
+    ctx.globalAlpha = 1;
+    if (t.high) {
+      ctx.fillStyle = TASK_RED;
+      ctx.font = `700 ${size * 1.1}px ${NOTE_FONT}`;
+      ctx.fillText('!', el.x + el.w - pad - size * 0.4, cy);
+    }
+  }
+
+  /** Сегодня (YYYY-MM-DD, местное время) — пересчитывается раз в минуту, а не на каждый стикер. */
+  private todayCache = { at: 0, day: '' };
+  private today(): string {
+    const now = Date.now();
+    if (now - this.todayCache.at > 60_000) {
+      const d = new Date(now);
+      const p = (n: number) => String(n).padStart(2, '0');
+      this.todayCache = {
+        at: now,
+        day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+      };
+    }
+    return this.todayCache.day;
   }
 
   /** Точки сетки в участке (x, y, w, h — пиксели устройства); квадратики по пиксельной сетке — чётче. */

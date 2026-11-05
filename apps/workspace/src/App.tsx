@@ -15,12 +15,14 @@ import {
 import { BoardsPanel } from './BoardsPanel';
 import { TrashPanel } from './TrashPanel';
 import { HistoryPanel } from './HistoryPanel';
+import { TasksPanel } from './TasksPanel';
+import { ChatPanel } from './ChatPanel';
 import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
 import { AssetStore, imageFiles } from './assets';
 import { isPdf, pdfFiles, pdfTitle, renderPdf, MAX_PDF_PAGES } from './pdf-import';
 import { NoteEditor } from './NoteEditor';
-import { lowLatencyInk, releaseFieldFocus } from './touch';
+import { finePointer, lowLatencyInk, releaseFieldFocus } from './touch';
 import { UpdateBanner, useUpdates } from './UpdateBanner';
 import { AgentBar } from './AgentBar';
 import { Toolbar } from './Toolbar';
@@ -102,7 +104,9 @@ export function App() {
   const [settings, setSettings] = useState<WorkspaceSettings>(loadSettings);
   const [session, setSession] = useState<BoardSession | null>(null);
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
-  const [panel, setPanel] = useState<'settings' | 'boards' | 'trash' | 'history' | null>(null);
+  const [panel, setPanel] = useState<
+    'settings' | 'boards' | 'trash' | 'history' | 'tasks' | 'chat' | null
+  >(null);
   // Презентация по фреймам (решение 0017).
   const [presenting, setPresenting] = useState(false);
   const [dropping, setDropping] = useState(false);
@@ -640,6 +644,19 @@ export function App() {
   // (или придёт с хаба, если на этом устройстве её ещё не было).
   const pendingFocus = useRef<{ board: string; id: string } | null>(null);
   const [focusTick, setFocusTick] = useState(0);
+
+  /** Перейти к элементу (найденному поиском или задаче) — на этой доске или другой. */
+  const findElement = useCallback(
+    (id: string, elementId: string, name: string | null, close = true) => {
+      if (close || id !== board) setPanel(null);
+      if (id === board && engine?.focusElement(elementId)) return;
+      pendingFocus.current = { board: id, id: elementId };
+      if (id !== board) openBoard(id, name, false);
+      else setFocusTick((t) => t + 1);
+    },
+    [board, engine, openBoard],
+  );
+
   useEffect(() => {
     const p = pendingFocus.current;
     if (!p || !engine || p.board !== board || !(sessionState?.loaded ?? false)) return;
@@ -830,6 +847,8 @@ export function App() {
           engine={engine}
           state={engineState}
           onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
+          onTasks={() => setPanel((p) => (p === 'tasks' ? null : 'tasks'))}
+          onChat={() => setPanel((p) => (p === 'chat' ? null : 'chat'))}
           onImages={(files) => void insertFiles(files)}
           onPaste={() => void pasteFromButton()}
           onAi={() => setAiPrompt((p) => !p)}
@@ -886,13 +905,32 @@ export function App() {
           background={engineState?.background ?? 'dots'}
           onBackground={(bg) => engine?.setBackground(bg)}
           searchLocal={searchLocal}
+          onFind={findElement}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === 'tasks' && (
+        <TasksPanel
+          hub={hubForPanels}
+          board={board}
+          boardName={boardName}
+          doc={session?.doc ?? null}
+          engine={engine}
           onFind={(id, elementId, name) => {
-            setPanel(null);
-            if (id === board && engine?.focusElement(elementId)) return;
-            pendingFocus.current = { board: id, id: elementId };
-            if (id !== board) openBoard(id, name, false);
-            else setFocusTick((t) => t + 1);
+            // На планшете панель закрывает доску — после перехода прячем её; на компьютере оставляем.
+            findElement(id, elementId, name, !finePointer());
           }}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === 'chat' && (
+        <ChatPanel
+          hub={hubForPanels}
+          board={board}
+          ai={aiState ?? { kind: 'idle' }}
+          blocked={aiBlocked}
+          voice={features.voice}
+          onSend={(text) => void runAi('chat', text)}
           onClose={() => setPanel(null)}
         />
       )}

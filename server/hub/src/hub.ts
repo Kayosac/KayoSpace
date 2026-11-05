@@ -32,11 +32,13 @@ import { BoardStore } from './store';
 import { reapDeletedBoards } from './deleted-boards';
 import { History, handleHistory } from './history';
 import { Handwriting } from './handwriting';
+import { handleTasks } from './tasks';
+import { ChatStore } from './chat';
 import { MAX_VOICE_BYTES, OpenAi, OpenAiError, type OpenAiConfig } from './openai';
 import { loadImages } from './render';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.9.0';
+export const HUB_VERSION = '0.10.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -93,11 +95,18 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   await oauth?.init();
   const devices = new DeviceRegistry(join(opts.dataDir, 'devices.json'));
   await devices.init();
-  const ai = new AiQueue(store);
+  const ai = new AiQueue(store, new ChatStore(opts.dataDir));
   const trash = new Trash(opts.dataDir, { agentOrigin: MCP_ORIGIN, saveDelayMs: opts.saveDelayMs });
   store.onLoad((id, doc) => trash.attach(id, doc));
   // История версий (решение 0018).
-  const openai = opts.openai ? new OpenAi(opts.openai) : null;
+  const openai = opts.openai
+    ? new OpenAi({
+        usageFile: join(opts.dataDir, 'openai-usage.json'),
+        settingsFile: join(opts.dataDir, 'openai-settings.json'),
+        ...opts.openai,
+      })
+    : null;
+  await openai?.init();
   const history = new History(store, {
     quietMs: opts.historyQuietMs,
     minGapMs: opts.historyGapMs,
@@ -222,8 +231,29 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return json(res, 200, {
         imageGen: Boolean(openai),
         voice: Boolean(openai),
-        handwriting: Boolean(openai),
+        handwriting: Boolean(openai?.handwritingEnabled),
+        ...(openai ? { usage: await openai.usageToday() } : {}),
       });
+    }
+    // Лимиты OpenAI и рукописное — из приложения (решение 0019), без правки сервера.
+    if (url.pathname === '/api/openai' && (req.method === 'GET' || req.method === 'PUT')) {
+      if (!openai) return json(res, 404, { error: 'На хабе нет ключа OpenAI' });
+      if (req.method === 'PUT') {
+        const body = await readBody(req, 4096);
+        let patch: Record<string, unknown>;
+        try {
+          patch = JSON.parse(body?.toString('utf8') ?? '{}') as Record<string, unknown>;
+        } catch {
+          return json(res, 400, { error: 'Нужен JSON' });
+        }
+        try {
+          await openai.update(patch as Parameters<OpenAi['update']>[0]);
+        } catch (err) {
+          if (err instanceof OpenAiError) return json(res, 400, { error: err.message });
+          throw err;
+        }
+      }
+      return json(res, 200, { ...openai.settings(), usage: await openai.usageToday() });
     }
     if (url.pathname === '/api/voice' && req.method === 'POST') {
       if (!openai) return json(res, 501, { error: 'Голос не настроен: на хабе нет ключа OpenAI' });
@@ -248,6 +278,13 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     if (await handleBackups(req, res, url, backups, access)) return;
     if (await handleSearch(req, res, url, store, handwriting.enabled ? handwriting : null)) return;
     if (await handleTrash(req, res, url, trash, store)) return;
+    if (
+      await handleTasks(req, res, url, store, {
+        kind: 'human',
+        name: access.device?.name ?? 'хаб',
+      })
+    )
+      return;
     if (await handleHistory(req, res, url, history, (els) => loadImages(els, assets))) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);

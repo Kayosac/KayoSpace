@@ -193,6 +193,7 @@ describe('подсказки для клиентов', () => {
       'list_boards',
       'list_deleted_boards',
       'list_projects',
+      'list_tasks',
       'list_trash',
       'list_versions',
       'read_board',

@@ -23,9 +23,10 @@ import {
   makeText,
   setBoardName,
   transformElement,
+  validDue,
   type Layout,
 } from '@kayospace/board';
-import type { Actor, CanvasElement, FrameElement } from '@kayospace/model';
+import type { Actor, CanvasElement, FrameElement, TaskInfo } from '@kayospace/model';
 
 /** Отступ содержимого от края фрейма. */
 const FRAME_PAD = 32;
@@ -108,6 +109,14 @@ export function registerLayoutTools(
                 .optional()
                 .describe('стикер — фон (#ffe58a), надпись — цвет текста'),
               width: z.number().positive().optional().describe('ширина надписи, по умолчанию 320'),
+              task: z
+                .object({
+                  status: z.enum(['todo', 'doing', 'done']).optional(),
+                  due: z.string().optional().describe('срок YYYY-MM-DD'),
+                  high: z.boolean().optional(),
+                })
+                .optional()
+                .describe('стикер — задачей (статус, срок, важность)'),
             }),
           )
           .min(1)
@@ -142,7 +151,13 @@ export function registerLayoutTools(
           });
           return { ...base, h: estimateNoteHeight(it.text, base.w, { sticky: false }) };
         }
-        return makeSticky(it.text, { x: 0, y: 0, color: it.color, actor: agent });
+        const sticky = makeSticky(it.text, { x: 0, y: 0, color: it.color, actor: agent });
+        if (!it.task) return sticky;
+        const task: TaskInfo = { status: it.task.status ?? 'todo' };
+        const due = validDue(it.task.due);
+        if (due) task.due = due;
+        if (it.task.high) task.high = true;
+        return { ...sticky, props: { ...sticky.props, task } };
       });
       const start = at
         ? at

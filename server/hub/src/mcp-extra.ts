@@ -22,6 +22,7 @@ import {
   restoreDeletedBoard,
   setBoardName,
   setBoardProject,
+  setTask,
   templateElements,
   type TemplateId,
 } from '@kayospace/board';
@@ -29,6 +30,7 @@ import type { Actor } from '@kayospace/model';
 import type { BoardInfo } from './store';
 import type { Trash } from './trash';
 import type { History } from './history';
+import { allTasks, taskPatch } from './tasks';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -57,6 +59,66 @@ export function registerExtraTools(
   agentOf: () => Actor = () => ({ kind: 'agent', name: 'mcp' }),
   history: History | null = null,
 ): void {
+  server.registerTool(
+    'list_tasks',
+    {
+      description:
+        'Задачи владельца (стикеры-задачи) на всех досках или одной: статус (todo — сделать, doing — ' +
+        'в работе, done — готово), срок, важность. Просроченные и важные — первыми.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        board: boardId.optional(),
+        status: z.enum(['todo', 'doing', 'done']).optional(),
+        overdue: z.boolean().optional().describe('только просроченные'),
+      }),
+    },
+    async ({ board, status, overdue }) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const all = (await allTasks(store, today))
+        .filter((b) => !board || b.board === board)
+        .map((b) => ({
+          ...b,
+          tasks: b.tasks.filter(
+            (t) =>
+              (!status || t.task.status === status) &&
+              (!overdue || (t.task.status !== 'done' && !!t.task.due && t.task.due < today)),
+          ),
+        }))
+        .filter((b) => b.tasks.length);
+      return all.length ? json(all) : text('Задач нет.');
+    },
+  );
+
+  server.registerTool(
+    'update_task',
+    {
+      description:
+        'Сделать стикер задачей или поменять задачу: status (todo/doing/done), due (срок YYYY-MM-DD, ' +
+        'пустая строка — без срока), high (важная). task: false — снова обычный стикер.',
+      inputSchema: z.object({
+        board: boardId,
+        id: z.string().describe('id стикера'),
+        status: z.enum(['todo', 'doing', 'done']).optional(),
+        due: z.string().optional(),
+        high: z.boolean().optional(),
+        task: z.boolean().optional(),
+      }),
+    },
+    async (args) => {
+      if (!(await store.has(args.board))) return fail(`Доски «${args.board}» нет.`);
+      const ok = setTask(
+        await store.get(args.board),
+        args.id,
+        args.task === false ? null : taskPatch(args as Record<string, unknown>),
+        agentOf(),
+        origin,
+      );
+      return ok
+        ? text('Готово.')
+        : fail(`Стикера ${args.id} на доске нет (задачей может быть только стикер).`);
+    },
+  );
+
   if (history) {
     server.registerTool(
       'list_versions',

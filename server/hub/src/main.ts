@@ -9,7 +9,7 @@
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { HUB_VERSION, startHub } from './hub';
-import { openAiFromEnv } from './openai';
+import { DEFAULT_LIMITS, openAiFromEnv } from './openai';
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? '0.0.0.0';
@@ -76,7 +76,10 @@ console.log(
 );
 console.log(
   openai
-    ? `  OpenAI:        картинки (${openai.imageModel ?? 'gpt-image-2'}) и голос — включены`
+    ? `  OpenAI:        картинки (${openai.imageModel ?? 'gpt-image-2'}) и голос — включены; ` +
+        `в сутки не больше: картинок ${openai.limits?.images ?? DEFAULT_LIMITS.images}, ` +
+        `голоса ${openai.limits?.voice ?? DEFAULT_LIMITS.voice}, ` +
+        `рукописного ${openai.handwriting === false ? 'выключено' : (openai.limits?.handwriting ?? DEFAULT_LIMITS.handwriting)}`
     : '  OpenAI:        выключен (нет OPENAI_API_KEY): «нарисуй» — силами Claude, голоса нет',
 );
 if (loopbackOnly) console.log('  доступен только с этого компьютера (127.0.0.1)');

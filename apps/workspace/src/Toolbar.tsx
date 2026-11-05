@@ -26,6 +26,8 @@ import {
   StickyIcon,
   TextIcon,
   UndoIcon,
+  ChatIcon,
+  TaskIcon,
 } from './icons';
 
 /** Цвета пера. null — цвет чернил темы (тёмный на светлой бумаге, светлый на тёмной). */
@@ -88,6 +90,8 @@ export function Toolbar({
   engine,
   state,
   onSettings,
+  onTasks,
+  onChat,
   onImages,
   onPaste,
   onAi,
@@ -98,6 +102,10 @@ export function Toolbar({
   engine: CanvasEngine;
   state: EngineState;
   onSettings: () => void;
+  /** Панель «Задачи» (решение 0019). */
+  onTasks: () => void;
+  /** Чат с ИИ (решение 0019). */
+  onChat: () => void;
   onImages: (files: File[]) => void;
   onPaste: () => void;
   onAi: () => void;
@@ -329,6 +337,12 @@ export function Toolbar({
           onClick={onAi}
         >
           <SparkleIcon />
+        </button>
+        <button className="tool" aria-label="Чат с ИИ" title="Чат с ИИ" onClick={onChat}>
+          <ChatIcon />
+        </button>
+        <button className="tool" aria-label="Задачи" title="Задачи со всех досок" onClick={onTasks}>
+          <TaskIcon />
         </button>
         <button className="tool" aria-label="Настройки" title="Настройки" onClick={onSettings}>
           <SettingsIcon />
