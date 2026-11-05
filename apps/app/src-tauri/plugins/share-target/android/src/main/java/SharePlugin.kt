@@ -69,7 +69,7 @@ class SharePlugin(private val activity: Activity) : Plugin(activity) {
         val files = JSArray()
         for (uri in streams(intent).take(MAX_FILES)) {
             val mime = activity.contentResolver.getType(uri) ?: intent.type ?: continue
-            if (!mime.startsWith("image/")) continue
+            if (!mime.startsWith("image/") && mime != "application/pdf") continue
             val bytes = activity.contentResolver.openInputStream(uri)?.use { input ->
                 val buf = input.readBytes()
                 if (buf.size > MAX_BYTES) null else buf

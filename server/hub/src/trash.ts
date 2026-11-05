@@ -6,13 +6,14 @@
  * Вернуть из корзины — значит снова положить элемент в доску: устройства получат его по синхронизации.
  */
 
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import {
   elementFromWire,
   elementToWire,
   elementsMap,
+  getBoardName,
   isServiceDoc,
   type WireElement,
 } from '@kayospace/board';
@@ -141,6 +142,18 @@ export class Trash {
     return [...items.values()].sort((a, b) => b.deletedAt - a.deletedAt);
   }
 
+  /** Доски, у которых есть корзина (на диске или в памяти). */
+  async boardIds(): Promise<string[]> {
+    const ids = new Set(this.boards.keys());
+    try {
+      for (const f of await readdir(this.dir))
+        if (f.endsWith('.json')) ids.add(f.slice(0, -'.json'.length));
+    } catch {
+      /* папки ещё нет */
+    }
+    return [...ids].sort();
+  }
+
   async groups(board: string): Promise<TrashGroup[]> {
     return groupTrash(await this.list(board));
   }
@@ -265,17 +278,38 @@ export class Trash {
 
 /**
  * REST корзины:
+ *   GET  /api/trash                  — корзины всех досок: [{ board, name, groups }], свежие первыми
  *   GET  /api/trash/<доска>          — пачки удалённого за 7 дней, свежие первыми
  *   POST /api/trash/<доска>/restore  — { ids } → { restored }
  * false — не наш адрес.
  */
+const isValidId = (id: string): boolean => /^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/.test(id);
+
 export async function handleTrash(
   req: import('node:http').IncomingMessage,
   res: import('node:http').ServerResponse,
   url: URL,
   trash: Trash,
-  store: { has(id: string): Promise<boolean>; get(id: string): Promise<Y.Doc> },
+  store: {
+    has(id: string): Promise<boolean>;
+    get(id: string): Promise<Y.Doc>;
+    isDeleted?(id: string): Promise<boolean>;
+  },
 ): Promise<boolean> {
+  if (url.pathname === '/api/trash' && req.method === 'GET') {
+    const { json } = await import('./devices-api');
+    const out: { board: string; name: string | null; groups: TrashGroup[] }[] = [];
+    for (const board of await trash.boardIds()) {
+      if (!isValidId(board) || !(await store.has(board))) continue;
+      if (await store.isDeleted?.(board)) continue;
+      const groups = await trash.groups(board);
+      if (groups.length === 0) continue;
+      out.push({ board, name: getBoardName(await store.get(board)) ?? null, groups });
+    }
+    out.sort((a, b) => b.groups[0]!.at - a.groups[0]!.at);
+    json(res, 200, { boards: out, keepDays: TRASH_KEEP_MS / 86_400_000 });
+    return true;
+  }
   const m = /^\/api\/trash\/([A-Za-z0-9-][A-Za-z0-9_-]{0,63})(\/restore)?$/.exec(url.pathname);
   if (!m) return false;
   const board = m[1]!;

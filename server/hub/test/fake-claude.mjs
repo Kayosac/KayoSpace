@@ -15,16 +15,35 @@ await client.connect(
     requestInit: { headers: server.headers },
   }),
 );
-await client.callTool({
-  name: 'add_sticky',
-  arguments: { board, text: 'Черновик от ИИ', x: 500, y: 0 },
-});
+// «Вставь картинку …» — рисует картинку сам (SVG), как настоящий Claude по подсказке в задании.
+const wantsImage = /Просьба пользователя:.*картинк/i.test(prompt);
+if (wantsImage) {
+  const r = await client.callTool({
+    name: 'add_images',
+    arguments: {
+      board,
+      at: { x: 500, y: 0 },
+      images: [
+        {
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#87ceeb"/><circle cx="300" cy="80" r="50" fill="#ffd400"/></svg>',
+          alt: 'Солнце над морем',
+        },
+      ],
+    },
+  });
+  if (r.isError) throw new Error(JSON.stringify(r.content));
+} else {
+  await client.callTool({
+    name: 'add_sticky',
+    arguments: { board, text: 'Черновик от ИИ', x: 500, y: 0 },
+  });
+}
 await client.close();
 console.log(
   JSON.stringify({
     type: 'result',
     subtype: 'success',
     is_error: false,
-    result: 'Добавил стикер.',
+    result: wantsImage ? 'Нарисовал картинку.' : 'Добавил стикер.',
   }),
 );

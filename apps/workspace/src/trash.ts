@@ -9,6 +9,20 @@ export interface TrashGroup {
   preview: string;
 }
 
+export interface BoardTrash {
+  board: string;
+  name: string | null;
+  groups: TrashGroup[];
+}
+
+/** Корзины всех досок (кроме удалённых), свежие первыми. */
+export async function listAllTrash(hub: Hub): Promise<BoardTrash[]> {
+  const r = await hubCall<{ boards: BoardTrash[] }>(fetch, hub.url, '/api/trash', {
+    token: hub.token,
+  });
+  return r.boards ?? [];
+}
+
 export async function listTrash(hub: Hub, board: string): Promise<TrashGroup[]> {
   const r = await hubCall<{ groups: TrashGroup[] }>(
     fetch,

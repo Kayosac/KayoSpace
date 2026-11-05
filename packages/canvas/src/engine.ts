@@ -84,7 +84,7 @@ import {
   type Pt,
 } from './selection';
 import { HIGHLIGHTER_COLOR, PEN_KINDS, Scene, STROKE_STREAMLINE } from './scene';
-import { isFrame, nextFrameName } from './frames';
+import { isFrame, layoutPages, nextFrameName } from './frames';
 import { buildPdf, type PdfPage } from './pdf';
 import type { Bounds } from '@kayospace/ink';
 
@@ -307,10 +307,12 @@ export class CanvasEngine {
     this.renderer = new Renderer(host, { lowLatency: opts.lowLatency ?? true });
     this.scene = new Scene(doc);
     this.images = new ImageCache(opts.assets ?? null, (assetId) => {
-      // Картинка готова — перерисовать места, где она стоит.
-      for (const item of this.scene.items.values()) {
-        if (item.element.type === 'image' && item.element.props.assetId === assetId) {
-          this.renderer.invalidateWorld(this.camera, item.bounds);
+      // Картинка готова — перерисовать места, где она стоит (и в предпросмотре ИИ).
+      for (const scene of this.ai ? [this.scene, this.ai.scene] : [this.scene]) {
+        for (const item of scene.items.values()) {
+          if (item.element.type === 'image' && item.element.props.assetId === assetId) {
+            this.renderer.invalidateWorld(this.camera, item.bounds);
+          }
         }
       }
       this.schedule();
@@ -823,6 +825,52 @@ export class CanvasEngine {
   }
 
   /**
+   * Страницы PDF (решение 0017): каждая — картинка во фрейме «Название — стр. N», столбцом справа
+   * от содержимого доски. Одним шагом отмены; вид — на первую страницу. Возвращает id фреймов.
+   */
+  insertPages(
+    title: string,
+    pages: readonly { assetId: string; w: number; h: number; blob?: Blob }[],
+  ): string[] {
+    if (pages.length === 0) return [];
+    const content = this.scene.contentBounds();
+    const origin = content
+      ? { x: Math.round(content.maxX + 120), y: Math.round(content.minY) }
+      : { x: 0, y: 0 };
+    const boxes = layoutPages(pages, origin);
+    const els: CanvasElement[] = [];
+    const frames: string[] = [];
+    pages.forEach((p, i) => {
+      const box = boxes[i]!;
+      const name = pages.length > 1 ? `${title} — стр. ${i + 1}` : title;
+      const frame = makeFrame(name, box, { actor: this.opts.actor, titleSize: 18 });
+      frames.push(frame.id);
+      els.push(
+        frame,
+        makeImage(p.assetId, box, {
+          naturalW: p.w,
+          naturalH: p.h,
+          alt: name,
+          actor: this.opts.actor,
+        }),
+      );
+      if (p.blob) void this.images.put(p.assetId, p.blob);
+    });
+    this.undoManager.stopCapturing();
+    addElements(this.doc, els, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    this.clearSelection();
+    const first = boxes[0]!;
+    this.zoomToBounds({
+      minX: first.x,
+      minY: first.y,
+      maxX: first.x + first.w,
+      maxY: first.y + Math.min(first.h, first.w * 1.5),
+    });
+    return frames;
+  }
+
+  /**
    * Положить элемент под всё остальное содержимое доски, по левому краю, и показать его —
    * лента «Входящих»: каждое новое — ниже предыдущих. Один шаг отмены вместе со вставкой.
    */
@@ -965,6 +1013,14 @@ export class CanvasEngine {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  /**
+   * Показать область на весь экран — слайд презентации (решение 0017): без поворота, с узкими
+   * полями и крупнее обычного «показать всё».
+   */
+  presentBounds(b: { minX: number; minY: number; maxX: number; maxY: number }): void {
+    this.setCamera(fitBounds(b, this.renderer.width, this.renderer.height, 16, 0, 8));
   }
 
   /** Перейти к фрейму и выделить его. */

@@ -10,6 +10,7 @@ import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
 import { BlockList, isIP } from 'node:net';
+import { Resvg } from '@resvg/resvg-js';
 import { sniffType } from './assets';
 
 /** Самая большая картинка, которую агент может положить на доску. */
@@ -248,4 +249,47 @@ export function decodeImageData(data: string): Buffer | null {
   const raw = data.replace(/^data:[^,]*;base64,/i, '').replace(/\s+/g, '');
   if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(raw) || raw.length === 0) return null;
   return Buffer.from(raw, 'base64');
+}
+
+/** Самая длинная сторона картинки, нарисованной агентом в SVG. */
+export const MAX_SVG_SIDE = 1600;
+
+/**
+ * Картинка, которую агент нарисовал сам (SVG) → PNG. Внешних ссылок в SVG не бывает:
+ * href — только на свои элементы (#…) или data:, иначе resvg мог бы читать файлы сервера.
+ * Строка — понятная ошибка.
+ */
+export function renderSvgImage(svg: string): Buffer | string {
+  if (svg.length > 2 * 1024 * 1024) return 'SVG больше 2 МБ.';
+  if (!/<svg[\s>]/i.test(svg)) return 'это не SVG.';
+  for (const m of svg.matchAll(/(?:xlink:)?href\s*=\s*["']([^"']*)["']/gi)) {
+    const ref = m[1]!.trim();
+    if (!ref.startsWith('#') && !/^data:image\/(png|jpeg|gif);base64,/i.test(ref))
+      return 'в SVG нельзя ссылаться на внешние файлы — только на свои элементы и data:.';
+  }
+  if (/@import|url\(\s*["']?(?!#|data:)/i.test(svg))
+    return 'в SVG нельзя подключать внешние стили и шрифты.';
+  try {
+    const probe = new Resvg(svg, { font: { loadSystemFonts: false } });
+    const side = Math.max(probe.width, probe.height);
+    if (!side) return 'у SVG нет размера — задайте width и height или viewBox.';
+    const fit =
+      side > MAX_SVG_SIDE || side < 256
+        ? Math.round(Math.min(MAX_SVG_SIDE, Math.max(side, 512)))
+        : 0;
+    const r = new Resvg(svg, {
+      font: { loadSystemFonts: true, defaultFontFamily: 'DejaVu Sans' },
+      ...(fit
+        ? {
+            fitTo:
+              probe.width >= probe.height
+                ? { mode: 'width', value: fit }
+                : { mode: 'height', value: fit },
+          }
+        : {}),
+    } as ConstructorParameters<typeof Resvg>[1]);
+    return r.render().asPng();
+  } catch (err) {
+    return `SVG не читается: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }

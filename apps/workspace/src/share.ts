@@ -42,10 +42,13 @@ export function sharedText(p: SharedPayload): string | null {
   return text || subject || null;
 }
 
-/** Присланные картинки — как файлы для вставки. */
+/** Присланные картинки и PDF — как файлы для вставки. */
 export function sharedFiles(p: SharedPayload): File[] {
   return (p.files ?? [])
-    .filter((f) => f.mime.startsWith('image/') && f.mime !== 'image/svg+xml')
+    .filter(
+      (f) =>
+        (f.mime.startsWith('image/') && f.mime !== 'image/svg+xml') || f.mime === 'application/pdf',
+    )
     .map((f) => {
       const bin = atob(f.data);
       const bytes = new Uint8Array(bin.length);

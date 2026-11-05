@@ -246,3 +246,29 @@ export const ExportIcon = () => (
     <path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" />
   </Svg>
 );
+
+export const PlayIcon = () => (
+  <Svg>
+    <path d="M8 5.5v13l10.5-6.5z" />
+  </Svg>
+);
+
+export const ChevronLeftIcon = () => (
+  <Svg>
+    <path d="M15 5l-7 7 7 7" />
+  </Svg>
+);
+
+export const ChevronRightIcon = () => (
+  <Svg>
+    <path d="M9 5l7 7-7 7" />
+  </Svg>
+);
+
+export const PdfIcon = () => (
+  <Svg>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5" />
+    <path d="M9 13h6M9 17h4" />
+  </Svg>
+);

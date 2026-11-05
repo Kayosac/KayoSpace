@@ -13,7 +13,10 @@ import {
   type WorkspaceSettings,
 } from './settings';
 import { BoardsPanel } from './BoardsPanel';
+import { TrashPanel } from './TrashPanel';
+import { Presentation } from './Presentation';
 import { AssetStore, imageFiles } from './assets';
+import { isPdf, pdfFiles, pdfTitle, renderPdf, MAX_PDF_PAGES } from './pdf-import';
 import { NoteEditor } from './NoteEditor';
 import { lowLatencyInk, releaseFieldFocus } from './touch';
 import { UpdateBanner, useUpdates } from './UpdateBanner';
@@ -25,6 +28,10 @@ import { Minimap } from './Minimap';
 import { fileName, saveFile } from './save';
 import { useWorkspace } from './projects';
 import {
+  addElements,
+  listElements,
+  templateElements,
+  type TemplateId,
   addProject,
   markBoardDeleted,
   removeProject,
@@ -93,7 +100,9 @@ export function App() {
   const [settings, setSettings] = useState<WorkspaceSettings>(loadSettings);
   const [session, setSession] = useState<BoardSession | null>(null);
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
-  const [panel, setPanel] = useState<'settings' | 'boards' | null>(null);
+  const [panel, setPanel] = useState<'settings' | 'boards' | 'trash' | null>(null);
+  // Презентация по фреймам (решение 0017).
+  const [presenting, setPresenting] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,7 +116,9 @@ export function App() {
   const ai = useMemo(() => new AiController(), []);
   const [aiPrompt, setAiPrompt] = useState(false);
   /** Название новой доски — запишем в неё, когда она откроется. */
-  const pendingName = useRef<{ id: string; name: string } | null>(null);
+  const pendingName = useRef<{ id: string; name: string; template?: TemplateId } | null>(null);
+  // Новая доска из шаблона: показать разметку целиком, когда она ляжет.
+  const [fitBoard, setFitBoard] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -208,6 +219,11 @@ export function App() {
     const nameNewBoard = (): void => {
       if (pending?.id === board && s.getState().loaded) {
         if (!s.getState().name) s.rename(pending.name);
+        // Шаблон (решение 0017) — только в пустую доску; не своя правка: «Отменить» его не стирает.
+        if (pending.template && listElements(s.doc).length === 0) {
+          addElements(s.doc, templateElements(pending.template, actor), 'template');
+          setFitBoard(board);
+        }
         pendingName.current = null;
         stop();
       }
@@ -324,8 +340,8 @@ export function App() {
   }, [board, boardName, update]);
 
   const openBoard = useCallback(
-    (id: string, name: string | null, isNew: boolean) => {
-      if (isNew && name) pendingName.current = { id, name };
+    (id: string, name: string | null, isNew: boolean, template?: TemplateId) => {
+      if (isNew && name) pendingName.current = { id, name, template };
       // Новая доска — в выбранный в списке проект.
       const project = settingsRef.current.project;
       if (isNew && project && wsDoc) setBoardProject(wsDoc, id, project);
@@ -340,6 +356,11 @@ export function App() {
   // Удалённые доски (решение 0016): пропадают из недавних; открытую — закрываем и открываем другую.
   // Стёртые насовсем — стираем и локальную копию.
   const deleted = workspace.deleted;
+  const restorable = useMemo(() => (wsDoc ? restorableBoards(wsDoc) : []), [wsDoc, deleted]);
+  const hubForPanels = useMemo(
+    () => (hubUrl ? { url: hubUrl, token: hubToken } : null),
+    [hubUrl, hubToken],
+  );
   const forgotten = useRef(new Set<string>());
   useEffect(() => {
     if (deleted.size === 0) return;
@@ -366,17 +387,28 @@ export function App() {
     }
   }, [deleted, engine, update]);
 
+  useEffect(() => {
+    if (!engine || fitBoard !== board) return;
+    engine.zoomToFit();
+    setFitBoard(null);
+  }, [engine, fitBoard, board]);
+
   // Ctrl/⌘ K — список досок.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.code === 'KeyK') {
         e.preventDefault();
         setPanel((p) => (p === 'boards' ? null : 'boards'));
+      } else if (e.key === 'F5' && engine && engine.getFrames().length > 0) {
+        // F5 — презентация по фреймам (на сенсоре — кнопка «Показать» в списке досок).
+        e.preventDefault();
+        setPanel(null);
+        setPresenting(true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [engine]);
 
   // Картинки ходят на тот же хаб, что и доска; при «синхронизировано» — догрузить очередь.
   useEffect(() => {
@@ -521,6 +553,44 @@ export function App() {
     [engine],
   );
 
+  // PDF — страницами во фреймах (решение 0017).
+  const importPdf = useCallback(
+    async (file: File) => {
+      if (!engine) return;
+      try {
+        showToast('Открываю PDF…', 60_000);
+        const { pages, total } = await renderPdf(file, (done, count) =>
+          showToast(`PDF: страница ${done} из ${count}…`, 60_000),
+        );
+        const stored = [];
+        for (const p of pages) {
+          const img = await assets.add(p.blob);
+          stored.push({ assetId: img.assetId, w: p.width, h: p.height, blob: img.blob });
+        }
+        engine.insertPages(pdfTitle(file.name), stored);
+        showToast(
+          total > pages.length
+            ? `Добавлены первые ${MAX_PDF_PAGES} страниц из ${total}`
+            : `PDF на доске: ${pages.length} стр. Пишите поверх пером`,
+          5000,
+        );
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'PDF не удалось открыть', 6000);
+      }
+    },
+    [engine],
+  );
+
+  /** Файлы с кнопки, перетаскивания или буфера: картинки — картинками, PDF — страницами. */
+  const insertFiles = useCallback(
+    async (files: File[], at?: { x: number; y: number }) => {
+      const images = files.filter((f) => !isPdf(f));
+      if (images.length) await insertImages(images, at);
+      for (const f of files.filter(isPdf)) await importPdf(f);
+    },
+    [insertImages, importPdf],
+  );
+
   // Буфер обмена (Ctrl/⌘ C, X, V): элементы доски, текст и картинки из других программ.
   useEffect(() => {
     const typing = (t: EventTarget | null): boolean => {
@@ -539,9 +609,9 @@ export function App() {
     const onPaste = (e: ClipboardEvent): void => {
       if (!engine || typing(e.target)) return;
       e.preventDefault();
-      const files = imageFiles(e.clipboardData?.files);
+      const files = [...imageFiles(e.clipboardData?.files), ...pdfFiles(e.clipboardData?.files)];
       if (files.length > 0) {
-        void insertImages(files);
+        void insertFiles(files);
         return;
       }
       const text = e.clipboardData?.getData('text/plain') ?? '';
@@ -560,7 +630,7 @@ export function App() {
       window.removeEventListener('cut', cut);
       window.removeEventListener('paste', onPaste);
     };
-  }, [engine, insertImages]);
+  }, [engine, insertFiles]);
 
   // Переход к найденному на другой доске: элемент показываем, когда доска откроется
   // (или придёт с хаба, если на этом устройстве её ещё не было).
@@ -610,6 +680,10 @@ export function App() {
         if (id) engine.stackBelow(id);
       }
       for (const file of sharedFiles(p)) {
+        if (isPdf(file)) {
+          await importPdf(file);
+          continue;
+        }
         try {
           const img = await assets.add(file);
           const id = engine.insertImage(
@@ -625,7 +699,7 @@ export function App() {
       // Меню выделения закрыло бы только что присланное.
       engine.clearSelection();
     })();
-  }, [engine, session, board, boardLoaded, boardName, shareTick, showToast]);
+  }, [engine, session, board, boardLoaded, boardName, shareTick, showToast, importPdf]);
 
   /** Кнопка «Вставить» (планшет без клавиатуры): системный буфер, если доступен, иначе — свой. */
   const pasteFromButton = useCallback(async () => {
@@ -668,7 +742,7 @@ export function App() {
   }, [session]);
 
   return (
-    <div className="app">
+    <div className={presenting ? 'app presenting' : 'app'}>
       <div
         className="stage"
         ref={stageRef}
@@ -683,13 +757,13 @@ export function App() {
         onDrop={(e) => {
           e.preventDefault();
           setDropping(false);
-          const files = imageFiles(e.dataTransfer.files);
+          const files = [...imageFiles(e.dataTransfer.files), ...pdfFiles(e.dataTransfer.files)];
           const r = e.currentTarget.getBoundingClientRect();
           if (files.length)
-            void insertImages(files, { x: e.clientX - r.left, y: e.clientY - r.top });
+            void insertFiles(files, { x: e.clientX - r.left, y: e.clientY - r.top });
         }}
       />
-      {dropping && <div className="drop-hint">Отпустите — картинка встанет сюда</div>}
+      {dropping && <div className="drop-hint">Отпустите — картинка или PDF встанет сюда</div>}
       {toast && <div className="toast">{toast}</div>}
       <div className="top-center">
         <UpdateBanner updates={updates} />
@@ -751,7 +825,7 @@ export function App() {
           engine={engine}
           state={engineState}
           onSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
-          onImages={(files) => void insertImages(files)}
+          onImages={(files) => void insertFiles(files)}
           onPaste={() => void pasteFromButton()}
           onAi={() => setAiPrompt((p) => !p)}
           aiOn={aiPrompt || (aiState?.kind ?? 'idle') !== 'idle'}
@@ -796,10 +870,12 @@ export function App() {
           }}
           onMoveBoard={(project) => wsDoc && setBoardProject(wsDoc, board, project)}
           deleted={deleted}
-          restorable={wsDoc ? restorableBoards(wsDoc) : []}
+          trashCount={restorable.length}
           onDeleteBoard={() => wsDoc && markBoardDeleted(wsDoc, board, boardName)}
-          onRestoreBoard={(id, name) => {
-            if (wsDoc && restoreDeletedBoard(wsDoc, id)) openBoard(id, name, false);
+          onTrash={() => setPanel('trash')}
+          onPresent={() => {
+            setPanel(null);
+            setPresenting(true);
           }}
           background={engineState?.background ?? 'dots'}
           onBackground={(bg) => engine?.setBackground(bg)}
@@ -811,6 +887,18 @@ export function App() {
             if (id !== board) openBoard(id, name, false);
             else setFocusTick((t) => t + 1);
           }}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === 'trash' && (
+        <TrashPanel
+          hub={hubForPanels}
+          current={board}
+          deletedBoards={restorable}
+          onRestoreBoard={(id, name) => {
+            if (wsDoc && restoreDeletedBoard(wsDoc, id)) openBoard(id, name, false);
+          }}
+          onOpenBoard={(id, name) => openBoard(id, name, false)}
           onClose={() => setPanel(null)}
         />
       )}
@@ -842,6 +930,9 @@ export function App() {
           updates={updates}
           onClose={() => setPanel(null)}
         />
+      )}
+      {presenting && engine && (
+        <Presentation engine={engine} onClose={() => setPresenting(false)} />
       )}
       {connectUi && !conn.dev && (
         <ConnectScreen

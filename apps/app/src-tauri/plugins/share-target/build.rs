@@ -1,6 +1,6 @@
 const COMMANDS: &[&str] = &["take"];
 
-/// Kayospace в списке «Поделиться» Android: текст и ссылки, одна или несколько картинок.
+/// Kayospace в списке «Поделиться» Android: текст и ссылки, одна или несколько картинок, PDF.
 const INTENT_FILTERS: &str = r#"<intent-filter>
     <action android:name="android.intent.action.SEND" />
     <category android:name="android.intent.category.DEFAULT" />
@@ -10,6 +10,11 @@ const INTENT_FILTERS: &str = r#"<intent-filter>
     <action android:name="android.intent.action.SEND" />
     <category android:name="android.intent.category.DEFAULT" />
     <data android:mimeType="image/*" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.SEND" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <data android:mimeType="application/pdf" />
 </intent-filter>
 <intent-filter>
     <action android:name="android.intent.action.SEND_MULTIPLE" />

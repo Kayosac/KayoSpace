@@ -312,6 +312,53 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
     await loop.catch(() => {});
   });
 
+  it('«вставь картинку сюда» из приложения: ИИ рисует картинку в черновик, файл — на хабе', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    const board = 'ai-image';
+    await hub.store.get(board);
+    const fake = fileURLToPath(new URL('../test/fake-claude.mjs', import.meta.url));
+    await chmod(fake, 0o755);
+    const ctrl = new AbortController();
+    const loop = workLoop({
+      hubUrl: base,
+      token: '',
+      name: 'картинки',
+      claudeBin: fake,
+      signal: ctrl.signal,
+      log: () => {},
+    });
+    const created = await fetch(`${base}/api/ai/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        board,
+        action: 'prompt',
+        prompt: 'вставь картинку солнца над морем сюда',
+        area: { minX: 0, minY: 0, maxX: 400, maxY: 300 },
+      }),
+    });
+    const { id } = (await created.json()) as { id: string };
+    let task: {
+      status: string;
+      message: string | null;
+      draft?: { elements: { type: string; props: { assetId?: string; alt?: string } }[] };
+    } = { status: '', message: null };
+    for (let i = 0; i < 100 && task.status !== 'done' && task.status !== 'error'; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      task = (await (await fetch(`${base}/api/ai/tasks/${id}`)).json()) as typeof task;
+    }
+    expect(task.status, task.message ?? '').toBe('done');
+    const [img] = task.draft!.elements;
+    expect(img).toMatchObject({ type: 'image', props: { alt: 'Солнце над морем' } });
+    // Файл лежит в общем хранилище: устройство покажет предпросмотр и после «Вставить».
+    const file = await fetch(`${base}/api/assets/${img!.props.assetId}`);
+    expect(file.headers.get('content-type')).toBe('image/png');
+    // Доска не меняется до «Вставить».
+    expect(listElements(await hub.store.get(board))).toEqual([]);
+    ctrl.abort();
+    await loop.catch(() => {});
+  });
+
   it('задание для Claude называет доску, выделение и место для новых элементов', () => {
     const text = buildPrompt({
       board: 'b1',
@@ -332,6 +379,10 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
     expect(args.slice(0, 2)).toEqual(['-p', 'привет']);
     expect(args).toContain('--strict-mcp-config');
     expect(args).toContain('mcp__kayospace');
+    // Найти картинку в интернете можно, а команд и записи файлов нет.
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,WebSearch,WebFetch');
+    expect(args).toContain('WebSearch');
+    expect(args).not.toContain('Bash');
     expect(parseClaudeOutput('{"result":"ok","is_error":false,"subtype":"success"}')).toEqual({
       message: 'ok',
     });

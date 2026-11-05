@@ -30,6 +30,7 @@ describe('фильтры активности Android', () => {
     expect(activity).toContain('android.intent.action.SEND_MULTIPLE');
     expect(activity).toContain('android:mimeType="text/plain"');
     expect(activity).toContain('android:mimeType="image/*"');
+    expect(activity).toContain('android:mimeType="application/pdf"');
     expect(activity).toContain('android:scheme="kayospace"');
     expect(activity).toContain('android.intent.action.MAIN');
   });
@@ -38,7 +39,7 @@ describe('фильтры активности Android', () => {
     const once = patchManifest(TEMPLATE, { buildRs, conf });
     expect(patchManifest(once, { buildRs, conf })).toBe(once);
     expect(once.match(/SHARE TARGET PLUGIN/g)).toHaveLength(2);
-    expect(shareFilters(buildRs).match(/<intent-filter>/g)).toHaveLength(3);
+    expect(shareFilters(buildRs).match(/<intent-filter>/g)).toHaveLength(4);
   });
 
   it('без активности — понятная ошибка', () => {

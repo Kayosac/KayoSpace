@@ -32,7 +32,7 @@ import { BoardStore } from './store';
 import { reapDeletedBoards } from './deleted-boards';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.7.1';
+export const HUB_VERSION = '0.8.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -149,7 +149,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         if (!task || task.status !== 'running') return json(res, 404, { error: 'Задачи нет' });
         let handler = draftMcp.get(task.id);
         if (!handler) {
-          handler = toNodeHandler(createMcp(ai.draftSource(task), { actorName: 'kayospace-ai' }));
+          handler = toNodeHandler(
+            createMcp(ai.draftSource(task), { actorName: 'kayospace-ai', assets }),
+          );
           draftMcp.set(task.id, handler);
         }
         await handler(req, res);

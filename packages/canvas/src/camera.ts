@@ -104,7 +104,14 @@ export function viewBounds(c: Camera, w: number, h: number): Bounds {
 }
 
 /** Камера, при которой область мира целиком помещается в экран с отступом (поворот вида сохраняется). */
-export function fitBounds(b: Bounds, w: number, h: number, padding = 48, rotation = 0): Camera {
+export function fitBounds(
+  b: Bounds,
+  w: number,
+  h: number,
+  padding = 48,
+  rotation = 0,
+  maxZoom = 2,
+): Camera {
   const cos = Math.abs(Math.cos(rotation));
   const sin = Math.abs(Math.sin(rotation));
   const bw = Math.max(1, b.maxX - b.minX);
@@ -112,7 +119,7 @@ export function fitBounds(b: Bounds, w: number, h: number, padding = 48, rotatio
   // Размер повёрнутой области на экране при zoom = 1.
   const rw = bw * cos + bh * sin;
   const rh = bw * sin + bh * cos;
-  const zoom = clampZoom(Math.min((w - padding * 2) / rw, (h - padding * 2) / rh, 2));
+  const zoom = clampZoom(Math.min((w - padding * 2) / rw, (h - padding * 2) / rh, maxZoom));
   const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
   return anchor(center, w / 2, h / 2, zoom, rotation);
 }

@@ -150,8 +150,8 @@ export function Toolbar({
         ))}
         <button
           className="tool"
-          aria-label="Картинка"
-          title="Картинка (или вставьте из буфера, перетащите файл)"
+          aria-label="Картинка или PDF"
+          title="Картинка или PDF (или вставьте из буфера, перетащите файл)"
           onClick={() => fileRef.current?.click()}
         >
           <ImageIcon />
@@ -159,7 +159,7 @@ export function Toolbar({
         <input
           ref={fileRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
+          accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
           multiple
           hidden
           data-testid="image-input"

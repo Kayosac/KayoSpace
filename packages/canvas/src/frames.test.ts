@@ -9,7 +9,14 @@ import {
   transformElement,
 } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
-import { frameBounds, frameHit, insideFrame, nextFrameName } from './frames';
+import {
+  frameBounds,
+  frameHit,
+  insideFrame,
+  nextFrameName,
+  layoutPages,
+  presentationSlides,
+} from './frames';
 import { Scene, strokeAlpha, strokeStyleFor } from './scene';
 import { itemInLasso, itemInRect } from './selection';
 
@@ -112,5 +119,46 @@ describe('маркер и выделитель', () => {
     expect(strokeStyleFor(hl).simulatePressure).toBe(false);
     expect(strokeAlpha(pen)).toBe(1);
     expect(strokeAlpha(hl)).toBeLessThan(0.5);
+  });
+});
+
+describe('презентация по фреймам', () => {
+  const f = (id: string, x: number, y: number, w = 400, h = 300) => ({
+    id,
+    bounds: { minX: x, minY: y, maxX: x + w, maxY: y + h },
+  });
+  it('порядок чтения: ряды сверху вниз, в ряду слева направо; вложенные — не отдельные слайды', () => {
+    const slides = presentationSlides([
+      f('c', 0, 500),
+      f('b', 500, 40), // чуть ниже первого, но в том же ряду
+      f('a', 0, 0),
+      f('inner', 20, 20, 100, 100), // внутри «a»
+      f('d', 600, 520),
+    ]);
+    expect(slides.map((s) => s.id)).toEqual(['a', 'b', 'c', 'd']);
+  });
+  it('одинаковые фреймы друг в друге не пропадают оба', () => {
+    expect(
+      presentationSlides([f('x', 0, 0), f('y', 0, 0)])
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(['x', 'y']);
+  });
+});
+
+describe('страницы PDF на доске', () => {
+  it('столбцом одной ширины, пропорции сохраняются, между страницами зазор', () => {
+    const boxes = layoutPages(
+      [
+        { w: 1190, h: 1684 }, // A4 портрет
+        { w: 1684, h: 1190 }, // A4 альбом
+      ],
+      { x: 100, y: 50 },
+      { gap: 80 },
+    );
+    expect(boxes).toEqual([
+      { x: 100, y: 50, w: 800, h: 1132 },
+      { x: 100, y: 50 + 1132 + 80, w: 800, h: 565 },
+    ]);
   });
 });

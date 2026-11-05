@@ -24,6 +24,7 @@ import {
   decodeImageData,
   fetchImage,
   imageInfo,
+  renderSvgImage,
   type ImageInfo,
 } from './images';
 import { frameOrigin, grown } from './mcp-layout';
@@ -66,14 +67,20 @@ export function registerImageTools(
 ): void {
   /** Скачать или раскодировать картинку и положить файл в хранилище; строка — понятная ошибка. */
   const load = async (
-    src: { url: string } | { data: string },
+    src: { url: string } | { data: string } | { svg: string },
   ): Promise<{ id: string; info: ImageInfo } | string> => {
     let bytes: Buffer | null;
     try {
-      bytes =
-        'url' in src
-          ? await fetchImage(src.url, { allowPrivate: opts.allowPrivateUrls })
-          : decodeImageData(src.data);
+      if ('svg' in src) {
+        const png = renderSvgImage(src.svg);
+        if (typeof png === 'string') return png;
+        bytes = png;
+      } else {
+        bytes =
+          'url' in src
+            ? await fetchImage(src.url, { allowPrivate: opts.allowPrivateUrls })
+            : decodeImageData(src.data);
+      }
     } catch (err) {
       if (err instanceof ImageFetchError) return err.message;
       throw err;
@@ -154,8 +161,9 @@ export function registerImageTools(
     'add_images',
     {
       description:
-        'Положить на доску картинки (PNG, JPEG, GIF, WebP, до 15 МБ каждая): по ссылке (url) или ' +
-        'файлом (data — base64). Раскладываются, как в add_elements: сеткой, в ряд или столбцом; ' +
+        'Положить на доску картинки (PNG, JPEG, GIF, WebP, до 15 МБ каждая): по ссылке (url), ' +
+        'файлом (data — base64) или нарисовать самому (svg — разметка SVG, станет картинкой PNG). ' +
+        'Раскладываются, как в add_elements: сеткой, в ряд или столбцом; ' +
         'at — левый верхний угол, frame — внутрь фрейма, иначе — справа от занятого. Ширина по ' +
         'умолчанию 480 (пропорции сохраняются). alt — подпись: по ней картинку найдут поиском.',
       inputSchema: z.object({
@@ -165,6 +173,10 @@ export function registerImageTools(
             z.object({
               url: z.string().url().optional().describe('ссылка на картинку (http/https)'),
               data: z.string().optional().describe('картинка в base64 (или data:-ссылка)'),
+              svg: z
+                .string()
+                .optional()
+                .describe('нарисовать самому: SVG с width/height или viewBox, без внешних ссылок'),
               alt: z.string().max(500).optional().describe('что на картинке'),
               width: z.number().positive().max(4000).optional().describe('ширина на доске'),
             }),
@@ -183,8 +195,11 @@ export function registerImageTools(
       const loaded: Loaded[] = [];
       for (const [i, img] of images.entries()) {
         const n = images.length > 1 ? `Картинка ${i + 1}: ` : '';
-        if (!img.url === !img.data) return fail(`${n}нужно что-то одно — url или data.`);
-        const r = await load(img.url ? { url: img.url } : { data: img.data! });
+        const given = [img.url, img.data, img.svg].filter((v) => v !== undefined).length;
+        if (given !== 1) return fail(`${n}нужно что-то одно — url, data или svg.`);
+        const r = await load(
+          img.url ? { url: img.url } : img.data ? { data: img.data } : { svg: img.svg! },
+        );
         if (typeof r === 'string') return fail(n + r);
         loaded.push({ ...r, alt: img.alt, width: img.width });
       }

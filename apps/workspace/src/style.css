@@ -1289,31 +1289,42 @@ p.bad {
   flex-wrap: wrap;
 }
 
-.trash {
-  display: grid;
-  gap: 6px;
-  justify-items: start;
-  margin-top: 12px;
-}
-
-.trash .device-list,
-.deleted-boards {
+.trash-list {
   width: 100%;
 }
 
-.trash .device-list li > div,
-.deleted-boards li > div {
+.trash-list li > div {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.trash .device-list b,
-.deleted-boards b {
+.trash-list b {
   overflow: hidden;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trash-board-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trash-board-title .link-btn {
+  font-size: inherit;
+  font-weight: inherit;
+  color: var(--text);
+}
+
+.trash-board-title .link-btn:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+.trash-empty {
+  margin-top: 16px;
 }
 
 .backups .field {
@@ -1637,7 +1648,8 @@ p.bad {
   .project-edit input,
   .danger-btn,
   .add-btn,
-  .trash .secondary {
+  .board-danger .secondary,
+  .section-row .secondary {
     height: 40px;
   }
 
@@ -1688,4 +1700,78 @@ p.bad {
   kbd {
     display: none;
   }
+}
+
+/* Презентация по фреймам (решение 0017): только доска и полоска управления. */
+.app.presenting > :not(.stage):not(.present) {
+  display: none !important;
+}
+
+.present {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+}
+
+.present-touch {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.present-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--gutter-b) + 16px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100vw - 32px);
+  padding: 4px 6px;
+  transform: translateX(-50%);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  opacity: 0.92;
+}
+
+.present-title {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.present-title b {
+  font-variant-numeric: tabular-nums;
+}
+
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-row .secondary {
+  margin-top: 10px;
+}
+
+/* Шаблоны досок (решение 0017). */
+.templates {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+
+.template-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }

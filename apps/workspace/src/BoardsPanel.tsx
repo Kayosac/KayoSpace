@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { boardIdFromName, hubHttpUrl } from '@kayospace/sync';
 import type { Project } from '@kayospace/model';
-import type { BoardBackground } from '@kayospace/board';
+import { BOARD_TEMPLATES, type BoardBackground, type TemplateId } from '@kayospace/board';
 
 const BACKGROUNDS: { value: BoardBackground; name: string }[] = [
   { value: 'dots', name: 'Точки' },
@@ -15,9 +15,7 @@ import { inProject } from './projects';
 import { CommitInput } from './CommitInput';
 import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
-import { CloseIcon, ExportIcon, PlusIcon, SearchIcon } from './icons';
-import { TrashSection } from './TrashSection';
-import { trashTime } from './trash';
+import { CloseIcon, ExportIcon, PlayIcon, PlusIcon, SearchIcon, TrashIcon } from './icons';
 
 export function BoardsPanel({
   current,
@@ -38,9 +36,10 @@ export function BoardsPanel({
   onDeleteProject,
   onMoveBoard,
   deleted,
-  restorable,
+  trashCount,
   onDeleteBoard,
-  onRestoreBoard,
+  onTrash,
+  onPresent,
   background,
   onBackground,
   searchLocal,
@@ -53,7 +52,7 @@ export function BoardsPanel({
   /** Хаб для списка досок (null — синхронизация выключена). */
   hub: { url: string; token: string } | null;
   /** isNew — новая доска: ей нужно записать название. */
-  onOpen: (id: string, name: string | null, isNew: boolean) => void;
+  onOpen: (id: string, name: string | null, isNew: boolean, template?: TemplateId) => void;
   onRename: (name: string) => void;
   /** Фреймы открытой доски. */
   frames: { id: string; name: string }[];
@@ -72,11 +71,14 @@ export function BoardsPanel({
   onMoveBoard: (project: string | null) => void;
   /** Удалённые доски (их нет в списке). */
   deleted: ReadonlyMap<string, unknown>;
-  /** Удалённые доски, которые ещё можно вернуть. */
-  restorable: readonly { id: string; name: string | null; at: number }[];
+  /** Сколько удалённых досок можно вернуть (подсказка на кнопке «Корзина»). */
+  trashCount: number;
   /** Удалить открытую доску (7 дней её можно вернуть). */
   onDeleteBoard: () => void;
-  onRestoreBoard: (id: string, name: string | null) => void;
+  /** Открыть корзину (отдельная панель). */
+  onTrash: () => void;
+  /** Показать фреймы как слайды. */
+  onPresent: () => void;
   background: BoardBackground;
   onBackground: (bg: BoardBackground) => void;
   /** Поиск по открытой доске (когда хаба нет). */
@@ -378,6 +380,24 @@ export function BoardsPanel({
           </button>
         </li>
       </ul>
+      <div className="templates" data-testid="templates">
+        <span className="muted">Или новая доска из шаблона:</span>
+        <div className="template-chips">
+          {BOARD_TEMPLATES.map((t) => (
+            <button
+              key={t.id}
+              className="project-chip"
+              title={t.hint}
+              onClick={() => {
+                const title = query.trim() || t.name;
+                onOpen(boardIdFromName(title), title, true, t.id);
+              }}
+            >
+              {t.name}
+            </button>
+          ))}
+        </div>
+      </div>
       {found && (
         <>
           <h3 className="section-title">
@@ -401,7 +421,13 @@ export function BoardsPanel({
       )}
       {frames.length > 0 && (
         <>
-          <h3 className="section-title">Фреймы этой доски</h3>
+          <div className="section-row">
+            <h3 className="section-title">Фреймы этой доски</h3>
+            <button className="secondary" onClick={onPresent} data-testid="present">
+              <PlayIcon />
+              Показать
+            </button>
+          </div>
           <ul className="board-list frames-list" aria-label="Фреймы" data-testid="frames-list">
             {frames.map((f) => (
               <li key={f.id}>
@@ -436,26 +462,13 @@ export function BoardsPanel({
           {confirmDelete ? 'Точно удалить доску?' : 'Удалить эту доску'}
         </button>
         {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
+        {!confirmDelete && (
+          <button className="secondary" onClick={onTrash} data-testid="open-trash">
+            <TrashIcon />
+            Корзина{trashCount > 0 ? ` · досок: ${trashCount}` : ''}
+          </button>
+        )}
       </div>
-      {hub && <TrashSection hub={hub} board={current} />}
-      {restorable.length > 0 && (
-        <>
-          <h3 className="section-title">Удалённые доски</h3>
-          <ul className="device-list deleted-boards" data-testid="deleted-boards">
-            {restorable.map((d) => (
-              <li key={d.id}>
-                <div>
-                  <b>{d.name ?? d.id}</b>
-                  <small>удалена {trashTime(d.at)}</small>
-                </div>
-                <button className="danger-btn neutral" onClick={() => onRestoreBoard(d.id, d.name)}>
-                  Вернуть
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
       {hub && hubError && <p className="muted">Список с хаба недоступен: {hubError}</p>}
       {!hub && <p className="muted">Включите синхронизацию — появятся доски с хаба.</p>}
       {finePointer() && <p className="muted">Ctrl/⌘ K — открыть этот список с клавиатуры.</p>}
