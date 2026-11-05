@@ -8,7 +8,9 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type * as Y from 'yjs';
 import {
+  BOARD_TEMPLATES,
   WORKSPACE_ID,
+  addElements,
   addProject,
   boardProjects,
   elementText,
@@ -20,7 +22,10 @@ import {
   restoreDeletedBoard,
   setBoardName,
   setBoardProject,
+  templateElements,
+  type TemplateId,
 } from '@kayospace/board';
+import type { Actor } from '@kayospace/model';
 import type { BoardInfo } from './store';
 import type { Trash } from './trash';
 
@@ -48,6 +53,7 @@ export function registerExtraTools(
   store: Source,
   trash: Trash,
   origin: unknown,
+  agentOf: () => Actor = () => ({ kind: 'agent', name: 'mcp' }),
 ): void {
   server.registerTool(
     'list_trash',
@@ -185,20 +191,27 @@ export function registerExtraTools(
     'create_board',
     {
       description:
-        'Создать доску с названием, по желанию — в проекте. Уже есть — только название и проект.',
+        'Создать доску с названием, по желанию — в проекте и из шаблона (разметка фреймами: ' +
+        BOARD_TEMPLATES.map((t) => `${t.id} — ${t.name}`).join(', ') +
+        '). Уже есть — только название и проект.',
       inputSchema: z.object({
         board: boardId.describe('id новой доски: латиница, цифры, «-» и «_»'),
         name: z.string().min(1).max(120),
         project: projectRef.optional(),
+        template: z
+          .enum(BOARD_TEMPLATES.map((t) => t.id) as [TemplateId, ...TemplateId[]])
+          .optional()
+          .describe('шаблон новой доски'),
       }),
     },
-    async ({ board, name, project }) => {
+    async ({ board, name, project, template }) => {
       const pid = project === undefined ? undefined : await resolveProject(project);
       if (project && pid === undefined)
         return fail(`Проекта «${project}» нет. Список — list_projects.`);
       const existed = await store.has(board);
       const doc = await store.get(board);
       setBoardName(doc, name, origin);
+      if (template && !existed) addElements(doc, templateElements(template, agentOf()), origin);
       if (pid !== undefined) setBoardProject(await store.get(WORKSPACE_ID), board, pid, origin);
       return text(
         `${existed ? 'Доска уже была' : 'Доска создана'}: ${board}. Ссылка: kayospace://board/${board}`,

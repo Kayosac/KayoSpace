@@ -133,6 +133,11 @@ describe('корзина, изменения и проекты через хаб
     expect(rest.keepDays).toBe(7);
     expect(rest.groups[0]).toMatchObject({ by: 'agent', ids: [s.id] });
     expect(JSON.parse((await call('list_trash', { board: 'notes' })).text).groups).toHaveLength(1);
+    // Корзина всех досок — для отдельной панели «Корзина».
+    const all = (await (await fetch(`http://127.0.0.1:${hub.port}/api/trash`)).json()) as {
+      boards: { board: string; groups: unknown[] }[];
+    };
+    expect(all.boards.map((b) => [b.board, b.groups.length])).toEqual([['notes', 1]]);
 
     const r = await fetch(`${base}/restore`, {
       method: 'POST',
@@ -177,6 +182,11 @@ describe('корзина, изменения и проекты через хаб
       (await call('create_board', { board: 'smeta', name: 'Смета', project: 'Ремонт' })).text,
     ).toContain('kayospace://board/smeta');
     await call('create_board', { board: 'loose', name: 'Разное' });
+    // Из шаблона — сразу с колонками.
+    await call('create_board', { board: 'kanban', name: 'Задачи', template: 'kanban' });
+    expect(
+      listElements(await hub.store.get('kanban')).filter((e) => e.type === 'frame'),
+    ).toHaveLength(3);
     let list = JSON.parse((await call('list_projects')).text) as {
       projects: { id: string; boards: { id: string; name: string }[] }[];
       withoutProject: { id: string }[];

@@ -799,6 +799,30 @@ test.describe('ИИ в доске', () => {
     await expect.poll(async () => (await boardElements(page)).length).toBe(1);
   });
 
+  test('«вставь картинку сюда»: ИИ кладёт картинку в предпросмотр, «Вставить» — на доску', async ({
+    browser,
+    request,
+  }) => {
+    const board = `e2e-ai-image-${Date.now()}`;
+    const page = await openDevice(browser, { ...synced, board });
+    await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+    await page.keyboard.press('Control+j');
+    const prompt = page.getByTestId('ai-prompt');
+    await prompt.getByRole('textbox').fill('Вставь картинку солнца над морем сюда');
+    await page.keyboard.press('Enter');
+    const bar = page.getByTestId('ai-bar');
+    await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
+    await expect(bar).toContainText('Нарисовал картинку.');
+    expect((await boardElements(page)).length).toBe(0);
+    await page.waitForTimeout(500); // картинка подгружается с хаба в предпросмотр
+    await page.screenshot({ path: shot('workspace-ai-image-preview.png') });
+    await bar.getByRole('button', { name: 'Вставить' }).click();
+    await expect
+      .poll(async () => (await boardElements(page)).map((e) => e.type))
+      .toEqual(['image']);
+    await expect.poll(() => hubElements(request, board)).toBe(1);
+  });
+
   test('свой запрос (Ctrl+J): результат можно не вставлять', async ({ browser }) => {
     const board = `e2e-ai-prompt-${Date.now()}`;
     const page = await openDevice(browser, { ...synced, board });
@@ -1411,35 +1435,43 @@ test('планшет: корзина, удаление и возврат дос�
   await page.waitForFunction(() => window.__kayospace?.engine);
   await expect.poll(() => elements(page)).toBe(2);
 
-  // Агент выбросил стикер — человек видит его в корзине доски и возвращает.
+  // Агент выбросил стикер — человек видит его в корзине (отдельная панель) и возвращает.
   await call('delete_elements', { board: a, ids: [ids[1]!.id] });
   await expect.poll(() => elements(page)).toBe(1);
   await page.getByTestId('board-title').tap();
-  await page.getByTestId('trash-open').tap();
-  const trash = page.getByTestId('trash-list');
+  await page.getByTestId('open-trash').tap();
+  const trashPanel = page.getByTestId('trash-panel');
+  await expect(trashPanel).toBeVisible();
+  await expect(page.getByTestId('boards-panel')).toHaveCount(0);
+  const trash = trashPanel.getByTestId('trash-board').filter({ hasText: 'Первая' });
   await expect(trash).toContainText('Выбросить');
   await expect(trash).toContainText('удалил агент');
+  await expect(trash).toContainText('открыта');
+  await page.screenshot({ path: shot('trash-panel.png') });
   await trash.getByRole('button', { name: 'Вернуть' }).tap();
   await expect.poll(() => elements(page)).toBe(2);
-  await expect(page.getByTestId('trash')).toContainText('Пусто');
+  await expect(trash).toHaveCount(0);
+  await trashPanel.getByRole('button', { name: 'Закрыть' }).tap();
 
-  // Удалить доску — в два касания; открывается другая, удалённую можно вернуть.
+  // Удалить доску — в два касания; открывается другая, удалённую можно вернуть из корзины.
+  await page.getByTestId('board-title').tap();
   const del = page.getByTestId('delete-board');
   await del.tap();
   await expect(del).toHaveText('Точно удалить доску?');
   await del.tap();
   await expect(page.getByTestId('board-title')).toHaveText('Вторая');
+  await expect(page.getByRole('option', { name: /Первая/ })).toHaveCount(0);
+  await expect(page.getByTestId('open-trash')).toContainText('досок: 1');
+  await expect.poll(async () => (await call('list_boards', {})).content[0]!.text).not.toContain(a);
+  await page.getByTestId('open-trash').tap();
   const gone = page.getByTestId('deleted-boards');
   await expect(gone).toContainText('Первая');
-  await expect(page.getByRole('option', { name: /Первая/ })).toHaveCount(0);
-  await expect.poll(async () => (await call('list_boards', {})).content[0]!.text).not.toContain(a);
   await page.screenshot({ path: shot('deleted-boards.png') });
   await gone.getByRole('button', { name: 'Вернуть' }).tap();
   await expect(page.getByTestId('board-title')).toHaveText('Первая');
   await expect.poll(() => elements(page)).toBe(2);
-  await expect(page.getByTestId('deleted-boards')).toHaveCount(0);
   // Возврат открывает доску — панель закрывается сама.
-  await expect(page.getByTestId('boards-panel')).toHaveCount(0);
+  await expect(page.getByTestId('trash-panel')).toHaveCount(0);
 
   // Агент кладёт картинку файлом — устройство показывает её.
   const png = await page.evaluate(() => {
@@ -1457,5 +1489,103 @@ test('планшет: корзина, удаление и возврат дос�
   await expect.poll(() => hubElements(request, a)).toBe(3);
   await page.screenshot({ path: shot('agent-image.png') });
   await client.close();
+  await context.close();
+});
+
+/** Маленький настоящий PDF: по странице A4 на строку текста. */
+function makePdf(lines: string[]): Buffer {
+  const objs: string[] = [];
+  const pageIds = lines.map((_, i) => 4 + i * 2);
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${lines.length} >>`;
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  lines.forEach((text, i) => {
+    const stream = `BT /F1 48 Tf 72 700 Td (${text}) Tj ET 0 0 1 rg 72 400 200 150 re f`;
+    objs[4 + i * 2] =
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`;
+    objs[5 + i * 2] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+  let out = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  for (let n = 1; n < objs.length; n++) {
+    offsets[n] = out.length;
+    out += `${n} 0 obj\n${objs[n]}\nendobj\n`;
+  }
+  const xref = out.length;
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let n = 1; n < objs.length; n++) out += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+test('планшет: доска из шаблона, PDF страницами, презентация по фреймам — касаниями', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ board: `e2e-present-${Date.now()}` })] as const,
+  );
+  const page = await context.newPage();
+  page.on('pageerror', (e) => console.log(`[present] ошибка страницы: ${e.message}`));
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  const frameNames = () =>
+    page.evaluate(() =>
+      (window.__kayospace!.engine as unknown as { getFrames(): { name: string }[] })
+        .getFrames()
+        .map((f) => f.name),
+    );
+
+  // Новая доска из шаблона «Канбан» — колонки уже на месте.
+  await page.getByTestId('board-title').tap();
+  await page.getByLabel('Найти или создать доску').fill('Спринт');
+  await page.getByTestId('templates').getByRole('button', { name: 'Канбан' }).tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Спринт');
+  await expect.poll(frameNames).toEqual(['Сделать', 'В работе', 'Готово']);
+  await page.screenshot({ path: shot('template-kanban.png') });
+
+  // PDF — кнопкой «Картинка или PDF»: каждая страница во фрейме.
+  await page.getByTestId('image-input').setInputFiles({
+    name: 'Договор.pdf',
+    mimeType: 'application/pdf',
+    buffer: makePdf(['Page one', 'Page two']),
+  });
+  await expect
+    .poll(async () => (await frameNames()).sort(), { timeout: 20_000 })
+    .toEqual(['В работе', 'Готово', 'Договор — стр. 1', 'Договор — стр. 2', 'Сделать']);
+  await expect(page.locator('.toast')).toContainText('PDF на доске: 2 стр.');
+  expect((await boardElements(page)).filter((e) => e.type === 'image')).toHaveLength(2);
+  await page.screenshot({ path: shot('pdf-pages.png') });
+
+  // Презентация: «Показать» в списке досок; касание справа — вперёд, слева — назад.
+  const before = await camera(page);
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('present').tap();
+  const title = page.getByTestId('present-title');
+  await expect(title).toContainText('1 / 5');
+  await expect(title).toContainText('Сделать');
+  await expect(page.locator('.toolbar')).toBeHidden();
+  const surface = page.getByTestId('present-surface');
+  await surface.tap({ position: { x: 1000, y: 400 } });
+  await expect(title).toContainText('2 / 5');
+  await surface.tap({ position: { x: 100, y: 400 } });
+  await expect(title).toContainText('1 / 5');
+  await page.getByRole('button', { name: 'Вперёд' }).tap();
+  await page.getByRole('button', { name: 'Вперёд' }).tap();
+  await page.getByRole('button', { name: 'Вперёд' }).tap();
+  await expect(title).toContainText('4 / 5');
+  await expect(title).toContainText('Договор — стр. 1');
+  await page.screenshot({ path: shot('presentation.png') });
+  await page.getByRole('button', { name: 'Выйти из презентации' }).tap();
+  await expect(page.getByTestId('presentation')).toHaveCount(0);
+  await expect(page.locator('.toolbar')).toBeVisible();
+  expect(await camera(page)).toEqual(before);
   await context.close();
 });

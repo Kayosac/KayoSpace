@@ -1,6 +1,6 @@
 {
   "name": "@kayospace/app",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "description": "Оболочка Tauri 2 для macOS, Windows и Android. Показывает основное приложение (apps/workspace).",

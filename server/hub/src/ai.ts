@@ -306,7 +306,16 @@ export function buildPrompt(
   if (t.selection.length > 0) {
     lines.push(`Выделенные элементы (id): ${t.selection.join(', ')}.`);
   }
-  if (t.area) {
+  if (t.area && t.selection.length === 0) {
+    // Без выделения — это то, что человек видит на экране: «сюда» — в эту область, а не за её край.
+    const a = t.area;
+    lines.push(
+      `Человек сейчас видит область доски x ${Math.round(a.minX)}…${Math.round(a.maxX)}, ` +
+        `y ${Math.round(a.minY)}…${Math.round(a.maxY)} (мировые координаты). «Сюда», «здесь» — в эту область: ` +
+        `ставь новое в её свободное место, ближе к центру (${Math.round((a.minX + a.maxX) / 2)}, ` +
+        `${Math.round((a.minY + a.maxY) / 2)}); не накрывай существующие элементы.`,
+    );
+  } else if (t.area) {
     const a = t.area;
     lines.push(
       `Область внимания (мировые координаты): x ${Math.round(a.minX)}…${Math.round(a.maxX)}, ` +
@@ -318,6 +327,13 @@ export function buildPrompt(
     lines.push(
       'Картинка выделенного фрагмента лежит в файле selection.png в текущей папке — посмотри её инструментом Read.',
     );
+  lines.push(
+    '',
+    'Картинки: add_images. Фото или рисунок из интернета — найди в WebSearch страницу и прямую ссылку ' +
+      'на файл (.jpg, .png, .webp; хорошо подходят upload.wikimedia.org и images.unsplash.com), передай её в url ' +
+      'и подпиши alt. Схему, иконку, простую иллюстрацию — нарисуй сам: svg (с width/height или viewBox). ' +
+      'Ставь картинку туда, куда просят («сюда» — в область внимания), ширина по умолчанию 480.',
+  );
   lines.push('', `Задача: ${ACTION_TEXT[t.action]}`);
   if (t.prompt) lines.push(`Просьба пользователя: ${t.prompt}`);
   lines.push(

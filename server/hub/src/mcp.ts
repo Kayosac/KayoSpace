@@ -372,9 +372,10 @@ export function createMcp(
 
     registerLayoutTools(server, store, who, MCP_ORIGIN);
     // Корзина, изменения и проекты — только у настоящих досок хаба (у черновиков ИИ их нет).
-    if (opts.trash) registerExtraTools(server, store, opts.trash, MCP_ORIGIN);
+    if (opts.trash) registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who);
     const assets = opts.assets;
-    if (opts.trash && assets?.put)
+    // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
+    if (assets?.put)
       registerImageTools(
         server,
         store,

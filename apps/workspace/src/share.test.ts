@@ -13,16 +13,20 @@ describe('присланное через «Поделиться»', () => {
     expect(sharedText({ text: '   ', files: [] })).toBeNull();
   });
 
-  it('картинки — файлами; SVG и не картинки пропускаем', async () => {
+  it('картинки и PDF — файлами; SVG и прочее пропускаем', async () => {
     const png = btoa(String.fromCharCode(137, 80, 78, 71));
     const files = sharedFiles({
       files: [
         { name: 'фото.png', mime: 'image/png', data: png },
         { name: 'x.svg', mime: 'image/svg+xml', data: png },
         { name: 'doc.pdf', mime: 'application/pdf', data: png },
+        { name: 'a.zip', mime: 'application/zip', data: png },
       ],
     });
-    expect(files.map((f) => [f.name, f.type, f.size])).toEqual([['фото.png', 'image/png', 4]]);
+    expect(files.map((f) => [f.name, f.type, f.size])).toEqual([
+      ['фото.png', 'image/png', 4],
+      ['doc.pdf', 'application/pdf', 4],
+    ]);
     expect([...new Uint8Array(await files[0]!.arrayBuffer())]).toEqual([137, 80, 78, 71]);
   });
 

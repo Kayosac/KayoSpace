@@ -8,3 +8,4 @@ export * from './align';
 export * from './order';
 export * from './workspace';
 export * from './layout';
+export * from './templates';

@@ -45,11 +45,14 @@ export function claudeArgs(prompt: string, mcpConfigPath: string, model: string)
     '--strict-mcp-config',
     '--mcp-config',
     mcpConfigPath,
-    // Из встроенных инструментов — только чтение файлов (картинка выделения).
+    // Из встроенных инструментов — чтение файлов (картинка выделения) и поиск в интернете
+    // (найти картинку по просьбе «вставь фото …»). Команд и записи файлов нет.
     '--tools',
-    'Read',
+    'Read,WebSearch,WebFetch',
     '--allowedTools',
     'Read',
+    'WebSearch',
+    'WebFetch',
     'mcp__kayospace',
     // Всё, что не разрешено явно, — отказ без вопроса: спрашивать некого.
     '--permission-mode',

@@ -58,3 +58,54 @@ export function nextFrameName(existing: Iterable<string>): string {
   }
   return `Фрейм ${max + 1}`;
 }
+
+/**
+ * Слайды презентации (решение 0017): фреймы в порядке чтения — сверху вниз, в ряду слева направо
+ * (как страницы PDF), без вложенных — они видны на слайде своего фрейма.
+ */
+export function presentationSlides<T extends { id: string; bounds: Bounds }>(
+  frames: readonly T[],
+): T[] {
+  const inside = (a: Bounds, b: Bounds): boolean =>
+    a.minX >= b.minX && a.maxX <= b.maxX && a.minY >= b.minY && a.maxY <= b.maxY;
+  const top = frames.filter(
+    (f) =>
+      !frames.some(
+        (g) => g.id !== f.id && inside(f.bounds, g.bounds) && !inside(g.bounds, f.bounds),
+      ),
+  );
+  // Ряд — фреймы, чьи верхние края ближе половины высоты первого в ряду.
+  const sorted = [...top].sort((a, b) => a.bounds.minY - b.bounds.minY);
+  const rows: T[][] = [];
+  for (const f of sorted) {
+    const row = rows.at(-1);
+    const head = row?.[0];
+    if (head && f.bounds.minY - head.bounds.minY < (head.bounds.maxY - head.bounds.minY) / 2)
+      row.push(f);
+    else rows.push([f]);
+  }
+  return rows.flatMap((r) => r.sort((a, b) => a.bounds.minX - b.bounds.minX));
+}
+
+/** Ширина страницы PDF на доске (мировые единицы): A4 — 800×1131. */
+export const PDF_PAGE_WIDTH = 800;
+
+/**
+ * Страницы импортированного PDF (решение 0017): столбцом, каждая — во фрейме своего размера,
+ * начиная с точки origin. Возвращает прямоугольники страниц.
+ */
+export function layoutPages(
+  pages: readonly { w: number; h: number }[],
+  origin: { x: number; y: number },
+  opts: { width?: number; gap?: number } = {},
+): { x: number; y: number; w: number; h: number }[] {
+  const width = opts.width ?? PDF_PAGE_WIDTH;
+  const gap = opts.gap ?? 80;
+  let y = origin.y;
+  return pages.map((p) => {
+    const h = Math.round((width * p.h) / Math.max(1, p.w));
+    const box = { x: origin.x, y, w: width, h };
+    y += h + gap;
+    return box;
+  });
+}

@@ -8,7 +8,7 @@ import { Resvg } from '@resvg/resvg-js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { addElement, getElement, listElements, makeFrame } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
-import { decodeImageData, fetchImage, imageInfo, isPrivateAddress } from './images';
+import { decodeImageData, fetchImage, imageInfo, isPrivateAddress, renderSvgImage } from './images';
 import { startHub, type Hub } from './hub';
 
 const me: Actor = { kind: 'human', name: 'я' };
@@ -80,6 +80,47 @@ describe('размер картинки по заголовку', () => {
     expect(decodeImageData(p.toString('base64'))).toEqual(p);
     expect(decodeImageData(`data:image/png;base64,${p.toString('base64')}`)).toEqual(p);
     expect(decodeImageData('это не base64!')).toBeNull();
+  });
+});
+
+describe('картинка, нарисованная агентом (SVG)', () => {
+  it('становится PNG; мелкая — крупнее, огромная — меньше', () => {
+    const svg = (w: number, h: number) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#0a0"/></svg>`;
+    const info = (b: Buffer | string) => (typeof b === 'string' ? b : imageInfo(b));
+    expect(info(renderSvgImage(svg(800, 400)))).toEqual({
+      mime: 'image/png',
+      width: 800,
+      height: 400,
+    });
+    expect(info(renderSvgImage(svg(64, 64)))).toMatchObject({ width: 512, height: 512 });
+    expect(info(renderSvgImage(svg(8000, 4000)))).toMatchObject({ width: 1600, height: 800 });
+    const vb =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 600"><circle cx="150" cy="300" r="100"/></svg>';
+    expect(info(renderSvgImage(vb))).toMatchObject({ width: 300, height: 600 });
+  });
+
+  it('внешние ссылки, файлы и стили запрещены', () => {
+    const wrap = (inner: string) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10">${inner}</svg>`;
+    expect(
+      renderSvgImage(wrap('<image href="file:///etc/passwd" width="10" height="10"/>')),
+    ).toContain('внешние');
+    expect(
+      renderSvgImage(wrap('<image xlink:href="https://x.com/a.png" width="1" height="1"/>')),
+    ).toContain('внешние');
+    expect(renderSvgImage(wrap('<style>@import url(https://x.com/a.css);</style>'))).toContain(
+      'стили',
+    );
+    expect(renderSvgImage(wrap('<rect fill="url(https://x/y)" width="1" height="1"/>'))).toContain(
+      'стили',
+    );
+    expect(
+      typeof renderSvgImage(
+        wrap('<defs><linearGradient id="g"/></defs><rect fill="url(#g)" width="5" height="5"/>'),
+      ),
+    ).not.toBe('string');
+    expect(renderSvgImage('<html></html>')).toContain('не SVG');
   });
 });
 
