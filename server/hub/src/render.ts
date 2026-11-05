@@ -8,7 +8,7 @@
  */
 
 import { Resvg } from '@resvg/resvg-js';
-import { decodeStroke, type CanvasElement } from '@kayospace/model';
+import { decodeStroke, shapePolygon, type CanvasElement } from '@kayospace/model';
 
 export interface Area {
   x: number;
@@ -87,7 +87,7 @@ function textBlock(
   y: number,
   size: number,
   fill: string,
-  opts: { anchor?: 'start' | 'middle'; weight?: number } = {},
+  opts: { anchor?: 'start' | 'middle' | 'end'; weight?: number } = {},
 ): string {
   const tspans = lines
     .map(
@@ -95,7 +95,11 @@ function textBlock(
     )
     .join('');
   return `<text y="${n(y)}" font-family="${FONT}" font-size="${n(size)}" fill="${fill}"${
-    opts.anchor === 'middle' ? ' text-anchor="middle"' : ''
+    opts.anchor === 'middle'
+      ? ' text-anchor="middle"'
+      : opts.anchor === 'end'
+        ? ' text-anchor="end"'
+        : ''
   }${opts.weight ? ` font-weight="${opts.weight}"` : ''}>${tspans}</text>`;
 }
 
@@ -135,9 +139,48 @@ function elementSvg(
       );
     }
     case 'doc': {
-      // Карточка документа или таблицы (решение 0021): метка, название, начало текста.
       const pad = 16;
       const table = el.props.doc.startsWith('tb_');
+      // С миниатюрой (решение 0022): страница сверху, внизу — полоса с названием.
+      const thumb = el.props.thumb ? images.get(el.props.thumb) : undefined;
+      if (thumb) {
+        const bar = Math.min(44, el.h * 0.3);
+        const clip = `c${el.id.replace(/[^A-Za-z0-9]/g, '')}`;
+        return rotated(
+          el,
+          `<defs><clipPath id="${clip}"><rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="10"/></clipPath></defs>` +
+            `<g clip-path="url(#${clip})">` +
+            `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" fill="#ffffff"/>` +
+            `<image x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h - bar)}" preserveAspectRatio="xMidYMin slice" href="data:${thumb.mime};base64,${thumb.data.toString('base64')}"/>` +
+            `<rect x="${n(el.x)}" y="${n(el.y + el.h - bar)}" width="${n(el.w)}" height="${n(bar)}" fill="#f6f5f1"/>` +
+            `<rect x="${n(el.x)}" y="${n(el.y + el.h - bar)}" width="${n(el.w)}" height="1" fill="rgba(28,31,38,0.12)"/>` +
+            textBlock(
+              wrapLines(
+                el.props.title || (table ? 'Таблица' : 'Документ'),
+                el.w - pad * 2 - 70,
+                14,
+              ).slice(0, 1),
+              el.x + pad,
+              el.y + el.h - bar / 2 - 9,
+              14,
+              INK,
+              { weight: 700 },
+            ) +
+            textBlock(
+              [table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ'],
+              el.x + el.w - pad,
+              el.y + el.h - bar / 2 - 6,
+              10,
+              '#6c7080',
+              {
+                weight: 600,
+                anchor: 'end',
+              },
+            ) +
+            '</g>' +
+            `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="10" fill="none" stroke="rgba(28,31,38,0.18)" stroke-width="1.5"/>`,
+        );
+      }
       const titleLines = wrapLines(
         el.props.title || (table ? 'Таблица' : 'Документ'),
         el.w - pad * 2,
@@ -178,6 +221,16 @@ function elementSvg(
       );
     }
     case 'text': {
+      if (el.props.fit) {
+        // Надпись в рамке (решение 0022): самый крупный кегль, при котором текст помещается.
+        let size = Math.max(4, el.h / LINE);
+        let lines = wrapLines(el.props.content, el.w, size);
+        while (size > 4 && lines.length * size * LINE > el.h) {
+          size *= 0.92;
+          lines = wrapLines(el.props.content, el.w, size);
+        }
+        return rotated(el, textBlock(lines, el.x, el.y, size, color(el.style.color, INK)));
+      }
       const size = el.style.size ?? 20;
       return rotated(
         el,
@@ -193,12 +246,20 @@ function elementSvg(
     case 'shape': {
       const stroke = color(el.style.color, INK);
       const sw = el.style.size ?? 2;
+      // Заливка и новые фигуры (решение 0022).
+      const fill = el.style.fill ? color(el.style.fill, 'none') : 'none';
+      const paint = `fill="${fill}" stroke="${stroke}" stroke-width="${n(sw)}" stroke-linejoin="round"`;
+      const kind = el.props.shape;
       const body =
-        el.props.shape === 'ellipse'
-          ? `<ellipse cx="${n(el.x + el.w / 2)}" cy="${n(el.y + el.h / 2)}" rx="${n(el.w / 2)}" ry="${n(el.h / 2)}" fill="none" stroke="${stroke}" stroke-width="${n(sw)}"/>`
-          : el.props.shape === 'line'
+        kind === 'ellipse'
+          ? `<ellipse cx="${n(el.x + el.w / 2)}" cy="${n(el.y + el.h / 2)}" rx="${n(el.w / 2)}" ry="${n(el.h / 2)}" ${paint}/>`
+          : kind === 'line'
             ? `<line x1="${n(el.x)}" y1="${n(el.y)}" x2="${n(el.x + el.w)}" y2="${n(el.y + el.h)}" stroke="${stroke}" stroke-width="${n(sw)}" stroke-linecap="round"/>`
-            : `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" fill="none" stroke="${stroke}" stroke-width="${n(sw)}"/>`;
+            : kind === 'rect'
+              ? `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" ${paint}/>`
+              : `<polygon points="${shapePolygon(kind, el.x, el.y, el.w, el.h)
+                  .map((p) => `${n(p.x)},${n(p.y)}`)
+                  .join(' ')}" ${paint}/>`;
       const label = el.props.label
         ? textBlock(
             wrapLines(el.props.label, el.w, 16),
@@ -359,13 +420,16 @@ export async function loadImages(
   if (!assets) return out;
   let total = 0;
   for (const el of elements) {
-    if (el.type !== 'image' || out.has(el.props.assetId)) continue;
-    const head = await assets.head(el.props.assetId);
+    // Картинки и миниатюры карточек документов (решение 0022).
+    const id =
+      el.type === 'image' ? el.props.assetId : el.type === 'doc' ? el.props.thumb : undefined;
+    if (!id || out.has(id)) continue;
+    const head = await assets.head(id);
     if (!head || !/^image\/(png|jpeg|gif)$/.test(head.type)) continue;
-    const data = await assets.get(el.props.assetId);
+    const data = await assets.get(id);
     if (!data || total + data.length > MAX_IMAGE_BYTES) continue;
     total += data.length;
-    out.set(el.props.assetId, { mime: head.type, data });
+    out.set(id, { mime: head.type, data });
   }
   return out;
 }

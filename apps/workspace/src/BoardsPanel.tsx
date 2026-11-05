@@ -28,6 +28,89 @@ import {
   TrashIcon,
 } from './icons';
 
+type ExportFormat = 'png' | 'pdf';
+
+/** Правка №6, №8 (решение 0022): у каждого пункта списка — экспорт и удаление маленькими иконками. */
+function ItemActions({
+  id,
+  name,
+  onExport,
+  onDelete,
+}: {
+  id: string;
+  name: string | null;
+  onExport: (id: string, name: string | null, format: ExportFormat) => void;
+  onDelete: (id: string, name: string | null) => void;
+}) {
+  const [open, setOpen] = useState<'export' | 'delete' | null>(null);
+  useEffect(() => {
+    if (open !== 'delete') return;
+    const t = setTimeout(() => setOpen(null), 5000);
+    return () => clearTimeout(t);
+  }, [open]);
+  const formats: ExportFormat[] = isDocId(id) ? ['pdf'] : ['png', 'pdf'];
+  return (
+    <>
+      <span className="item-icons">
+        <button
+          className="item-icon"
+          aria-label="Экспорт"
+          title="Экспорт"
+          aria-expanded={open === 'export'}
+          onClick={() => setOpen((o) => (o === 'export' ? null : 'export'))}
+          data-testid="item-export"
+        >
+          <ExportIcon />
+        </button>
+        <button
+          className="item-icon danger"
+          aria-label="Удалить"
+          title="Удалить"
+          aria-expanded={open === 'delete'}
+          onClick={() => setOpen((o) => (o === 'delete' ? null : 'delete'))}
+          data-testid="item-delete"
+        >
+          <TrashIcon />
+        </button>
+      </span>
+      {open === 'export' && (
+        <div className="item-menu" data-testid="item-export-menu">
+          {formats.map((f) => (
+            <button
+              key={f}
+              className="project-chip"
+              onClick={() => {
+                setOpen(null);
+                onExport(id, name, f);
+              }}
+            >
+              {f.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      )}
+      {open === 'delete' && (
+        <div className="item-menu" data-testid="item-delete-menu">
+          <span>Точно удалить?</span>
+          <button
+            className="danger-btn confirm"
+            onClick={() => {
+              setOpen(null);
+              onDelete(id, name);
+            }}
+            data-testid="item-delete-confirm"
+          >
+            Удалить
+          </button>
+          <button className="project-chip" onClick={() => setOpen(null)}>
+            Отмена
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function BoardsPanel({
   current,
   currentName,
@@ -37,7 +120,6 @@ export function BoardsPanel({
   onRename,
   frames,
   onFrame,
-  onExport,
   projects,
   membership,
   project,
@@ -47,8 +129,9 @@ export function BoardsPanel({
   onDeleteProject,
   onMoveBoard,
   deleted,
-  trashCount,
-  onDeleteBoard,
+  trashBoards,
+  onExportItem,
+  onDeleteItem,
   onTrash,
   onHistory,
   onPresent,
@@ -69,7 +152,6 @@ export function BoardsPanel({
   /** Фреймы открытой доски. */
   frames: { id: string; name: string }[];
   onFrame: (id: string) => void;
-  onExport: (target: 'board' | 'pdf') => void;
   projects: readonly Project[];
   /** id доски → id проекта. */
   membership: ReadonlyMap<string, string>;
@@ -83,13 +165,15 @@ export function BoardsPanel({
   onMoveBoard: (project: string | null) => void;
   /** Удалённые доски (их нет в списке). */
   deleted: ReadonlyMap<string, unknown>;
-  /** Сколько удалённых досок можно вернуть (подсказка на кнопке «Корзина»). */
-  trashCount: number;
-  /** Удалить открытую доску (7 дней её можно вернуть). */
-  onDeleteBoard: () => void;
+  /** Сколько удалённых досок можно вернуть (корзина не пуста — кнопка «Корзина» видна). */
+  trashBoards: number;
+  /** Экспорт пункта списка: доски — PNG или PDF, документы и таблицы — PDF. */
+  onExportItem: (id: string, name: string | null, format: ExportFormat) => void;
+  /** Удалить доску, документ или таблицу (7 дней их можно вернуть). */
+  onDeleteItem: (id: string, name: string | null) => void;
   /** Открыть корзину (отдельная панель). */
   onTrash: () => void;
-  /** Открыть историю версий этой доски. */
+  /** Открыть историю версий открытого. */
   onHistory: () => void;
   /** Показать фреймы как слайды. */
   onPresent: () => void;
@@ -108,14 +192,13 @@ export function BoardsPanel({
   const [hubError, setHubError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const [newProject, setNewProject] = useState<string | null>(null);
-  // Удаление — в два касания: первое спрашивает «Точно?», через 4 секунды вопрос снимается.
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  useEffect(() => {
-    if (!confirmDelete) return;
-    const t = setTimeout(() => setConfirmDelete(false), 4000);
-    return () => clearTimeout(t);
-  }, [confirmDelete]);
-  useEffect(() => setConfirmDelete(false), [current]);
+  /** Выбор шаблона новой доски (правка №3) открыт. */
+  const [picking, setPicking] = useState(false);
+  const [newName, setNewName] = useState('');
+  /** Список фреймов раскрыт (правка №5). */
+  const [framesOpen, setFramesOpen] = useState(false);
+  /** Сколько пачек удалённого в корзине на хабе (null — ещё не знаем). */
+  const [trashGroups, setTrashGroups] = useState<number | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const shown = projects.find((p) => p.id === project) ?? null;
   // Сразу ставить курсор в поиск — только при мыши: на планшете это открыло бы клавиатуру на пол-экрана.
@@ -128,10 +211,10 @@ export function BoardsPanel({
     const base = hubHttpUrl(hub.url);
     if (!base) return;
     const ctrl = new AbortController();
-    fetch(`${base}/api/boards`, {
-      headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
-      signal: ctrl.signal,
-    })
+    const headers: Record<string, string> = hub.token
+      ? { Authorization: `Bearer ${hub.token}` }
+      : {};
+    fetch(`${base}/api/boards`, { headers, signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok)
           throw new Error(r.status === 401 ? 'хаб не принял токен' : `хаб ответил ${r.status}`);
@@ -141,8 +224,16 @@ export function BoardsPanel({
       .catch((e: unknown) => {
         if (!ctrl.signal.aborted) setHubError(e instanceof Error ? e.message : 'хаб недоступен');
       });
+    // Корзина пустая — кнопки «Корзина» нет (правка №7).
+    fetch(`${base}/api/trash`, { headers, signal: ctrl.signal })
+      .then(async (r) => {
+        if (!r.ok) return;
+        const { boards } = (await r.json()) as { boards: { groups: unknown[] }[] };
+        setTrashGroups(boards.reduce((n, b) => n + b.groups.length, 0));
+      })
+      .catch(() => {});
     return () => ctrl.abort();
-  }, [hub?.url, hub?.token]);
+  }, [hub?.url, hub?.token, deleted]);
 
   const list = useMemo(
     () =>
@@ -181,372 +272,375 @@ export function BoardsPanel({
     };
   }, [query, hub?.url, hub?.token, current, currentName, searchLocal]);
 
-  const create = (): void => {
-    const title = query.trim() || 'Новая доска';
-    onOpen(boardIdFromName(title), title, true);
+  /** Новая доска: шаблон (null — пустая), название — из поля выбора шаблона. */
+  const createBoard = (template: TemplateId | null): void => {
+    const title =
+      newName.trim() ||
+      (template ? BOARD_TEMPLATES.find((t) => t.id === template)!.name : 'Новая доска');
+    setPicking(false);
+    onOpen(boardIdFromName(title), title, true, template ?? undefined);
   };
-  // Документ (решение 0020): id с «pg_» — по нему сразу видно, что это страница.
+  // Документ и таблица (решения 0020, 0021): id с «pg_» и «tb_».
   const createPage = (): void => {
-    const title = query.trim() || 'Новый документ';
+    const title = 'Новый документ';
     onOpen(pageIdFrom(boardIdFromName(title)), title, true);
   };
-  // Таблица (решение 0021): id с «tb_».
   const createTable = (): void => {
-    const title = query.trim() || 'Новая таблица';
+    const title = 'Новая таблица';
     onOpen(tableIdFrom(boardIdFromName(title)), title, true);
   };
   const kind = docKind(current);
-  const isPage = kind !== null;
+  const isDoc = kind !== null;
   const what =
     kind === 'page' ? 'этого документа' : kind === 'table' ? 'этой таблицы' : 'этой доски';
+  const trashEmpty = trashBoards === 0 && (trashGroups ?? 0) === 0;
 
   return (
-    <aside className="panel boards" aria-label="Доски" data-testid="boards-panel">
-      <div className="panel-head">
-        <h2>Доски</h2>
-        <button className="icon-btn" aria-label="Закрыть" onClick={onClose}>
-          <CloseIcon />
-        </button>
-      </div>
-      <label className="field">
-        <span>Название {what}</span>
-        <CommitInput
-          value={currentName ?? ''}
-          placeholder={current}
-          onCommit={(v) => v.trim() && onRename(v)}
-          data-testid="board-name"
-        />
-      </label>
-      <label className="field">
-        <span>Проект {what}</span>
-        <select
-          value={membership.get(current) ?? ''}
-          onChange={(e) => onMoveBoard(e.target.value || null)}
-          data-testid="board-project"
-        >
-          <option value="">Без проекта</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {!isPage && (
-        <div className="field">
-          <span>Фон этой доски</span>
-          <div className="backgrounds" role="radiogroup" aria-label="Фон доски">
-            {BACKGROUNDS.map((b) => (
-              <button
-                key={b.value}
-                className="bg-option"
-                role="radio"
-                aria-checked={background === b.value}
-                aria-label={b.name}
-                data-bg={b.value}
-                onClick={() => onBackground(b.value)}
-              >
-                <i />
-                <span>{b.name}</span>
-              </button>
-            ))}
-          </div>
+    <aside
+      className="panel boards"
+      aria-label="Доски, документы и таблицы"
+      data-testid="boards-panel"
+    >
+      {/* Открытое сейчас: название, история, проект, фон. */}
+      <section className="panel-section">
+        <div className="panel-head compact">
+          <span className="muted small">Название {what}</span>
+          <button className="icon-btn" aria-label="Закрыть" onClick={onClose}>
+            <CloseIcon />
+          </button>
         </div>
-      )}
-      <div className="projects" role="tablist" aria-label="Проекты" data-testid="projects">
-        <button
-          role="tab"
-          aria-selected={!shown}
-          className="project-chip"
-          onClick={() => onProject(null)}
-        >
-          Все доски
-        </button>
-        {projects.map((p) => (
+        <div className="row name-row">
+          <CommitInput
+            value={currentName ?? ''}
+            placeholder={current}
+            aria-label={`Название ${what}`}
+            onCommit={(v) => v.trim() && onRename(v)}
+            data-testid="board-name"
+          />
           <button
-            key={p.id}
-            role="tab"
-            aria-selected={shown?.id === p.id}
+            className="icon-btn"
+            aria-label="История"
+            title="История версий"
+            onClick={onHistory}
+            data-testid="open-history"
+          >
+            <HistoryIcon />
+          </button>
+        </div>
+        <label className="field">
+          <span>Проект {what}</span>
+          <select
+            value={membership.get(current) ?? ''}
+            onChange={(e) => onMoveBoard(e.target.value || null)}
+            data-testid="board-project"
+          >
+            <option value="">Без проекта</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {!isDoc && (
+          <div className="field">
+            <span>Фон этой доски</span>
+            <div className="backgrounds" role="radiogroup" aria-label="Фон доски">
+              {BACKGROUNDS.map((b) => (
+                <button
+                  key={b.value}
+                  className="bg-option"
+                  role="radio"
+                  aria-checked={background === b.value}
+                  aria-label={b.name}
+                  data-bg={b.value}
+                  onClick={() => onBackground(b.value)}
+                >
+                  <i />
+                  <span>{b.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Создать — отдельно от списка (правки №1, №3). */}
+      <section className="panel-section" data-testid="create-section">
+        <div className="create-row">
+          <button
             className="project-chip"
-            onClick={() => onProject(p.id)}
+            aria-expanded={picking}
+            onClick={() => setPicking((p) => !p)}
+            data-testid="create-board"
           >
-            <i style={{ background: p.color }} />
-            {p.name}
+            <PlusIcon /> Доска
           </button>
-        ))}
-        {newProject === null ? (
-          <button
-            className="project-chip add"
-            aria-label="Новый проект"
-            title="Новый проект"
-            onClick={() => setNewProject('')}
-            data-testid="add-project"
-          >
-            <PlusIcon />
+          <button className="project-chip" onClick={createPage} data-testid="create-page">
+            <DocIcon /> Документ
           </button>
-        ) : (
-          // Форма: «Создать» — кнопкой, «Готово» на экранной клавиатуре или Enter.
-          // Уход фокуса ничего не отменяет — на планшете клавиатуру прячут, не закончив ввод.
-          <form
-            className="project-new"
-            data-testid="new-project"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const n = newProject.trim();
-              if (!n) return;
-              onCreateProject(n);
-              setNewProject(null);
-            }}
-          >
+          <button className="project-chip" onClick={createTable} data-testid="create-table">
+            <TableIcon /> Таблица
+          </button>
+        </div>
+        {picking && (
+          <div className="template-picker" data-testid="templates">
             <input
               className="project-input"
-              autoFocus
-              value={newProject}
-              placeholder="Название проекта"
-              aria-label="Название нового проекта"
+              value={newName}
+              placeholder="Название новой доски"
+              aria-label="Название новой доски"
               enterKeyHint="done"
-              maxLength={60}
-              onChange={(e) => setNewProject(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setNewProject(null);
-              }}
-              data-testid="new-project-name"
+              maxLength={120}
+              onChange={(e) => setNewName(e.target.value)}
+              data-testid="new-board-name"
             />
-            <button
-              type="submit"
-              className="project-chip primary-chip"
-              disabled={!newProject.trim()}
-              data-testid="new-project-create"
-            >
-              Создать
-            </button>
-            <button
-              type="button"
-              className="project-chip add"
-              aria-label="Не создавать проект"
-              title="Не создавать"
-              onClick={() => setNewProject(null)}
-            >
-              <CloseIcon />
-            </button>
-          </form>
+            <div className="template-chips">
+              <button className="project-chip primary-chip" onClick={() => createBoard(null)}>
+                Пустой
+              </button>
+              {BOARD_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  className="project-chip"
+                  title={t.hint}
+                  onClick={() => createBoard(t.id)}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+            {shown && <small className="muted">Появится в проекте «{shown.name}».</small>}
+          </div>
         )}
-      </div>
-      {shown && (
-        <div className="row project-edit">
-          <CommitInput
-            key={shown.id}
-            value={shown.name}
-            aria-label="Название проекта"
-            data-testid="project-name"
-            onCommit={(v) => onRenameProject(shown.id, v)}
-          />
-          <button className="link-btn danger-link" onClick={() => onDeleteProject(shown.id)}>
-            Удалить проект
-          </button>
-        </div>
-      )}
-      <div className="search">
-        <SearchIcon />
-        <input
-          ref={searchRef}
-          value={query}
-          placeholder="Найти или создать доску"
-          aria-label="Найти или создать доску"
-          enterKeyHint="go"
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setActive((a) => Math.min(a + 1, list.length));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setActive((a) => Math.max(a - 1, 0));
-            } else if (e.key === 'Enter') {
-              e.preventDefault();
-              const b = list[active];
-              if (b) onOpen(b.id, b.name, false);
-              else create();
-            } else if (e.key === 'Escape') {
-              onClose();
-            }
-          }}
-        />
-      </div>
-      <ul className="board-list" role="listbox" aria-label="Список досок">
-        {list.length === 0 && shown && !query.trim() && (
-          <li className="muted empty">
-            В проекте пока нет досок — создайте или перенесите текущую.
-          </li>
-        )}
-        {list.map((b, i) => (
-          <li key={b.id}>
-            <button
-              role="option"
-              aria-selected={i === active}
-              className={b.id === current ? 'current' : undefined}
-              onClick={() => onOpen(b.id, b.name, false)}
-              onMouseEnter={() => setActive(i)}
-            >
-              {isPageId(b.id) && <DocIcon />}
-              {docKind(b.id) === 'table' && <TableIcon />}
-              <span className="board-title">{b.name ?? b.id}</span>
-              <span className="board-meta">
-                {isDocId(b.id)
-                  ? b.id === current
-                    ? 'открыт'
-                    : isPageId(b.id)
-                      ? 'документ'
-                      : 'таблица'
-                  : b.id === current
-                    ? 'открыта'
-                    : b.elements !== undefined
-                      ? `${b.elements} эл.`
-                      : ''}
-              </span>
-            </button>
-          </li>
-        ))}
-        <li>
+      </section>
+
+      {/* Проекты, поиск и список. */}
+      <section className="panel-section">
+        <div className="projects" role="tablist" aria-label="Проекты" data-testid="projects">
           <button
-            className="create"
-            aria-selected={active === list.length}
-            onClick={create}
-            onMouseEnter={() => setActive(list.length)}
+            role="tab"
+            aria-selected={!shown}
+            className="project-chip"
+            onClick={() => onProject(null)}
           >
-            <PlusIcon />
-            <span>
-              {query.trim() ? `Создать «${query.trim()}»` : 'Новая доска'}
-              {shown ? ` в «${shown.name}»` : ''}
-            </span>
+            Всё
           </button>
-        </li>
-        <li>
-          <button className="create" onClick={createTable} data-testid="create-table">
-            <TableIcon />
-            <span>
-              {query.trim() ? `Таблица «${query.trim()}»` : 'Новая таблица'}
-              {shown ? ` в «${shown.name}»` : ''}
-            </span>
-          </button>
-        </li>
-        <li>
-          <button className="create" onClick={createPage} data-testid="create-page">
-            <DocIcon />
-            <span>
-              {query.trim() ? `Документ «${query.trim()}»` : 'Новый документ'}
-              {shown ? ` в «${shown.name}»` : ''}
-            </span>
-          </button>
-        </li>
-      </ul>
-      <div className="templates" data-testid="templates">
-        <span className="muted">Или новая доска из шаблона:</span>
-        <div className="template-chips">
-          {BOARD_TEMPLATES.map((t) => (
+          {projects.map((p) => (
             <button
-              key={t.id}
+              key={p.id}
+              role="tab"
+              aria-selected={shown?.id === p.id}
               className="project-chip"
-              title={t.hint}
-              onClick={() => {
-                const title = query.trim() || t.name;
-                onOpen(boardIdFromName(title), title, true, t.id);
-              }}
+              onClick={() => onProject(p.id)}
             >
-              {t.name}
+              <i style={{ background: p.color }} />
+              {p.name}
             </button>
           ))}
-        </div>
-      </div>
-      {found && (
-        <>
-          <h3 className="section-title">
-            {found.length > 0
-              ? `Найдено на досках: ${found.length}`
-              : 'На досках ничего не нашлось'}
-          </h3>
-          {found.length > 0 && (
-            <ul className="board-list found-list" aria-label="Найдено" data-testid="found">
-              {found.map((h) => (
-                <li key={`${h.board}:${h.id}`}>
-                  <button onClick={() => onFind(h.board, h.id, h.boardName)}>
-                    <span className="board-title">{snippet(h.text, query)}</span>
-                    <span className="board-meta">{h.boardName ?? h.board}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          {newProject === null ? (
+            <button
+              className="project-chip add"
+              aria-label="Новый проект"
+              title="Новый проект"
+              onClick={() => setNewProject('')}
+              data-testid="add-project"
+            >
+              <PlusIcon />
+            </button>
+          ) : (
+            // Форма: «Создать» — кнопкой, «Готово» на экранной клавиатуре или Enter.
+            // Уход фокуса ничего не отменяет — на планшете клавиатуру прячут, не закончив ввод.
+            <form
+              className="project-new"
+              data-testid="new-project"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const n = newProject.trim();
+                if (!n) return;
+                onCreateProject(n);
+                setNewProject(null);
+              }}
+            >
+              <input
+                className="project-input"
+                autoFocus
+                value={newProject}
+                placeholder="Название проекта"
+                aria-label="Название нового проекта"
+                enterKeyHint="done"
+                maxLength={60}
+                onChange={(e) => setNewProject(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setNewProject(null);
+                }}
+                data-testid="new-project-name"
+              />
+              <button
+                type="submit"
+                className="project-chip primary-chip"
+                disabled={!newProject.trim()}
+                data-testid="new-project-create"
+              >
+                Создать
+              </button>
+              <button
+                type="button"
+                className="project-chip add"
+                aria-label="Не создавать проект"
+                title="Не создавать"
+                onClick={() => setNewProject(null)}
+              >
+                <CloseIcon />
+              </button>
+            </form>
           )}
-        </>
-      )}
-      {!isPage && frames.length > 0 && (
-        <>
+        </div>
+        {shown && (
+          <div className="row project-edit">
+            <CommitInput
+              key={shown.id}
+              value={shown.name}
+              aria-label="Название проекта"
+              data-testid="project-name"
+              onCommit={(v) => onRenameProject(shown.id, v)}
+            />
+            <button className="link-btn danger-link" onClick={() => onDeleteProject(shown.id)}>
+              Удалить проект
+            </button>
+          </div>
+        )}
+        <div className="search">
+          <SearchIcon />
+          <input
+            ref={searchRef}
+            value={query}
+            placeholder="Найти"
+            aria-label="Найти"
+            enterKeyHint="go"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActive((a) => Math.min(a + 1, list.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActive((a) => Math.max(a - 1, 0));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const b = list[active];
+                if (b) onOpen(b.id, b.name, false);
+              } else if (e.key === 'Escape') {
+                onClose();
+              }
+            }}
+          />
+        </div>
+        <ul className="board-list" role="listbox" aria-label="Список">
+          {list.length === 0 && (
+            <li className="muted empty">
+              {query.trim()
+                ? 'Ничего не нашлось.'
+                : shown
+                  ? 'В проекте пока пусто — создайте или перенесите открытое.'
+                  : 'Пока пусто.'}
+            </li>
+          )}
+          {list.map((b, i) => (
+            <li key={b.id} className="board-item">
+              <button
+                role="option"
+                aria-selected={i === active}
+                className={b.id === current ? 'current' : undefined}
+                onClick={() => onOpen(b.id, b.name, false)}
+                onMouseEnter={() => setActive(i)}
+              >
+                {isPageId(b.id) && <DocIcon />}
+                {docKind(b.id) === 'table' && <TableIcon />}
+                <span className="board-title">{b.name ?? b.id}</span>
+                <span className="board-meta">
+                  {isDocId(b.id)
+                    ? b.id === current
+                      ? 'открыт'
+                      : isPageId(b.id)
+                        ? 'документ'
+                        : 'таблица'
+                    : b.id === current
+                      ? 'открыта'
+                      : b.elements !== undefined
+                        ? `${b.elements} эл.`
+                        : ''}
+                </span>
+              </button>
+              <ItemActions
+                id={b.id}
+                name={b.name}
+                onExport={onExportItem}
+                onDelete={onDeleteItem}
+              />
+            </li>
+          ))}
+        </ul>
+        {found && (
+          <>
+            <h3 className="section-title">
+              {found.length > 0 ? `Найдено внутри: ${found.length}` : 'Внутри ничего не нашлось'}
+            </h3>
+            {found.length > 0 && (
+              <ul className="board-list found-list" aria-label="Найдено" data-testid="found">
+                {found.map((h) => (
+                  <li key={`${h.board}:${h.id}`}>
+                    <button onClick={() => onFind(h.board, h.id, h.boardName)}>
+                      <span className="board-title">{snippet(h.text, query)}</span>
+                      <span className="board-meta">{h.boardName ?? h.board}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
+
+      {!isDoc && frames.length > 0 && (
+        <section className="panel-section">
           <div className="section-row">
-            <h3 className="section-title">Фреймы этой доски</h3>
+            <button
+              className="section-toggle"
+              aria-expanded={framesOpen}
+              onClick={() => setFramesOpen((o) => !o)}
+              data-testid="frames-toggle"
+            >
+              <span className={framesOpen ? 'chev open' : 'chev'}>›</span>
+              Фреймы этой доски <span className="muted">{frames.length}</span>
+            </button>
             <button className="secondary" onClick={onPresent} data-testid="present">
               <PlayIcon />
               Показать
             </button>
           </div>
-          <ul className="board-list frames-list" aria-label="Фреймы" data-testid="frames-list">
-            {frames.map((f) => (
-              <li key={f.id}>
-                <button onClick={() => onFrame(f.id)}>
-                  <span className="board-title">{f.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
+          {framesOpen && (
+            <ul className="board-list frames-list" aria-label="Фреймы" data-testid="frames-list">
+              {frames.map((f) => (
+                <li key={f.id}>
+                  <button onClick={() => onFrame(f.id)}>
+                    <span className="board-title">{f.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
-      {!isPage && (
-        <div className="row export-row">
-          <button className="secondary" onClick={() => onExport('board')} data-testid="export-png">
-            <ExportIcon />
-            PNG
-          </button>
-          <button className="secondary" onClick={() => onExport('pdf')} data-testid="export-pdf">
-            <ExportIcon />
-            PDF{frames.length > 0 ? ` (${frames.length} стр.)` : ''}
-          </button>
-        </div>
-      )}
-      <div className="row board-danger">
-        <button
-          className={confirmDelete ? 'danger-btn confirm' : 'danger-btn'}
-          onClick={() => {
-            if (!confirmDelete) return setConfirmDelete(true);
-            setConfirmDelete(false);
-            onDeleteBoard();
-          }}
-          data-testid="delete-board"
-        >
-          {confirmDelete
-            ? kind === 'page'
-              ? 'Точно удалить документ?'
-              : kind === 'table'
-                ? 'Точно удалить таблицу?'
-                : 'Точно удалить доску?'
-            : kind === 'page'
-              ? 'Удалить этот документ'
-              : kind === 'table'
-                ? 'Удалить эту таблицу'
-                : 'Удалить эту доску'}
-        </button>
-        {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
-        {!confirmDelete && (
-          <button className="secondary" onClick={onHistory} data-testid="open-history">
-            <HistoryIcon />
-            История
-          </button>
-        )}
-        {!confirmDelete && (
+
+      {!trashEmpty && (
+        <section className="panel-section">
           <button className="secondary" onClick={onTrash} data-testid="open-trash">
             <TrashIcon />
-            Корзина{trashCount > 0 ? ` · досок: ${trashCount}` : ''}
+            Корзина
           </button>
-        )}
-      </div>
+        </section>
+      )}
       {hub && hubError && <p className="muted">Список с хаба недоступен: {hubError}</p>}
       {!hub && <p className="muted">Включите синхронизацию — появятся доски с хаба.</p>}
       {finePointer() && <p className="muted">Ctrl/⌘ K — открыть этот список с клавиатуры.</p>}

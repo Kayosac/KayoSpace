@@ -9,10 +9,10 @@ interface OpenAiInfo {
   usage: Record<Kind, { used: number; limit: number }>;
 }
 
-const ROWS: { kind: Kind; name: string; hint: string }[] = [
-  { kind: 'images', name: 'Картинки «нарисуй»', hint: '~$0.05 за картинку' },
-  { kind: 'voice', name: 'Голосовые запросы', hint: '~$0.005 за минуту' },
-  { kind: 'handwriting', name: 'Фрагменты рукописного', hint: 'доли цента за фрагмент' },
+const ROWS: { kind: Kind; name: string }[] = [
+  { kind: 'images', name: 'Картинки «нарисуй»' },
+  { kind: 'voice', name: 'Голосовые запросы' },
+  { kind: 'handwriting', name: 'Фрагменты рукописного' },
 ];
 
 /**
@@ -70,18 +70,12 @@ export function OpenAiSection({ hub }: { hub: Hub }) {
   return (
     <section className="openai" data-testid="openai-settings">
       <h3 className="section-title">OpenAI — лимиты на сутки</h3>
-      <p className="muted">
-        Сверх лимита запрос в OpenAI не уходит — до завтра. Ещё надёжнее: пополнять баланс OpenAI
-        заранее, без автопополнения.
-      </p>
       <ul className="openai-limits">
         {ROWS.map((r) => (
           <li key={r.kind}>
             <span>
               {r.name}
-              <small>
-                сегодня {info.usage[r.kind].used} · {r.hint}
-              </small>
+              <small>сегодня {info.usage[r.kind].used}</small>
             </span>
             <input
               type="number"
@@ -122,13 +116,7 @@ export function OpenAiSection({ hub }: { hub: Hub }) {
           onChange={(e) => void save({ handwriting: e.currentTarget.checked })}
           data-testid="handwriting-toggle"
         />
-        <span>
-          Распознавать рукописное
-          <small>
-            Хаб сам читает написанное пером — его находит поиск и видят агенты. Выключено — новые
-            записи не распознаются, уже распознанное остаётся.
-          </small>
-        </span>
+        <span>Распознавать рукописное</span>
       </label>
     </section>
   );

@@ -19,10 +19,12 @@ export async function reapDeletedBoards(
   store: BoardStore,
   hooks: { purge(id: string): Promise<void> },
   now: number = Date.now(),
+  /** «Очистить корзину» (решение 0022): стереть все удалённые доски, не дожидаясь 7 дней. */
+  all = false,
 ): Promise<string[]> {
   const ws = await store.get(WORKSPACE_ID);
   const due = [...deletedBoards(ws)]
-    .filter(([, d]) => !d.purged && now - d.at >= DELETED_BOARD_KEEP_MS)
+    .filter(([, d]) => !d.purged && (all || now - d.at >= DELETED_BOARD_KEEP_MS))
     .map(([id]) => id);
   for (const id of due) {
     await hooks.purge(id);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Hub } from './devices';
 import { CloseIcon } from './icons';
-import { listAllTrash, restoreTrash, trashTime, type BoardTrash } from './trash';
+import { clearTrash, listAllTrash, restoreTrash, trashTime, type BoardTrash } from './trash';
 
 /**
  * Корзина (решение 0016, отдельная панель — решение 0017): удалённые доски и удалённое со всех досок
@@ -13,6 +13,7 @@ export function TrashPanel({
   deletedBoards,
   onRestoreBoard,
   onOpenBoard,
+  onClearBoards,
   onClose,
 }: {
   /** Хаб (null — синхронизация выключена: корзины элементов нет, доски вернуть можно). */
@@ -21,8 +22,16 @@ export function TrashPanel({
   deletedBoards: readonly { id: string; name: string | null; at: number }[];
   onRestoreBoard: (id: string, name: string | null) => void;
   onOpenBoard: (id: string, name: string | null) => void;
+  /** Стереть удалённые доски насовсем (на этом устройстве; хаб стирает у себя сам). */
+  onClearBoards: () => void;
   onClose: () => void;
 }) {
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
   const [boards, setBoards] = useState<BoardTrash[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -54,6 +63,21 @@ export function TrashPanel({
     }
   };
 
+  /** «Очистить корзину» (решение 0022): на хабе — всё сразу, на устройстве — удалённые доски. */
+  const clear = async (): Promise<void> => {
+    setBusy('clear');
+    try {
+      if (hub) await clearTrash(hub);
+      onClearBoards();
+      setConfirmClear(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не получилось очистить');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Открытая доска — первой: чаще всего возвращают то, что только что удалили здесь.
   const list = boards
     ? [...boards].sort((a, b) => Number(b.board === current) - Number(a.board === current))
@@ -69,6 +93,34 @@ export function TrashPanel({
         </button>
       </div>
       <p className="muted">Удалённое — вами или агентом — лежит здесь 7 дней, потом стирается.</p>
+      {!empty && (boards !== null || !hub) && (
+        <div className="row trash-clear">
+          {confirmClear ? (
+            <>
+              <span>Стереть всё насовсем? Вернуть будет нельзя.</span>
+              <button
+                className="danger-btn confirm"
+                disabled={busy !== null}
+                onClick={() => void clear()}
+                data-testid="trash-clear-confirm"
+              >
+                {busy === 'clear' ? 'Стираю…' : 'Стереть'}
+              </button>
+              <button className="project-chip" onClick={() => setConfirmClear(false)}>
+                Отмена
+              </button>
+            </>
+          ) : (
+            <button
+              className="danger-btn"
+              onClick={() => setConfirmClear(true)}
+              data-testid="trash-clear"
+            >
+              Очистить корзину
+            </button>
+          )}
+        </div>
+      )}
 
       {deletedBoards.length > 0 && (
         <>

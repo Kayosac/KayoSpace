@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
-import type { StrokeTool } from '@kayospace/model';
+import { shapePolygon, type ShapeType, type StrokeTool } from '@kayospace/model';
 import { HIGHLIGHTER_COLOR, STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
 import { ColorPicker } from './ColorPicker';
 import { sizeToSlider } from './colors';
@@ -78,11 +78,50 @@ const PEN_KINDS: { value: StrokeTool; name: string; key: string; Icon: Component
   { value: 'highlighter', name: 'Выделитель', key: 'I', Icon: HighlighterIcon },
 ];
 
-const SHAPES: { value: ShapeKind; name: string; key: string; Icon: ComponentType }[] = [
+/** Значок фигуры по её контуру (решение 0022). */
+const glyph = (shape: ShapeType): ComponentType =>
+  function Glyph() {
+    const pts = shapePolygon(shape, 3.5, 5.5, 17, 13);
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        width="20"
+        height="20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polygon points={pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} />
+      </svg>
+    );
+  };
+
+/** Фигуры — списком, который выпадает вверх от кнопки «Фигуры» (решение 0022). */
+const SHAPES: { value: ShapeKind; name: string; key?: string; Icon: ComponentType }[] = [
   { value: 'rect', name: 'Прямоугольник', key: 'R', Icon: RectIcon },
+  { value: 'roundRect', name: 'Скруглённый прямоугольник', Icon: glyph('roundRect') },
   { value: 'ellipse', name: 'Эллипс', key: 'O', Icon: EllipseIcon },
+  { value: 'triangle', name: 'Треугольник', Icon: glyph('triangle') },
+  { value: 'diamond', name: 'Ромб', Icon: glyph('diamond') },
+  { value: 'hexagon', name: 'Шестиугольник', Icon: glyph('hexagon') },
+  { value: 'star', name: 'Звезда', Icon: glyph('star') },
+  { value: 'blockArrow', name: 'Блок-стрелка', Icon: glyph('blockArrow') },
+  { value: 'bubble', name: 'Выноска', Icon: glyph('bubble') },
   { value: 'line', name: 'Линия', key: 'L', Icon: LineIcon },
   { value: 'arrow', name: 'Стрелка', key: 'A', Icon: ArrowIcon },
+];
+
+/** Заливка фигур: «Прозрачный» — без заливки, дальше — светлые и насыщенные заготовки. */
+const FILL_COLORS: { value: string | null; name: string }[] = [
+  { value: null, name: 'Прозрачный' },
+  { value: '#ffe58a', name: 'Жёлтый' },
+  { value: '#ffc4d1', name: 'Розовый' },
+  { value: '#b8e3c9', name: 'Мятный' },
+  { value: '#bcd7ff', name: 'Голубой' },
+  { value: '#1c1f26', name: 'Чёрный' },
+  { value: '#ffffff', name: 'Белый' },
 ];
 
 const STICKY_NAMES = ['Жёлтый', 'Розовый', 'Мятный', 'Голубой', 'Лавандовый', 'Персиковый'];
@@ -134,14 +173,27 @@ export function Toolbar({
   // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
   const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
   const showSizes = !stickyPalette && tool !== 'text' && tool !== 'frame';
-  const [open, setOpen] = useState<'color' | 'size' | 'doc' | null>(null);
+  const [open, setOpen] = useState<'color' | 'size' | 'doc' | 'shapes' | 'fill' | null>(null);
+  const shapeBtn = useRef<HTMLButtonElement>(null);
+  const fillBtn = useRef<HTMLButtonElement>(null);
+  // Выделены фигуры — цвет контура, заливка и толщина относятся к ним (решение 0022).
+  const selShapes = tool === 'select' ? state.selectionShapes : null;
+  const showFill =
+    (tool === 'shape' && state.shapeKind !== 'line' && state.shapeKind !== 'arrow') ||
+    selShapes !== null;
+  const shownFill = selShapes ? selShapes.fill : tool === 'shape' ? state.fill : null;
+  const currentShape = SHAPES.find((x) => x.value === state.shapeKind) ?? SHAPES[0]!;
   const docBtn = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(null), []);
   const colorBtn = useRef<HTMLButtonElement>(null);
   const sizeBtn = useRef<HTMLButtonElement>(null);
   // Сменили инструмент (в том числе с клавиатуры) — окно о прежнем инструменте закрываем.
-  useEffect(() => setOpen(null), [tool, stickyPalette]);
-  const inkColor = inkTool ? state.color : null;
+  // Список фигур открывается тем же касанием, что выбирает инструмент, — его не закрываем.
+  useEffect(
+    () => setOpen((o) => (o === 'shapes' && tool === 'shape' ? o : null)),
+    [tool, stickyPalette],
+  );
+  const inkColor = selShapes ? selShapes.color : inkTool ? state.color : null;
   const shownColor = stickyPalette
     ? state.stickyColor
     : tool === 'pen' && state.penKind === 'highlighter' && !state.color
@@ -150,24 +202,46 @@ export function Toolbar({
   // Кружок на кнопке — от 4 до 18 пикселей, растёт вместе с толщиной.
   const sizeDot = eraser
     ? Math.round(6 + 12 * sizeToSlider(state.eraserSize, 6, 160))
-    : Math.round(4 + 14 * sizeToSlider(state.size, 0.5, 48));
+    : Math.round(4 + 14 * sizeToSlider(selShapes ? selShapes.size : state.size, 0.5, 48));
   return (
     <nav className="toolbar" aria-label="Инструменты">
       <div className="group" role="radiogroup" aria-label="Инструмент">
-        {TOOLS.map(({ value, name, key, Icon }) => (
-          <button
-            key={value}
-            className="tool"
-            role="radio"
-            aria-checked={tool === value}
-            aria-label={name}
-            title={`${name} (${key})`}
-            data-tool={value}
-            onClick={() => engine.setTool(value)}
-          >
-            <Icon />
-          </button>
-        ))}
+        {TOOLS.map(({ value, name, key, Icon }) =>
+          value === 'shape' ? (
+            // «Фигуры»: касание выбирает инструмент и открывает список фигур вверх.
+            <button
+              key={value}
+              ref={shapeBtn}
+              className="tool"
+              role="radio"
+              aria-checked={tool === value}
+              aria-label={name}
+              aria-haspopup="dialog"
+              aria-expanded={open === 'shapes'}
+              title={`${name}: ${currentShape.name}`}
+              data-tool={value}
+              onClick={() => {
+                if (tool !== 'shape') engine.setTool('shape');
+                setOpen((o) => (o === 'shapes' ? null : 'shapes'));
+              }}
+            >
+              {tool === 'shape' ? <currentShape.Icon /> : <Icon />}
+            </button>
+          ) : (
+            <button
+              key={value}
+              className="tool"
+              role="radio"
+              aria-checked={tool === value}
+              aria-label={name}
+              title={`${name} (${key})`}
+              data-tool={value}
+              onClick={() => engine.setTool(value)}
+            >
+              <Icon />
+            </button>
+          ),
+        )}
         <button
           className="tool"
           aria-label="Картинка или PDF"
@@ -223,26 +297,7 @@ export function Toolbar({
           </div>
         </>
       )}
-      {tool === 'shape' && (
-        <>
-          <span className="sep" />
-          <div className="group" role="radiogroup" aria-label="Фигура">
-            {SHAPES.map(({ value, name, key, Icon }) => (
-              <button
-                key={value}
-                className="tool"
-                role="radio"
-                aria-checked={state.shapeKind === value}
-                aria-label={name}
-                title={`${name} (${key}); Shift — ровно`}
-                onClick={() => engine.setShapeKind(value)}
-              >
-                <Icon />
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+
       <span className="sep" />
       <div className="group">
         <button
@@ -257,6 +312,23 @@ export function Toolbar({
         >
           <span className="current-swatch" style={{ background: shownColor }} />
         </button>
+        {showFill && (
+          <button
+            ref={fillBtn}
+            className="tool picker-btn"
+            aria-label="Заливка"
+            title="Заливка"
+            aria-haspopup="dialog"
+            aria-expanded={open === 'fill'}
+            data-testid="fill-button"
+            onClick={() => setOpen((o) => (o === 'fill' ? null : 'fill'))}
+          >
+            <span
+              className={shownFill ? 'current-swatch filled' : 'current-swatch filled none'}
+              style={shownFill ? { background: shownFill } : undefined}
+            />
+          </button>
+        )}
         {showSizes && (
           <button
             ref={sizeBtn}
@@ -305,6 +377,43 @@ export function Toolbar({
           )}
         </Popover>
       )}
+      {open === 'shapes' && tool === 'shape' && (
+        <Popover anchor={shapeBtn} label="Фигуры" onClose={close} testId="shapes-popover">
+          <div className="shape-grid" role="radiogroup" aria-label="Фигура">
+            {SHAPES.map(({ value, name, key, Icon }) => (
+              <button
+                key={value}
+                className="tool"
+                role="radio"
+                aria-checked={state.shapeKind === value}
+                aria-label={name}
+                title={key ? `${name} (${key}); Shift — ровно` : `${name}; Shift — ровно`}
+                onClick={() => {
+                  engine.setShapeKind(value);
+                  close();
+                }}
+              >
+                <Icon />
+              </button>
+            ))}
+          </div>
+        </Popover>
+      )}
+      {open === 'fill' && showFill && (
+        <Popover anchor={fillBtn} label="Заливка" onClose={close} testId="fill-popover">
+          <ColorPicker
+            value={shownFill}
+            presets={FILL_COLORS}
+            recent={recentColors}
+            transparentNull
+            onPick={(c, o) => {
+              engine.setFill(c);
+              if (o.custom && c) onRecentColor(c);
+              if (o.close) close();
+            }}
+          />
+        </Popover>
+      )}
       {open === 'doc' && docMenu && (
         <Popover anchor={docBtn} label="Документ или таблица" onClose={close} testId="doc-popover">
           {docMenu(close)}
@@ -314,7 +423,7 @@ export function Toolbar({
         <Popover anchor={sizeBtn} label="Толщина" onClose={close} testId="size-popover">
           <SizePicker
             label={eraser ? 'Ластик' : 'Толщина'}
-            value={eraser ? state.eraserSize : state.size}
+            value={eraser ? state.eraserSize : selShapes ? selShapes.size : state.size}
             min={eraser ? 6 : 0.5}
             max={eraser ? 160 : 48}
             presets={eraser ? ERASER_SIZES : PEN_SIZES}

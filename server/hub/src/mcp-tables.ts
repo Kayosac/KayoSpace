@@ -49,7 +49,12 @@ const TYPES_HELP = COLUMN_TYPES.map((t) => `${t.type} — ${t.name.toLowerCase()
 
 const cell = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
-export function registerTableTools(server: McpServer, store: Source, origin: unknown): void {
+export function registerTableTools(
+  server: McpServer,
+  store: Source,
+  origin: unknown,
+  readOnly = false,
+): void {
   server.registerTool(
     'read_table',
     {
@@ -89,6 +94,7 @@ export function registerTableTools(server: McpServer, store: Source, origin: unk
     },
   );
 
+  if (readOnly) return;
   server.registerTool(
     'write_table',
     {

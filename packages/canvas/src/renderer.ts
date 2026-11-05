@@ -17,10 +17,18 @@ import {
   STICKY_FONT_SIZE,
   applyTransform,
   fontSizeOf,
+  TEXT_FONT_SIZE,
   type BoardBackground,
   type Transform,
 } from '@kayospace/board';
-import type { ArrowElement, CanvasElement, FrameElement, ShapeElement } from '@kayospace/model';
+import {
+  ROUND_RECT_RADIUS,
+  shapePolygon,
+  type ArrowElement,
+  type CanvasElement,
+  type FrameElement,
+  type ShapeElement,
+} from '@kayospace/model';
 import { frameTitleBand } from './frames';
 import { DEFAULT_LINE, arrowEnds, arrowHead } from './shapes';
 import { LOD_MAX_WIDTH, appendLine, lodLevel, meanRadius, simplifyLine } from './lod';
@@ -155,6 +163,37 @@ export function taskBand(el: CanvasElement): number {
 
 const TASK_RED = '#d93d42';
 const TASK_DONE = '#2f9e66';
+
+/**
+ * Текст, который при таком масштабе неразличим, — полосками по строкам (решение 0022): длина —
+ * примерно по числу символов, без замеров шрифта (их тысячи на отдалённой доске).
+ */
+export function textBars(
+  ctx: CanvasRenderingContext2D,
+  lines: readonly string[],
+  x: number,
+  top: number,
+  size: number,
+  color: string,
+  zoom: number,
+  maxW = Infinity,
+): void {
+  const lh = size * LINE_HEIGHT;
+  const h = Math.max(size * 0.5, 1 / zoom);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.28;
+  // Строки тоньше пикселя — одним блоком на весь текст.
+  if (lh * zoom < 1.5) {
+    const w = Math.min(maxW, Math.max(...lines.map((l) => l.length)) * size * 0.5);
+    ctx.fillRect(x, top, Math.max(w, 1 / zoom), Math.max(lines.length * lh * 0.8, 1 / zoom));
+  } else {
+    for (let i = 0; i < lines.length; i++) {
+      const w = Math.min(maxW, lines[i]!.length * size * 0.5);
+      if (w > 0) ctx.fillRect(x, top + i * lh + (lh - h) / 2, w, h);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
 
 /** Перенос строк по ширине (по словам; длинное слово режется). */
 export function wrapText(
@@ -792,6 +831,14 @@ export class Renderer {
     ctx.beginPath();
     ctx.roundRect(el.x, el.y, el.w, el.h, 10);
     ctx.fill();
+    // Миниатюра (решение 0022): страница сверху, внизу полоса с названием.
+    const thumb = el.props.thumb
+      ? (this.images?.get(el.props.thumb, Math.max(el.w, el.h) * zoom * this.dpr) ?? null)
+      : null;
+    if (thumb) {
+      this.drawDocThumb(el, thumb, zoom, table);
+      return;
+    }
     ctx.lineWidth = 1.5 / Math.max(zoom, 0.5);
     ctx.strokeStyle = this.colors.frameLine;
     ctx.stroke();
@@ -800,8 +847,20 @@ export class Renderer {
     ctx.roundRect(el.x, el.y, 4, el.h, 2);
     ctx.fill();
     const pad = 16;
-    if (18 * zoom < 3) return; // текст неразличим
     const title = el.props.title || (table ? 'Таблица' : 'Документ');
+    if (18 * zoom < 3) {
+      textBars(
+        ctx,
+        [title],
+        el.x + pad,
+        el.y + pad + 22,
+        18,
+        this.colors.ink,
+        zoom,
+        el.w - pad * 2,
+      );
+      return;
+    }
     const key = `${el.w}|${el.h}|${title}|${el.props.excerpt ?? ''}`;
     if (item.card?.key !== key) {
       const iw = el.w - pad * 2;
@@ -838,6 +897,58 @@ export class Renderer {
       y += 14 * LINE_HEIGHT;
     }
     ctx.globalAlpha = 1;
+  }
+
+  private drawDocThumb(
+    el: CanvasElement & { type: 'doc' },
+    src: CanvasImageSource,
+    zoom: number,
+    table: boolean,
+  ): void {
+    const ctx = this.ctx;
+    const bar = Math.min(44, el.h * 0.3);
+    const iw = (src as { width: number }).width || 480;
+    const ih = (src as { height: number }).height || 300;
+    // Как «cover» сверху: заполняем ширину, лишнее снизу обрезаем.
+    const areaH = el.h - bar;
+    const k = Math.max(el.w / iw, areaH / ih);
+    const sw = el.w / k;
+    const sh = areaH / k;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(el.x, el.y, el.w, el.h, 10);
+    ctx.clip();
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, (iw - sw) / 2, 0, sw, sh, el.x, el.y, el.w, areaH);
+    ctx.fillStyle = this.colors.paper;
+    ctx.fillRect(el.x, el.y + areaH, el.w, bar);
+    ctx.fillStyle = this.colors.frameLine;
+    ctx.fillRect(el.x, el.y + areaH, el.w, 1 / Math.max(zoom, 0.5));
+    ctx.restore();
+    ctx.beginPath();
+    ctx.roundRect(el.x, el.y, el.w, el.h, 10);
+    ctx.lineWidth = 1.5 / Math.max(zoom, 0.5);
+    ctx.strokeStyle = this.colors.frameLine;
+    ctx.stroke();
+    if (14 * zoom < 3) return;
+    const pad = 14;
+    const cy = el.y + areaH + bar / 2;
+    ctx.textBaseline = 'middle';
+    ctx.font = `600 10px ${NOTE_FONT}`;
+    const label = table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ';
+    const lw = ctx.measureText(label).width;
+    ctx.fillStyle = table ? TASK_DONE : this.colors.accent;
+    ctx.fillText(label, el.x + el.w - pad - lw, cy);
+    ctx.font = `700 14px ${NOTE_FONT}`;
+    ctx.fillStyle = this.colors.ink;
+    let title = el.props.title || (table ? 'Таблица' : 'Документ');
+    const room = el.w - pad * 3 - lw;
+    if (ctx.measureText(title).width > room) {
+      while (title.length > 1 && ctx.measureText(`${title}…`).width > room)
+        title = title.slice(0, -1);
+      title = `${title}…`;
+    }
+    ctx.fillText(title, el.x + pad, cy);
   }
 
   private drawImage(item: SceneItem, zoom: number): void {
@@ -1047,8 +1158,22 @@ export class Renderer {
     ctx.lineWidth = 1 / zoom;
     ctx.strokeRect(el.x, el.y, el.w, el.h);
     const size = el.style.size ?? 14;
-    if (size * zoom < 4) return; // название неразличимо
     const band = frameTitleBand(el);
+    if (size * zoom < 4) {
+      // Название неразличимо — полоска на его месте (решение 0022).
+      const name = el.props.name || 'Фрейм';
+      textBars(
+        ctx,
+        [name],
+        el.x,
+        el.y - band / 2 - (size * LINE_HEIGHT) / 2,
+        size,
+        this.colors.ink,
+        zoom,
+        el.w,
+      );
+      return;
+    }
     ctx.font = `500 ${size}px ${NOTE_FONT}`;
     ctx.textBaseline = 'middle';
     ctx.fillStyle = this.colors.ink;
@@ -1107,10 +1232,26 @@ export class Renderer {
       }
       return;
     }
-    if (el.props.shape === 'ellipse') {
+    const kind = el.props.shape;
+    if (kind === 'ellipse') {
       ctx.ellipse(el.x + el.w / 2, el.y + el.h / 2, el.w / 2, el.h / 2, 0, 0, Math.PI * 2);
-    } else {
+    } else if (kind === 'rect') {
       ctx.roundRect(el.x, el.y, el.w, el.h, Math.min(size * 2, el.w / 2, el.h / 2));
+    } else if (kind === 'roundRect') {
+      ctx.roundRect(el.x, el.y, el.w, el.h, Math.min(el.w, el.h) * ROUND_RECT_RADIUS);
+    } else if (kind === 'line') {
+      ctx.moveTo(el.x, el.y);
+      ctx.lineTo(el.x + el.w, el.y + el.h);
+    } else {
+      const pts = shapePolygon(kind, el.x, el.y, el.w, el.h);
+      ctx.moveTo(pts[0]!.x, pts[0]!.y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
+      ctx.closePath();
+    }
+    // Заливка (решение 0022) — под контуром.
+    if (el.style.fill && kind !== 'line') {
+      ctx.fillStyle = el.style.fill;
+      ctx.fill();
     }
     ctx.stroke();
   }
@@ -1121,10 +1262,47 @@ export class Renderer {
       const fit = this.fitSticky(content, el.w, el.h - taskBand(el));
       return { lines: fit.lines, height: el.h };
     }
+    if (el.type === 'text' && el.props.fit) {
+      return { lines: this.fitText(content, el.w, el.h).lines, height: el.h };
+    }
     const size = fontSizeOf(el);
     const measure = this.measurer(400);
     const lines = wrapText(scaled(measure, size), content, el.w);
     return { lines, height: lines.length * size * LINE_HEIGHT };
+  }
+
+  /**
+   * Надпись в рамке (решение 0022): самый крупный шрифт, при котором текст целиком помещается
+   * в рамку (слова не рвутся); пустая — шрифт по высоте одной строки.
+   */
+  fitText(content: string, w: number, h: number): StickyFit {
+    const measure = this.measurer(400);
+    const max = Math.max(1, h / LINE_HEIGHT);
+    const text = content.trim() ? content : '';
+    if (!text) return { size: Math.min(max, TEXT_FONT_SIZE * 4), lines: [], pad: 0 };
+    const words = text.split(/\s+/).filter(Boolean);
+    const widest = Math.max(...words.map((wd) => measure(wd)));
+    const fits = (size: number): string[] | null => {
+      if ((widest * size) / 100 > w) return null;
+      const lines = wrapText(scaled(measure, size), text, w);
+      return lines.length * size * LINE_HEIGHT <= h ? lines : null;
+    };
+    const min = 0.5;
+    let lo = min;
+    let hi = max;
+    let best = fits(lo);
+    if (!best) return { size: min, lines: wrapText(scaled(measure, min), text, w), pad: 0 };
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      const lines = fits(mid);
+      if (lines) {
+        lo = mid;
+        best = lines;
+      } else {
+        hi = mid;
+      }
+    }
+    return { size: lo, lines: best, pad: 0 };
   }
 
   /**
@@ -1212,6 +1390,10 @@ export class Renderer {
       if (item.fit?.key !== key)
         item.fit = { key, ...this.fitSticky(el.props.content, el.w, el.h - band) };
       ({ size, pad, lines } = item.fit);
+    } else if (el.props.fit) {
+      const key = `${el.w}|${el.h}|${el.props.content}`;
+      if (item.fit?.key !== key) item.fit = { key, ...this.fitText(el.props.content, el.w, el.h) };
+      ({ size, pad, lines } = item.fit);
     } else {
       size = fontSizeOf(el);
       pad = 0;
@@ -1219,7 +1401,22 @@ export class Renderer {
       lines = item.lines;
     }
     if (el.type === 'sticky' && el.props.task && band * zoom >= 6) this.drawTaskBand(el, band);
-    if (size * zoom < 3 || lines.length === 0) return; // текст неразличим — не тратим время
+    if (lines.length === 0) return;
+    const lh0 = size * LINE_HEIGHT;
+    const top0 = sticky ? el.y + (el.h - band - lines.length * lh0) / 2 : el.y;
+    if (size * zoom < 3) {
+      // Текст неразличим — серые полоски строк (решение 0022): видно, что здесь написано.
+      textBars(
+        ctx,
+        lines,
+        el.x + pad,
+        top0,
+        size,
+        sticky ? STICKY_INK : (item.color ?? this.colors.ink),
+        zoom,
+      );
+      return;
+    }
     const done = el.type === 'sticky' && el.props.task?.status === 'done';
     if (done) ctx.globalAlpha = 0.5;
     ctx.font = `${sticky ? 500 : 400} ${size}px ${NOTE_FONT}`;

@@ -24,6 +24,7 @@ import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
 import { AssetStore, handleAsset, readBody } from './assets';
 import { handleRender } from './mcp-pages';
+import { DocThumbs, handleDocExport } from './doc-export';
 import { Backups, handleBackups } from './backups';
 import { handleSearch } from './search';
 import { Trash, handleTrash } from './trash';
@@ -39,7 +40,7 @@ import { MAX_VOICE_BYTES, OpenAi, OpenAiError, type OpenAiConfig } from './opena
 import { loadImages } from './render';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.12.0';
+export const HUB_VERSION = '0.13.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -118,6 +119,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     quietMs: opts.handwritingQuietMs,
   });
   store.onLoad((id, doc) => handwriting.attach(id, doc));
+  // Миниатюры документов и таблиц для карточек на досках (решение 0022).
+  const docThumbs = new DocThumbs(store, assets);
   const backups = new Backups(store, { intervalMs: opts.backupIntervalMs ?? 6 * 3_600_000 });
   backups.start();
   /** MCP черновиков ИИ: по обработчику на задачу. */
@@ -283,6 +286,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     }
     if (await handleBackups(req, res, url, backups, access)) return;
     if (await handleSearch(req, res, url, store, handwriting.enabled ? handwriting : null)) return;
+    // «Очистить корзину» (решение 0022): удалённое с досок и удалённые доски — насовсем.
+    if (url.pathname === '/api/trash/clear' && req.method === 'POST') {
+      for (const b of await trash.boardIds()) await trash.purge(b);
+      const boards = await reap(undefined, true);
+      return json(res, 200, { boards: boards.length });
+    }
     if (await handleTrash(req, res, url, trash, store)) return;
     if (
       await handleTasks(req, res, url, store, {
@@ -293,6 +302,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return;
     if (await handleHistory(req, res, url, history, (els) => loadImages(els, assets))) return;
     if (await handleRender(req, res, url, store, assets)) return;
+    if (await handleDocExport(req, res, url, store, assets, docThumbs)) return;
     const asset = /^\/api\/assets\/([^/]+)$/.exec(url.pathname);
     if (asset) return handleAsset(req, res, assets, asset[1]!);
     json(res, 404, { error: 'Не найдено' });
@@ -308,7 +318,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   // Отключили устройство — его открытые соединения закрываются сразу.
   devices.onRevoke((id) => sync.dropDevice(id));
 
-  const reap = (now?: number): Promise<string[]> =>
+  const reap = (now?: number, all = false): Promise<string[]> =>
     reapDeletedBoards(
       store,
       {
@@ -320,6 +330,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         },
       },
       now,
+      all,
     );
   const reaper = setInterval(
     () => void reap().catch((err) => console.error('[hub] не стёрлись удалённые доски', err)),

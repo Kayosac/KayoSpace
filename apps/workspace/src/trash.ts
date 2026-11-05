@@ -45,6 +45,15 @@ export async function restoreTrash(hub: Hub, board: string, ids: string[]): Prom
   return r.restored;
 }
 
+/** «Очистить корзину»: удалённое со всех досок и удалённые доски — насовсем (решение 0022). */
+export async function clearTrash(hub: Hub): Promise<void> {
+  await hubCall<{ boards: number }>(fetch, hub.url, '/api/trash/clear', {
+    method: 'POST',
+    token: hub.token,
+    body: {},
+  });
+}
+
 /** «сегодня в 14:05», «вчера в 09:12», «3 ноября в 18:40». */
 export function trashTime(at: number, now: number = Date.now()): string {
   const d = new Date(at);

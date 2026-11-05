@@ -1,22 +1,16 @@
-import { useState, type FormEvent } from 'react';
-import { isValidBoardId } from '@kayospace/sync';
 import type { ConnectionState } from './connection';
 import { DevicesSection } from './DevicesSection';
 import { BackupsSection } from './BackupsSection';
 import { OpenAiSection } from './OpenAiSection';
 import type { useUpdates } from './UpdateBanner';
-import type { SessionState } from './session';
 import type { WorkspaceSettings } from './settings';
 import { CloseIcon } from './icons';
-import { SYNC_TEXT } from './Chips';
 
 declare const __APP_VERSION__: string;
 
 export function SettingsPanel({
   settings,
-  state,
   connection,
-  onApply,
   onConnect,
   onSelfRevoked,
   onTouchDraws,
@@ -28,9 +22,7 @@ export function SettingsPanel({
   onClose,
 }: {
   settings: WorkspaceSettings;
-  state: SessionState | null;
   connection: ConnectionState;
-  onApply: (patch: Partial<WorkspaceSettings>) => void;
   /** Открыть экран подключения к хабу. */
   onConnect: () => void;
   /** Это устройство отключили из списка устройств. */
@@ -44,62 +36,26 @@ export function SettingsPanel({
   updates: ReturnType<typeof useUpdates>;
   onClose: () => void;
 }) {
-  const [board, setBoard] = useState(settings.board);
-
-  const boardOk = isValidBoardId(board.trim());
-  const changed = board.trim() !== settings.board;
-
-  const submit = (e: FormEvent): void => {
-    e.preventDefault();
-    if (!boardOk) return;
-    onApply({ board: board.trim() });
-  };
-
   const hub = connection.hub;
-  const status = state ? (SYNC_TEXT[state.sync] ?? state.sync) : '';
 
   return (
     <aside className="panel" aria-label="Настройки">
       <div className="panel-head">
-        <h2>Доска и синхронизация</h2>
+        <h2>Настройки</h2>
         <button className="icon-btn" aria-label="Закрыть" onClick={onClose}>
           <CloseIcon />
         </button>
       </div>
-      <form onSubmit={submit}>
-        <label className="field">
-          <span>Доска</span>
-          <input
-            value={board}
-            onChange={(e) => setBoard(e.target.value)}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            data-testid="board-input"
-          />
-          {!boardOk && <small className="bad">Латиница, цифры, «-» и «_», до 64 символов.</small>}
-        </label>
-        {changed && (
-          <div className="row">
-            <button type="submit" className="primary" disabled={!boardOk}>
-              Открыть
-            </button>
-          </div>
-        )}
-      </form>
-      <hr />
       <div className="hub-info" data-testid="hub-info">
         {connection.dev ? (
           <>
             <span className="muted">Локальный хаб разработки</span>
             <b className="mono">{hub?.url}</b>
-            <span className="muted">{status}</span>
           </>
         ) : hub ? (
           <>
             <span className="muted">Хаб</span>
             <b className="mono">{hub.url}</b>
-            <span className="muted">{status}</span>
             <button className="link-btn" onClick={onConnect}>
               Подключить к другому хабу
             </button>

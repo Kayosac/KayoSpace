@@ -1,7 +1,12 @@
 /** Геометрия фигур и стрелок: рамки, расстояние до контура, наконечники. */
 
 import type { Bounds } from '@kayospace/ink';
-import type { ArrowElement, CanvasElement, ShapeElement } from '@kayospace/model';
+import {
+  shapePolygon,
+  type ArrowElement,
+  type CanvasElement,
+  type ShapeElement,
+} from '@kayospace/model';
 import { distToSegment, type Pt } from './erase';
 
 export const DEFAULT_LINE = 2;
@@ -153,16 +158,10 @@ export function outlineDistance(
     if (el.props.shape === 'ellipse') {
       return polygonDistance(ellipsePolygon(el.x, el.y, el.w, el.h), px, py);
     }
-    return polygonDistance(
-      [
-        { x: el.x, y: el.y },
-        { x: el.x + el.w, y: el.y },
-        { x: el.x + el.w, y: el.y + el.h },
-        { x: el.x, y: el.y + el.h },
-      ],
-      px,
-      py,
-    );
+    if (el.props.shape === 'line') {
+      return distToSegment(px, py, { x: el.x, y: el.y }, { x: el.x + el.w, y: el.y + el.h });
+    }
+    return polygonDistance(shapePolygon(el.props.shape, el.x, el.y, el.w, el.h), px, py);
   }
   return Infinity;
 }
