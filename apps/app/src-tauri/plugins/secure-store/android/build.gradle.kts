@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "app.kayospace.securestore"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         // Android Keystore с AES-GCM — с API 23.
