@@ -30,12 +30,23 @@ export default defineConfig({
     ...(process.env.E2E_CHROME_CHANNEL ? { channel: process.env.E2E_CHROME_CHANNEL } : {}),
     viewport: { width: 1280, height: 800 },
     trace: 'retain-on-failure',
+    // Поддельный микрофон — для проверки голоса без устройства и без вопроса о разрешении.
+    launchOptions: {
+      args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+    },
   },
   webServer: [
     {
       command: 'pnpm --filter @kayospace/hub start',
       url: `http://127.0.0.1:${HUB_PORT}/health`,
-      env: { PORT: String(HUB_PORT), HOST: '127.0.0.1', DATA_DIR: dataDir, HUB_TOKEN },
+      env: {
+        PORT: String(HUB_PORT),
+        HOST: '127.0.0.1',
+        DATA_DIR: dataDir,
+        HUB_TOKEN,
+        HISTORY_QUIET_MS: '300',
+        HISTORY_GAP_MS: '0',
+      },
       reuseExistingServer: false,
       timeout: 60_000,
     },

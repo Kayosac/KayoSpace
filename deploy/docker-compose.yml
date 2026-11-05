@@ -26,6 +26,11 @@ services:
       INTERNAL_HOSTS: hub
       # Резервные копии досок (в томе данных, папка backups/): раз в столько часов, 0 — выключить.
       BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-6}
+      # OpenAI (решение 0018): «нарисуй …» и голос для ИИ в приложении. Пусто — выключено.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-}
+      OPENAI_IMAGE_QUALITY: ${OPENAI_IMAGE_QUALITY:-}
+      OPENAI_TRANSCRIBE_MODEL: ${OPENAI_TRANSCRIBE_MODEL:-}
     volumes:
       - hub-data:/data
     mem_limit: ${HUB_MEMORY:-768m}

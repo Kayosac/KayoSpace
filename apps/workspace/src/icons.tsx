@@ -272,3 +272,18 @@ export const PdfIcon = () => (
     <path d="M9 13h6M9 17h4" />
   </Svg>
 );
+
+export const HistoryIcon = () => (
+  <Svg>
+    <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" />
+    <path d="M3 4v4h4" />
+    <path d="M12 8v4l3 2" />
+  </Svg>
+);
+
+export const MicIcon = () => (
+  <Svg>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+  </Svg>
+);

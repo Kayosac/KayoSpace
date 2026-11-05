@@ -87,6 +87,9 @@ export function presentationSlides<T extends { id: string; bounds: Bounds }>(
   return rows.flatMap((r) => r.sort((a, b) => a.bounds.minX - b.bounds.minX));
 }
 
+/** Поле фрейма вокруг страницы PDF: за него фрейм берут и двигают, не попадая в страницу. */
+export const PDF_PAGE_MARGIN = 32;
+
 /** Ширина страницы PDF на доске (мировые единицы): A4 — 800×1131. */
 export const PDF_PAGE_WIDTH = 800;
 

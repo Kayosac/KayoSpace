@@ -14,6 +14,8 @@ import {
 } from './settings';
 import { BoardsPanel } from './BoardsPanel';
 import { TrashPanel } from './TrashPanel';
+import { HistoryPanel } from './HistoryPanel';
+import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
 import { AssetStore, imageFiles } from './assets';
 import { isPdf, pdfFiles, pdfTitle, renderPdf, MAX_PDF_PAGES } from './pdf-import';
@@ -100,7 +102,7 @@ export function App() {
   const [settings, setSettings] = useState<WorkspaceSettings>(loadSettings);
   const [session, setSession] = useState<BoardSession | null>(null);
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
-  const [panel, setPanel] = useState<'settings' | 'boards' | 'trash' | null>(null);
+  const [panel, setPanel] = useState<'settings' | 'boards' | 'trash' | 'history' | null>(null);
   // Презентация по фреймам (решение 0017).
   const [presenting, setPresenting] = useState(false);
   const [dropping, setDropping] = useState(false);
@@ -361,6 +363,8 @@ export function App() {
     () => (hubUrl ? { url: hubUrl, token: hubToken } : null),
     [hubUrl, hubToken],
   );
+  // Голос и генерация картинок — если на хабе есть ключ OpenAI (решение 0018).
+  const features = useHubFeatures(hubForPanels);
   const forgotten = useRef(new Set<string>());
   useEffect(() => {
     if (deleted.size === 0) return;
@@ -811,6 +815,7 @@ export function App() {
             ai.cancel();
           }}
           onDiscard={() => ai.cancel()}
+          voiceHub={features.voice ? hubForPanels : null}
         />
       )}
       {aiPrompt && aiBlocked && aiState?.kind === 'idle' && (
@@ -873,6 +878,7 @@ export function App() {
           trashCount={restorable.length}
           onDeleteBoard={() => wsDoc && markBoardDeleted(wsDoc, board, boardName)}
           onTrash={() => setPanel('trash')}
+          onHistory={() => setPanel('history')}
           onPresent={() => {
             setPanel(null);
             setPresenting(true);
@@ -887,6 +893,16 @@ export function App() {
             if (id !== board) openBoard(id, name, false);
             else setFocusTick((t) => t + 1);
           }}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === 'history' && (
+        <HistoryPanel
+          hub={hubForPanels}
+          board={board}
+          boardName={boardName}
+          onOpenBoard={(id, name) => openBoard(id, name, false)}
+          onToast={(t) => showToast(t, 5000)}
           onClose={() => setPanel(null)}
         />
       )}

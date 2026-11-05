@@ -9,6 +9,7 @@
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { HUB_VERSION, startHub } from './hub';
+import { openAiFromEnv } from './openai';
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? '0.0.0.0';
@@ -40,6 +41,8 @@ if (!token && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
 const backupHours = Number(process.env.BACKUP_INTERVAL_HOURS ?? 6);
 const backupIntervalMs = Number.isFinite(backupHours) ? Math.max(0, backupHours) * 3_600_000 : 0;
 
+const openai = openAiFromEnv();
+
 const hub = await startHub({
   port,
   host,
@@ -49,6 +52,10 @@ const hub = await startHub({
   publicUrl,
   internalHosts,
   backupIntervalMs,
+  openai,
+  // Для проверок: версии истории — почти сразу (по умолчанию — после 2 минут затишья).
+  ...(process.env.HISTORY_QUIET_MS ? { historyQuietMs: Number(process.env.HISTORY_QUIET_MS) } : {}),
+  ...(process.env.HISTORY_GAP_MS ? { historyGapMs: Number(process.env.HISTORY_GAP_MS) } : {}),
 });
 
 const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(host);
@@ -66,6 +73,11 @@ console.log(
   backupIntervalMs > 0
     ? `  копии:         ${hub.backups.dir} (раз в ${backupHours} ч, если были изменения)`
     : '  копии:         выключены (BACKUP_INTERVAL_HOURS=0)',
+);
+console.log(
+  openai
+    ? `  OpenAI:        картинки (${openai.imageModel ?? 'gpt-image-2'}) и голос — включены`
+    : '  OpenAI:        выключен (нет OPENAI_API_KEY): «нарисуй» — силами Claude, голоса нет',
 );
 if (loopbackOnly) console.log('  доступен только с этого компьютера (127.0.0.1)');
 console.log(`  MCP (агенты):  http://localhost:${hub.port}/mcp`);

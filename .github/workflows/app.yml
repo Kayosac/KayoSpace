@@ -123,11 +123,11 @@ jobs:
             pnpm --filter @kayospace/app tauri android build --apk --debug --target aarch64
           fi
 
-      - name: «Поделиться» и kayospace:// в APK — проверка
+      - name: «Поделиться», kayospace:// и микрофон в APK — проверка
         run: |
           APK=$(find apps/app/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
           TREE=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree --file AndroidManifest.xml "$APK")
-          for want in android.intent.action.SEND android.intent.action.SEND_MULTIPLE '"kayospace"'; do
+          for want in android.intent.action.SEND android.intent.action.SEND_MULTIPLE '"kayospace"' android.permission.RECORD_AUDIO; do
             echo "$TREE" | grep -q -- "$want" || { echo "::error::в APK нет фильтра $want"; exit 1; }
           done
           echo "Фильтры на месте"

@@ -31,6 +31,8 @@ import { registerLayoutTools } from './mcp-layout';
 import { registerExtraTools } from './mcp-extra';
 import { registerImageTools } from './mcp-images';
 import type { Trash } from './trash';
+import type { History } from './history';
+import type { OpenAi } from './openai';
 import { AGENT_GUIDE } from './agent-guide';
 import { boardSvg, contentArea, loadImages, renderPng, type Area } from './render';
 import type { BoardInfo } from './store';
@@ -77,6 +79,22 @@ export function boardLink(board: string, element?: string): string {
 }
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+
+/** Распознанное рукописное — разделом в конце markdown доски. */
+function handwritingMarkdown(
+  entries: readonly { text: string; bounds: { minX: number; minY: number } }[],
+): string {
+  if (entries.length === 0) return '';
+  return (
+    '\n\n## Рукописное (распознано)\n\n' +
+    entries
+      .map(
+        (e) =>
+          `- (${Math.round(e.bounds.minX)}, ${Math.round(e.bounds.minY)}): ${e.text.replace(/\n+/g, ' / ')}`,
+      )
+      .join('\n')
+  );
+}
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
 
 // Служебные документы (воркспейс с проектами) начинаются с «_» — агентам они не доски.
@@ -99,6 +117,15 @@ export function createMcp(
     actorName?: string;
     assets?: AssetSource | null;
     trash?: Trash | null;
+    history?: History | null;
+    /** Распознанное рукописное (решение 0018): в read_board, fetch и search. */
+    handwriting?: {
+      entries(
+        board: string,
+      ): Promise<{ ids: string[]; text: string; bounds: { minX: number; minY: number } }[]>;
+    } | null;
+    /** OpenAI (решение 0018): генерация картинок, если на хабе есть ключ. */
+    openai?: OpenAi | null;
     /** Только для тестов: картинки по ссылкам с этого компьютера. */
     allowPrivateImageUrls?: boolean;
   } = {},
@@ -144,11 +171,13 @@ export function createMcp(
       async ({ board, format }) => {
         if (!(await store.has(board))) return fail(`Доски «${board}» нет. Список — list_boards.`);
         const doc = await store.get(board);
-        return text(
-          format === 'json'
-            ? JSON.stringify(boardToJSON(doc, board), null, 2)
-            : boardToMarkdown(doc, board),
-        );
+        const hw = (await opts.handwriting?.entries(board)) ?? [];
+        if (format === 'json') {
+          const out = boardToJSON(doc, board) as Record<string, unknown>;
+          if (hw.length) out.handwriting = hw.map((e) => ({ strokes: e.ids, text: e.text }));
+          return text(JSON.stringify(out, null, 2));
+        }
+        return text(boardToMarkdown(doc, board) + handwritingMarkdown(hw));
       },
     );
 
@@ -372,7 +401,8 @@ export function createMcp(
 
     registerLayoutTools(server, store, who, MCP_ORIGIN);
     // Корзина, изменения и проекты — только у настоящих досок хаба (у черновиков ИИ их нет).
-    if (opts.trash) registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who);
+    if (opts.trash)
+      registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who, opts.history ?? null);
     const assets = opts.assets;
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)
@@ -382,7 +412,7 @@ export function createMcp(
         { get: (id) => assets.get(id), put: (id, d) => assets.put!(id, d) },
         who,
         MCP_ORIGIN,
-        { allowPrivateUrls: opts.allowPrivateImageUrls },
+        { allowPrivateUrls: opts.allowPrivateImageUrls, openai: opts.openai ?? null },
       );
 
     server.registerTool(
@@ -464,7 +494,7 @@ export function createMcp(
         inputSchema: z.object({ query: z.string().min(1) }),
       },
       async ({ query }) => {
-        const hits = await searchBoards(store, query, 200);
+        const hits = await searchBoards(store, query, 200, opts.handwriting ?? null);
         const results = hits.map((h) => ({
           id: `${h.board}#${h.id}`,
           title: `${h.boardName ?? h.board}: ${h.text.replace(/\s+/g, ' ').slice(0, 80)}`,
@@ -500,7 +530,9 @@ export function createMcp(
             {
               id,
               title: name,
-              text: boardToMarkdown(doc, parsed.data),
+              text:
+                boardToMarkdown(doc, parsed.data) +
+                handwritingMarkdown((await opts.handwriting?.entries(parsed.data)) ?? []),
               url: boardLink(parsed.data, element),
               metadata: { board: parsed.data, ...(element ? { element } : {}) },
             },

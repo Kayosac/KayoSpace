@@ -194,6 +194,7 @@ describe('подсказки для клиентов', () => {
       'list_deleted_boards',
       'list_projects',
       'list_trash',
+      'list_versions',
       'read_board',
       'search',
       'view_board',

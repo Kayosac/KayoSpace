@@ -29,6 +29,7 @@ import {
 } from './images';
 import { frameOrigin, grown } from './mcp-layout';
 import { renderPng } from './render';
+import { OpenAiError, type OpenAi } from './openai';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -63,7 +64,7 @@ export function registerImageTools(
   assets: ImageAssets,
   agentOf: () => Actor,
   origin: unknown,
-  opts: { allowPrivateUrls?: boolean } = {},
+  opts: { allowPrivateUrls?: boolean; openai?: OpenAi | null } = {},
 ): void {
   /** Скачать или раскодировать картинку и положить файл в хранилище; строка — понятная ошибка. */
   const load = async (
@@ -245,6 +246,48 @@ export function registerImageTools(
       return place(board, [{ ...r, alt: alt ?? file.file_name, width }], { at, frame });
     },
   );
+
+  const openai = opts.openai;
+  if (openai) {
+    server.registerTool(
+      'generate_image',
+      {
+        description:
+          'Нарисовать картинку генератором изображений (OpenAI) и положить на доску — для «нарисуй …», ' +
+          '«сгенерируй …». prompt — подробное описание по-английски: что изображено, стиль, цвета, ' +
+          'надписи (в кавычках, на нужном языке). Не для фото из интернета — их ищи и клади по url.',
+        inputSchema: z.object({
+          board: boardId,
+          prompt: z.string().min(3).max(4000),
+          alt: z.string().max(500).optional().describe('подпись по-русски: что на картинке'),
+          shape: z
+            .enum(['square', 'landscape', 'portrait'])
+            .optional()
+            .describe('квадрат (по умолчанию), горизонтальная или вертикальная'),
+          width: z
+            .number()
+            .positive()
+            .max(4000)
+            .optional()
+            .describe('ширина на доске, по умолчанию 480'),
+          at: z.object({ x: z.number(), y: z.number() }).optional(),
+          frame: z.string().optional().describe('id фрейма, в который положить'),
+        }),
+      },
+      async ({ board, prompt, alt, shape, width, at, frame }) => {
+        let bytes: Buffer;
+        try {
+          bytes = await openai.generateImage(prompt, shape ?? 'square');
+        } catch (err) {
+          if (err instanceof OpenAiError) return fail(err.message);
+          throw err;
+        }
+        const r = await load({ data: bytes.toString('base64') });
+        if (typeof r === 'string') return fail(`OpenAI вернул не то: ${r}`);
+        return place(board, [{ ...r, alt: alt ?? prompt.slice(0, 200), width }], { at, frame });
+      },
+    );
+  }
 
   server.registerTool(
     'get_image',

@@ -26,10 +26,12 @@
   устройства и коды подключения (`devices.ts`, `pnpm pair` — решение 0008), резервные копии (`backups.ts` — решение 0010);
   для агентов — раскладка (`mcp-layout.ts`), картинка доски (`render.ts`), инструкции (`agent-guide.ts`) — решение 0015;
   корзина (`trash.ts`), удалённые доски (`deleted-boards.ts`), картинки (`images.ts`, `mcp-images.ts`),
-  изменения и проекты (`mcp-extra.ts`) — решение 0016.
+  изменения и проекты (`mcp-extra.ts`) — решение 0016; история версий (`history.ts`), рукописное
+  (`handwriting.ts`), OpenAI — картинки, голос, распознавание (`openai.ts`, ключ только на хабе) — решение 0018.
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк;
-  корзина (`TrashPanel.tsx`), презентация (`Presentation.tsx`), импорт PDF (`pdf-import.ts`, pdf.js) — решение 0017.
+  корзина (`TrashPanel.tsx`), презентация (`Presentation.tsx`), импорт PDF (`pdf-import.ts`, pdf.js) — решение 0017;
+  история (`HistoryPanel.tsx`), голос (`voice.ts`) — решение 0018.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
   single-instance, barcode-scanner (Android), свои `plugins/secure-store` (токен устройства в хранилище ОС)
   и `plugins/share-target` («Поделиться» в Android → доска «Входящие»).
@@ -95,3 +97,5 @@
 - Удалённая доска — отметка в воркспейсе (`markBoardDeleted`), не стирание: 7 дней её можно вернуть.
   Для агентов удалённых досок нет (`BoardStore.live()`). Хаб скачивает картинки по ссылкам только через
   `fetchImage` (защита от SSRF).
+- Ключ OpenAI (`OPENAI_API_KEY`) — только в окружении хаба; устройства спрашивают `/api/features` и шлют
+  голос на `/api/voice`. Возврат версии — новой правкой (`History.restore`), не подменой документа.

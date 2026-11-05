@@ -28,6 +28,7 @@ import {
 import type { Actor } from '@kayospace/model';
 import type { BoardInfo } from './store';
 import type { Trash } from './trash';
+import type { History } from './history';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -54,7 +55,44 @@ export function registerExtraTools(
   trash: Trash,
   origin: unknown,
   agentOf: () => Actor = () => ({ kind: 'agent', name: 'mcp' }),
+  history: History | null = null,
 ): void {
+  if (history) {
+    server.registerTool(
+      'list_versions',
+      {
+        description:
+          'История версий доски: когда, сколько элементов, кто менял (хаб запоминает доску сам). ' +
+          'Вернуть — restore_version с at из списка.',
+        annotations: { readOnlyHint: true },
+        inputSchema: z.object({ board: boardId }),
+      },
+      async ({ board }) => {
+        const list = await history.versions(board);
+        return list.length
+          ? json(list.map((v) => ({ ...v, time: new Date(v.at).toISOString() })))
+          : text('Версий пока нет.');
+      },
+    );
+    server.registerTool(
+      'restore_version',
+      {
+        description:
+          'Вернуть доску к версии (at из list_versions) — только по просьбе человека. Текущее состояние ' +
+          'перед этим тоже сохраняется версией, удалённое ляжет в корзину.',
+        annotations: { destructiveHint: true },
+        inputSchema: z.object({ board: boardId, at: z.number().int() }),
+      },
+      async ({ board, at }) => {
+        if (!(await store.has(board))) return fail(`Доски «${board}» нет.`);
+        const r = await history.restore(board, at);
+        return r
+          ? text(`Доска возвращена к версии: изменено ${r.changed}.`)
+          : fail('Такой версии нет.');
+      },
+    );
+  }
+
   server.registerTool(
     'list_trash',
     {

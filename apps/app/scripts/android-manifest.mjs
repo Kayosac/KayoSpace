@@ -1,4 +1,5 @@
-// Фильтры активности Android: «Поделиться» → Kayospace и ссылки kayospace:// (решения 0010, 0013).
+// Фильтры активности Android: «Поделиться» → Kayospace и ссылки kayospace:// (решения 0010, 0013),
+// разрешение на микрофон для голоса (решение 0018).
 //
 // Плагины дописывают их в AndroidManifest.xml из своих build.rs — но только когда build.rs запускается.
 // С кэшем сборки (решение 0013) он не запускается, а gen/android каждый раз создаётся заново
@@ -69,8 +70,26 @@ export function insertBlock(xml, id, contents) {
   return out.join('\n');
 }
 
+/** Разрешения приложения (микрофон для голоса — решение 0018): перед <application>, без повторов. */
+export const PERMISSIONS = [
+  'android.permission.RECORD_AUDIO',
+  'android.permission.MODIFY_AUDIO_SETTINGS',
+];
+
+export function insertPermissions(xml, permissions) {
+  const missing = permissions.filter((p) => !xml.includes(`android:name="${p}"`));
+  if (missing.length === 0) return xml;
+  const at = xml.indexOf('<application');
+  if (at < 0) throw new Error('нет <application в AndroidManifest.xml');
+  const lineStart = xml.lastIndexOf('\n', at) + 1;
+  const pad = xml.slice(lineStart, at);
+  const lines = missing.map((p) => `${pad}<uses-permission android:name="${p}" />\n`).join('');
+  return xml.slice(0, lineStart) + lines + xml.slice(lineStart);
+}
+
 export function patchManifest(xml, { buildRs, conf }) {
-  let out = insertBlock(xml, 'SHARE TARGET PLUGIN', shareFilters(buildRs));
+  let out = insertPermissions(xml, PERMISSIONS);
+  out = insertBlock(out, 'SHARE TARGET PLUGIN', shareFilters(buildRs));
   const links = deepLinkFilters(conf);
   if (links) out = insertBlock(out, 'DEEP LINK PLUGIN', links);
   return out;
@@ -88,5 +107,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     conf: JSON.parse(readFileSync(join(tauriDir, 'tauri.conf.json'), 'utf8')),
   });
   writeFileSync(file, out);
-  console.log('AndroidManifest.xml: фильтры «Поделиться» и kayospace:// на месте');
+  console.log('AndroidManifest.xml: фильтры «Поделиться», kayospace:// и микрофон на месте');
 }
