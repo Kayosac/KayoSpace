@@ -3,6 +3,7 @@ import { isValidBoardId } from '@kayospace/sync';
 import type { ConnectionState } from './connection';
 import { DevicesSection } from './DevicesSection';
 import { BackupsSection } from './BackupsSection';
+import { OpenAiSection } from './OpenAiSection';
 import type { useUpdates } from './UpdateBanner';
 import type { SessionState } from './session';
 import type { WorkspaceSettings } from './settings';
@@ -114,6 +115,7 @@ export function SettingsPanel({
       </div>
       {hub && !connection.dev && <DevicesSection hub={hub} onSelfRevoked={onSelfRevoked} />}
       {hub && <BackupsSection hub={hub} current={settings.board} onOpen={onOpenBoard} />}
+      {hub && <OpenAiSection hub={hub} />}
       <hr />
       <label className="check">
         <input

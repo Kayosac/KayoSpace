@@ -13,6 +13,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as Y from 'yjs';
 import { elementToWire, getElement, observeElements, type WireElement } from '@kayospace/board';
 import type { BoardInfo, BoardStore } from './store';
+import { chatContext, type ChatStore } from './chat';
 
 export const AI_ACTIONS = [
   'recognize',
@@ -24,6 +25,7 @@ export const AI_ACTIONS = [
   'shorten',
   'translate',
   'prompt',
+  'chat',
 ] as const;
 export type AiAction = (typeof AI_ACTIONS)[number];
 
@@ -54,6 +56,8 @@ export interface AiTask {
   draft: Y.Doc;
   /** Что ИИ тронул в черновике. */
   touched: Set<string>;
+  /** Чат: разговор до этого сообщения (текстом для задания). */
+  history?: string;
   stopObserving: () => void;
 }
 
@@ -70,11 +74,17 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 export class AiQueue {
   readonly tasks = new Map<string, AiTask>();
+  /** Переписка чатов с ИИ (решение 0019). */
+  readonly chatStore: ChatStore | null;
   private readonly waiting: { name: string; resolve: (t: AiTask | null) => void }[] = [];
   private readonly workers = new Map<string, number>();
   private readonly timer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly store: BoardStore) {
+  constructor(
+    private readonly store: BoardStore,
+    private readonly chat: ChatStore | null = null,
+  ) {
+    this.chatStore = chat;
     this.timer = setInterval(() => this.sweep(), 5000);
     this.timer.unref?.();
   }
@@ -127,6 +137,10 @@ export class AiQueue {
       touched,
       stopObserving,
     };
+    if (task.action === 'chat' && this.chat) {
+      task.history = chatContext(await this.chat.list(task.board));
+      await this.chat.add(task.board, { role: 'user', text: task.prompt });
+    }
     this.tasks.set(task.id, task);
     console.log(`[hub] ИИ: задача ${task.id} (${task.action}, доска ${task.board})`);
     this.dispatch();
@@ -172,6 +186,14 @@ export class AiQueue {
     } else {
       t.status = 'done';
       t.message = (result.message ?? '').slice(0, 4000);
+    }
+    // Ответ в чате — в переписку (с числом предложенных правок).
+    if (t.action === 'chat' && this.chat) {
+      void this.chat.add(t.board, {
+        role: 'assistant',
+        text: t.error ?? t.message ?? '',
+        ...(t.error ? { error: true } : { changes: t.touched.size }),
+      });
     }
     return true;
   }
@@ -293,6 +315,10 @@ const ACTION_TEXT: Record<AiAction, string> = {
     'Переведи тексты выделенных стикеров и надписей на английский (update_element text). ' +
     'Если текст уже английский — переведи на русский.',
   prompt: 'Выполни просьбу пользователя ниже.',
+  chat:
+    'Это чат с человеком на его доске. Ответь на его последнее сообщение (ниже), учитывая разговор. ' +
+    'Если просит что-то сделать на доске — сделай (правки попадут в черновик, он посмотрит и вставит). ' +
+    'Если спрашивает — ответь по существу, доску не меняй.',
 };
 
 /**
@@ -311,7 +337,9 @@ export const IMAGE_RULES = [
 
 /** Полный текст задания для Claude Code. */
 export function buildPrompt(
-  t: Pick<AiTask, 'board' | 'action' | 'prompt' | 'selection' | 'area' | 'image'>,
+  t: Pick<AiTask, 'board' | 'action' | 'prompt' | 'selection' | 'area' | 'image'> & {
+    history?: string;
+  },
 ): string {
   const lines = [
     'Ты — ИИ-помощник внутри Kayospace, бесконечной доски. Работай только через инструменты kayospace.',
@@ -343,11 +371,18 @@ export function buildPrompt(
     );
   lines.push('', IMAGE_RULES);
   lines.push('', `Задача: ${ACTION_TEXT[t.action]}`);
-  if (t.prompt) lines.push(`Просьба пользователя: ${t.prompt}`);
+  if (t.history) lines.push('', t.history);
+  if (t.prompt)
+    lines.push(
+      t.action === 'chat' ? `Человек сейчас: ${t.prompt}` : `Просьба пользователя: ${t.prompt}`,
+    );
   lines.push(
     '',
     'Правила: пиши по-русски, если пользователь не просил другой язык. Не трогай элементы, которые не относятся к задаче. ' +
-      'Правки попадут в черновик — человек посмотрит и вставит. В конце ответь одним-двумя предложениями, что сделано.',
+      'Правки попадут в черновик — человек посмотрит и вставит. ' +
+      (t.action === 'chat'
+        ? 'Твой последний ответ человек прочитает в чате: отвечай по-человечески, коротко и по делу; если правил доску — скажи, что предлагаешь.'
+        : 'В конце ответь одним-двумя предложениями, что сделано.'),
   );
   return lines.join('\n');
 }
@@ -405,7 +440,7 @@ export async function handleAi(
       if (!BOARD_RE.test(board)) return (json(res, 400, { error: 'Неверная доска' }), true);
       if (!AI_ACTIONS.includes(action))
         return (json(res, 400, { error: 'Неизвестное действие' }), true);
-      if (action === 'prompt' && !String(body.prompt ?? '').trim()) {
+      if ((action === 'prompt' || action === 'chat') && !String(body.prompt ?? '').trim()) {
         return (json(res, 400, { error: 'Пустой запрос' }), true);
       }
       const image =
@@ -429,6 +464,18 @@ export async function handleAi(
       });
       json(res, 201, { id: task.id, status: task.status });
       return true;
+    }
+    const chat = /^\/api\/ai\/chat\/([A-Za-z0-9_-]{1,64})$/.exec(p);
+    if (chat && ai.chatStore) {
+      if (req.method === 'GET') {
+        json(res, 200, { messages: await ai.chatStore.list(chat[1]!) });
+        return true;
+      }
+      if (req.method === 'DELETE') {
+        await ai.chatStore.clear(chat[1]!);
+        json(res, 200, { ok: true });
+        return true;
+      }
     }
     const m = /^\/api\/ai\/tasks\/([A-Za-z0-9_-]+)$/.exec(p);
     if (m) {

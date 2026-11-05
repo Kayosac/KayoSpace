@@ -206,6 +206,7 @@ describe('MCP', () => {
       'list_boards',
       'list_deleted_boards',
       'list_projects',
+      'list_tasks',
       'list_trash',
       'list_versions',
       'move_board',
@@ -216,6 +217,7 @@ describe('MCP', () => {
       'restore_version',
       'search',
       'update_element',
+      'update_task',
       'view_board',
     ]);
     await client.close();
@@ -357,6 +359,62 @@ describe('ИИ: очередь, исполнитель, черновик', () =>
     expect(file.headers.get('content-type')).toBe('image/png');
     // Доска не меняется до «Вставить».
     expect(listElements(await hub.store.get(board))).toEqual([]);
+    ctrl.abort();
+    await loop.catch(() => {});
+  });
+
+  it('чат на доске: переписка на хабе, ИИ видит прошлые реплики', async () => {
+    const base = `http://127.0.0.1:${hub.port}`;
+    const board = 'chat-board';
+    await hub.store.get(board);
+    const fake = fileURLToPath(new URL('../test/fake-claude.mjs', import.meta.url));
+    await chmod(fake, 0o755);
+    const ctrl = new AbortController();
+    const loop = workLoop({
+      hubUrl: base,
+      token: '',
+      name: 'чат',
+      claudeBin: fake,
+      signal: ctrl.signal,
+      log: () => {},
+    });
+    const ask = async (text: string) => {
+      const r = await fetch(`${base}/api/ai/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ board, action: 'chat', prompt: text, area: null }),
+      });
+      const { id } = (await r.json()) as { id: string };
+      let status = '';
+      for (let i = 0; i < 100 && status !== 'done' && status !== 'error'; i++) {
+        await new Promise((res) => setTimeout(res, 100));
+        status = ((await (await fetch(`${base}/api/ai/tasks/${id}`)).json()) as { status: string })
+          .status;
+      }
+      return id;
+    };
+    await ask('Привет, добавь стикер');
+    const chat = async () =>
+      (
+        (await (await fetch(`${base}/api/ai/chat/${board}`)).json()) as {
+          messages: { role: string; text: string; changes?: number }[];
+        }
+      ).messages;
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await chat()).map((m) => [m.role, m.text, m.changes])).toEqual([
+      ['user', 'Привет, добавь стикер', undefined],
+      ['assistant', 'Добавил стикер.', 1],
+    ]);
+    // Второе сообщение: в задании — прошлый разговор.
+    const t = await hub.ai.create({ board, action: 'chat', prompt: 'А теперь ещё один' });
+    const prompt = buildPrompt(t);
+    expect(prompt).toContain('Разговор до этого');
+    expect(prompt).toContain('Человек: Привет, добавь стикер');
+    expect(prompt).toContain('Ты: Добавил стикер. [предложено правок: 1]');
+    expect(prompt).toContain('Человек сейчас: А теперь ещё один');
+    hub.ai.cancel(t.id);
+    expect((await fetch(`${base}/api/ai/chat/${board}`, { method: 'DELETE' })).status).toBe(200);
+    expect(await chat()).toEqual([]);
     ctrl.abort();
     await loop.catch(() => {});
   });
@@ -554,7 +612,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(30);
+    expect(tools.length).toBe(32);
     await client.close();
   });
 

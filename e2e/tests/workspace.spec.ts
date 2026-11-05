@@ -861,6 +861,34 @@ test.describe('ИИ в доске', () => {
     await context.close();
   });
 
+  test('чат с ИИ: переписка, ответ с правками — предпросмотр и «Вставить»', async ({
+    browser,
+    request,
+  }) => {
+    const board = `e2e-chat-${Date.now()}`;
+    const page = await openDevice(browser, { ...synced, board });
+    await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+    await page.getByRole('button', { name: 'Чат с ИИ' }).click();
+    const chat = page.getByTestId('chat-panel');
+    await chat.getByTestId('chat-text').fill('Добавь стикер с идеей');
+    await chat.getByTestId('chat-send').click();
+    const bar = page.getByTestId('ai-bar');
+    await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
+    const list = chat.getByTestId('chat-list');
+    await expect(list).toContainText('Добавь стикер с идеей');
+    await expect(list).toContainText('Добавил стикер.');
+    await expect(list).toContainText('«Вставить» внизу');
+    await page.screenshot({ path: shot('chat-panel.png') });
+    await bar.getByRole('button', { name: 'Вставить' }).click();
+    await expect.poll(() => hubElements(request, board)).toBe(1);
+    // Второе сообщение — разговор продолжается.
+    await chat.getByTestId('chat-text').fill('Спасибо');
+    await chat.getByTestId('chat-send').click();
+    await expect(bar).toHaveAttribute('data-state', 'ready', { timeout: 45_000 });
+    await expect(list.locator('.chat-msg')).toHaveCount(4);
+    await bar.getByRole('button', { name: 'Отменить' }).click();
+  });
+
   test('свой запрос (Ctrl+J): результат можно не вставлять', async ({ browser }) => {
     const board = `e2e-ai-prompt-${Date.now()}`;
     const page = await openDevice(browser, { ...synced, board });
@@ -1699,5 +1727,147 @@ test('планшет: история доски — версии картинк�
   await expect(page.getByTestId('board-title')).toContainText('версия от');
   await expect.poll(() => elements(page)).toBe(3);
   await client.close();
+  await context.close();
+});
+
+test('планшет: стикер — задачей, срок и статус касаниями; «Задачи» со всех досок', async ({
+  browser,
+}) => {
+  const board = `e2e-tasks-${Date.now()}`;
+  const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+  const client = new Client({ name: 'e2e-tasks', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://${HUB_ADDRESS}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${HUB_TOKEN}` } },
+    }),
+  );
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: args }) as Promise<{ content: { text?: string }[] }>;
+  await call('create_board', { board, name: 'Дела' });
+  await call('add_elements', { board, items: [{ text: 'Позвонить мастеру' }], at: { x: 0, y: 0 } });
+  // Задача, которую поставил агент на другой доске.
+  await call('add_elements', {
+    board: `${board}-2`,
+    items: [{ text: 'Отчёт агента', task: { status: 'doing', high: true } }],
+  });
+
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ ...synced, board })] as const,
+  );
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await expect.poll(() => elements(page)).toBe(1);
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+  // На планшете выделяют пером; здесь — выделяем стикер напрямую, дальше всё касаниями.
+  await page.getByRole('radio', { name: 'Выделение' }).tap();
+  await page.evaluate(() => {
+    const e = window.__kayospace!.engine as unknown as { selectAll(): void };
+    e.selectAll();
+  });
+  await page.getByTestId('task-button').tap();
+  const panel = page.getByTestId('task-panel');
+  await panel.getByRole('radio', { name: 'В работе' }).tap();
+  await panel.getByTestId('task-due').fill('2026-01-15');
+  await panel.getByRole('checkbox', { name: 'Отметить важной' }).tap();
+  const task = () =>
+    page.evaluate(() => {
+      const items = [
+        ...(
+          window.__kayospace!.engine as unknown as {
+            scene: { items: Map<string, { element: { props: { task?: unknown } } }> };
+          }
+        ).scene.items.values(),
+      ];
+      return items[0]!.element.props.task;
+    });
+  await expect.poll(task).toEqual({ status: 'doing', due: '2026-01-15', high: true });
+  await page.screenshot({ path: shot('task-sticky.png') });
+
+  // «Задачи»: обе доски, просроченная — красным; отметить «Готово» кружком.
+  await page.getByRole('button', { name: 'Задачи', exact: true }).tap();
+  const tasks = page.getByTestId('tasks-panel');
+  await expect(tasks.getByTestId('task-row')).toHaveCount(2);
+  await expect(tasks).toContainText('Отчёт агента');
+  await expect(tasks.getByTestId('task-row').first()).toContainText('Позвонить мастеру');
+  await page.screenshot({ path: shot('tasks-panel.png') });
+  await tasks
+    .getByTestId('task-row')
+    .filter({ hasText: 'Отчёт агента' })
+    .getByRole('checkbox')
+    .tap();
+  await expect(tasks.getByTestId('task-row')).toHaveCount(1);
+  await tasks.getByRole('tab', { name: 'Готово' }).tap();
+  await expect(tasks.getByTestId('task-row')).toContainText('Отчёт агента');
+  const listed = JSON.parse((await call('list_tasks', { status: 'done' })).content[0]!.text!) as {
+    tasks: { text: string }[];
+  }[];
+  expect(listed.flatMap((b) => b.tasks.map((t) => t.text))).toEqual(['Отчёт агента']);
+  await client.close();
+  await context.close();
+});
+
+test('планшет: Настройки → OpenAI — лимиты и рукописное касаниями', async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    SETTINGS_KEY,
+    JSON.stringify({ ...synced, board: `e2e-openai-${Date.now()}` }),
+  ] as const);
+  const page = await context.newPage();
+  // На хабе тестов нет ключа OpenAI — отвечаем за хаб.
+  let state = {
+    limits: { images: 30, voice: 100, handwriting: 500 },
+    handwriting: true,
+    usage: {
+      images: { used: 3, limit: 30 },
+      voice: { used: 0, limit: 100 },
+      handwriting: { used: 12, limit: 500 },
+    },
+  };
+  const puts: unknown[] = [];
+  await page.route('**/api/openai', async (r) => {
+    if (r.request().method() === 'PUT') {
+      const patch = r.request().postDataJSON() as {
+        limits?: Record<string, number>;
+        handwriting?: boolean;
+      };
+      puts.push(patch);
+      state = {
+        ...state,
+        limits: { ...state.limits, ...patch.limits },
+        handwriting: patch.handwriting ?? state.handwriting,
+      };
+    }
+    await r.fulfill({ json: state });
+  });
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await page.getByRole('button', { name: 'Настройки' }).tap();
+  const section = page.getByTestId('openai-settings');
+  await expect(section).toContainText('сегодня 3');
+  await section.getByTestId('limit-images').fill('10');
+  await section.getByTestId('save-limits').tap();
+  await expect(section).toContainText('Сохранено');
+  await section.getByTestId('handwriting-toggle').tap();
+  await expect(section.getByTestId('handwriting-toggle')).not.toBeChecked();
+  expect(puts).toEqual([
+    { limits: { images: 10, voice: 100, handwriting: 500 } },
+    { handwriting: false },
+  ]);
+  await page.screenshot({ path: shot('openai-settings.png') });
   await context.close();
 });

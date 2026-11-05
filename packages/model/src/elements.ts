@@ -65,8 +65,22 @@ export interface TextProps {
   content: string;
 }
 
+export type TaskStatus = 'todo' | 'doing' | 'done';
+
+/** Стикер-задача (решение 0019): статус, срок, важность. Нет поля — обычный стикер. */
+export interface TaskInfo {
+  status: TaskStatus;
+  /** Срок — дата YYYY-MM-DD (без времени и часового пояса). */
+  due?: string;
+  /** Важная задача. */
+  high?: boolean;
+  /** Когда отмечена «Готово», мс. */
+  doneAt?: number;
+}
+
 export interface StickyProps extends TextProps {
   autoSize: boolean;
+  task?: TaskInfo;
 }
 
 export interface ImageProps {

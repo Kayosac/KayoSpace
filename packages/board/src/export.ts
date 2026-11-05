@@ -3,6 +3,7 @@
  * Порядок — как читает человек: сверху вниз полосами, внутри полосы слева направо.
  */
 
+import { taskLine } from './tasks';
 import type * as Y from 'yjs';
 import type { CanvasElement } from '@kayospace/model';
 import { decodeStroke } from '@kayospace/model';
@@ -50,7 +51,9 @@ function describe(el: CanvasElement): string | null {
   const pos = `(${round(el.x)}, ${round(el.y)})`;
   switch (el.type) {
     case 'sticky':
-      return `- Стикер ${quote(el.props.content)} ${pos} [sticky:${el.id}]${who(el)}`;
+      return el.props.task
+        ? `- Задача ${taskLine(el.props.task)} ${quote(el.props.content)} ${pos} [sticky:${el.id}]${who(el)}`
+        : `- Стикер ${quote(el.props.content)} ${pos} [sticky:${el.id}]${who(el)}`;
     case 'text':
       return `- Текст ${quote(el.props.content)} ${pos} [text:${el.id}]${who(el)}`;
     case 'image':
@@ -101,7 +104,7 @@ export function boardToMarkdown(doc: Y.Doc, boardId?: string): string {
       '',
       `Штрихов: ${strokes.length}, точек: ${points}, область (${round(b.minX)}, ${round(b.minY)}) — ` +
         `(${round(b.maxX)}, ${round(b.maxY)}).`,
-      'Распознавание рукописного текста и картинка доски для агентов появятся в следующих версиях.',
+      'Как это выглядит — view_board; распознанный текст (если включён) — ниже.',
       '',
     );
   }

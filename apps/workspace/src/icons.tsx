@@ -287,3 +287,16 @@ export const MicIcon = () => (
     <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
   </Svg>
 );
+
+export const TaskIcon = () => (
+  <Svg>
+    <rect x="4" y="4" width="16" height="16" rx="4" />
+    <path d="M8.5 12.2l2.4 2.4 4.6-5" />
+  </Svg>
+);
+
+export const ChatIcon = () => (
+  <Svg>
+    <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4.5 3.5V17H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
+  </Svg>
+);

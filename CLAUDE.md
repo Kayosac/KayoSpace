@@ -1,7 +1,7 @@
 # Kayospace — правила для Claude Code
 
 Личный воркспейс: бесконечный холст со стилусом, проекты, доступ агентов через MCP. Платформы: macOS, Windows, Android.
-Полный план и решения: `docs/PLAN.md`, `docs/decisions/`. Текущая фаза — **4 (удобство и AI)**, шаги — в `docs/PLAN.md`.
+Полный план и решения: `docs/PLAN.md`, `docs/decisions/`. Текущая фаза — **5 (слои Coda и Jira)**, шаги — в `docs/PLAN.md`.
 
 ## Стек
 
@@ -17,7 +17,8 @@
 
 - `packages/model` — типы элементов и форматы данных. Без зависимостей от DOM.
 - `packages/ink` — ввод пера, отрисовка штрихов, метрики. Зависит только от `model`.
-- `packages/board` — доска на Yjs: элементы, изменения, экспорт для агентов, шаблоны досок (`templates.ts`).
+- `packages/board` — доска на Yjs: элементы, изменения, экспорт для агентов, шаблоны досок (`templates.ts`),
+  задачи-стикеры (`tasks.ts`).
 - `packages/sync` — протокол синхронизации и клиент (браузер и Node).
 - `packages/canvas` — движок холста без React: камера, сцена, отрисовка, навигация, инструменты (решение 0006);
   упрощённая отрисовка при отдалении, фреймы, экспорт PNG/PDF (решение 0009).
@@ -27,11 +28,13 @@
   для агентов — раскладка (`mcp-layout.ts`), картинка доски (`render.ts`), инструкции (`agent-guide.ts`) — решение 0015;
   корзина (`trash.ts`), удалённые доски (`deleted-boards.ts`), картинки (`images.ts`, `mcp-images.ts`),
   изменения и проекты (`mcp-extra.ts`) — решение 0016; история версий (`history.ts`), рукописное
-  (`handwriting.ts`), OpenAI — картинки, голос, распознавание (`openai.ts`, ключ только на хабе) — решение 0018.
+  (`handwriting.ts`), OpenAI — картинки, голос, распознавание (`openai.ts`, ключ только на хабе) — решение 0018;
+  задачи (`tasks.ts`), чат с ИИ (`chat.ts`), лимиты OpenAI из приложения — решение 0019.
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк;
   корзина (`TrashPanel.tsx`), презентация (`Presentation.tsx`), импорт PDF (`pdf-import.ts`, pdf.js) — решение 0017;
-  история (`HistoryPanel.tsx`), голос (`voice.ts`) — решение 0018.
+  история (`HistoryPanel.tsx`), голос (`voice.ts`) — решение 0018; задачи (`TasksPanel.tsx`),
+  чат (`ChatPanel.tsx`), Настройки → OpenAI (`OpenAiSection.tsx`) — решение 0019.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
   single-instance, barcode-scanner (Android), свои `plugins/secure-store` (токен устройства в хранилище ОС)
   и `plugins/share-target` («Поделиться» в Android → доска «Входящие»).
@@ -99,3 +102,5 @@
   `fetchImage` (защита от SSRF).
 - Ключ OpenAI (`OPENAI_API_KEY`) — только в окружении хаба; устройства спрашивают `/api/features` и шлют
   голос на `/api/voice`. Возврат версии — новой правкой (`History.restore`), не подменой документа.
+- Задача — это стикер с `props.task` (`setTask`), отдельного типа элемента нет. Лимиты OpenAI проверяет хаб
+  до запроса (`OpenAi.take`); меняются из приложения (`PUT /api/openai`).

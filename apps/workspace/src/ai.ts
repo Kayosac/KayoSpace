@@ -16,7 +16,8 @@ export type AiAction =
   | 'fix'
   | 'shorten'
   | 'translate'
-  | 'prompt';
+  | 'prompt'
+  | 'chat';
 
 /** Действия меню «✦ ИИ»; needs — для какого выделения они имеют смысл. */
 export const AI_MENU: { action: AiAction; name: string; needs: 'any' | 'text' | 'ink' }[] = [
@@ -33,6 +34,7 @@ export const AI_MENU: { action: AiAction; name: string; needs: 'any' | 'text' | 
 export const AI_ACTION_NAMES: Record<AiAction, string> = {
   ...(Object.fromEntries(AI_MENU.map((a) => [a.action, a.name])) as Record<AiAction, string>),
   prompt: 'Запрос',
+  chat: 'ответ в чате',
 };
 
 export interface AiRequest {

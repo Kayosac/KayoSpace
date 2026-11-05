@@ -7,6 +7,7 @@ import {
   worldToScreen,
   type CanvasEngine,
   type EngineState,
+  taskBand,
 } from '@kayospace/canvas';
 
 /**
@@ -54,12 +55,14 @@ export function NoteEditor({ engine, state }: { engine: CanvasEngine; state: Eng
   let padX: number;
   let padTop: number;
   if (sticky) {
-    const fit = engine.renderer.fitSticky(text, el.w, el.h);
+    // У задачи внизу полоса со статусом — текст выше неё, как на холсте.
+    const band = taskBand(el);
+    const fit = engine.renderer.fitSticky(text, el.w, el.h - band);
     font = fit.size;
     padX = fit.pad;
     // Текст стикера — по центру по вертикали, как на холсте.
     const lines = Math.max(1, fit.lines.length);
-    padTop = Math.max(fit.pad, (el.h - lines * fit.size * LINE_HEIGHT) / 2);
+    padTop = Math.max(fit.pad, (el.h - band - lines * fit.size * LINE_HEIGHT) / 2);
   } else {
     font = fontSizeOf(el);
     padX = 0;
