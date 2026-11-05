@@ -7,6 +7,7 @@ import {
   type ArrowElement,
   type FrameElement,
   type ImageElement,
+  type DocElement,
   type ShapeElement,
   type StickyElement,
   type StrokeElement,
@@ -188,6 +189,32 @@ export function makeImage(
       naturalW: opts.naturalW,
       naturalH: opts.naturalH,
       ...(opts.alt ? { alt: opts.alt } : {}),
+    },
+  };
+}
+
+/** Размер карточки документа по умолчанию. */
+export const DOC_CARD_SIZE = { w: 320, h: 200 } as const;
+
+/** Карточка документа или таблицы (решение 0021): по касанию документ открывается поверх доски. */
+export function makeDocCard(
+  doc: string,
+  at: { x: number; y: number; w?: number; h?: number },
+  opts: { title?: string; excerpt?: string; actor: Actor; now?: number },
+): DocElement {
+  const now = opts.now ?? Date.now();
+  return {
+    ...base(opts.actor, now),
+    type: 'doc',
+    x: at.x,
+    y: at.y,
+    w: at.w ?? DOC_CARD_SIZE.w,
+    h: at.h ?? DOC_CARD_SIZE.h,
+    style: {},
+    props: {
+      doc,
+      ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.excerpt ? { excerpt: opts.excerpt } : {}),
     },
   };
 }

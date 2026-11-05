@@ -53,6 +53,8 @@ export interface SceneItem {
   lines?: string[];
   /** Стикер: подобранный шрифт и строки (заполняет отрисовка). */
   fit?: { key: string; size: number; lines: string[]; pad: number };
+  /** Карточка документа: строки названия и начала текста (заполняет отрисовка). */
+  card?: { key: string; title: string[]; body: string[] };
   /** Стрелка: концы с учётом привязки к элементам. */
   ends?: [{ x: number; y: number }, { x: number; y: number }];
 }
@@ -303,7 +305,13 @@ export class Scene {
   }
 
   private build(el: CanvasElement): SceneItem | null {
-    if (el.type === 'sticky' || el.type === 'text' || el.type === 'image' || el.type === 'frame') {
+    if (
+      el.type === 'sticky' ||
+      el.type === 'text' ||
+      el.type === 'image' ||
+      el.type === 'frame' ||
+      el.type === 'doc'
+    ) {
       const bounds = el.type === 'frame' ? frameBounds(el) : boxBounds(el);
       const item: SceneItem = {
         id: el.id,

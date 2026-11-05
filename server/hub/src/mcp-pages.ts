@@ -11,6 +11,9 @@ import * as z from 'zod/v4';
 import type * as Y from 'yjs';
 import {
   WORKSPACE_ID,
+  addElement,
+  freeSpot,
+  makeDocCard,
   getBoardName,
   getElement,
   listElements,
@@ -18,7 +21,8 @@ import {
   setBoardName,
   setBoardProject,
 } from '@kayospace/board';
-import { isPageId, pageMarkdown, writePage } from '@kayospace/page';
+import type { Actor } from '@kayospace/model';
+import { docExcerpt, docKind, isDocId, isPageId, pageMarkdown, writePage } from '@kayospace/page';
 import { boardSvg, contentArea, loadImages, renderPng } from './render';
 import type { BoardInfo } from './store';
 import { json } from './devices-api';
@@ -42,7 +46,48 @@ export const PAGE_SYNTAX =
   '«> » цитата, ``` код, --- разделитель; в строке **жирный**, *курсив*, `код`, ~~зачёркнутый~~, [ссылка](https://…). ' +
   'Фрагмент доски — отдельной строкой [[board:<id доски>#<id фрейма>|Название]] (фрейм можно не указывать — тогда вся доска).';
 
-export function registerPageTools(server: McpServer, store: Source, origin: unknown): void {
+export function registerPageTools(
+  server: McpServer,
+  store: Source,
+  origin: unknown,
+  agentOf: () => Actor = () => ({ kind: 'agent', name: 'mcp' }),
+): void {
+  server.registerTool(
+    'place_doc',
+    {
+      description:
+        'Положить на доску карточку документа или таблицы (решение 0021): название и начало текста; ' +
+        'человек касается карточки — документ открывается поверх доски. Без x/y — справа от занятого.',
+      inputSchema: z.object({
+        board: z
+          .string()
+          .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+          .refine((id) => !isDocId(id), 'Карточку кладут на доску, а не в документ'),
+        doc: z
+          .string()
+          .regex(/^(pg|tb)_[A-Za-z0-9_-]{1,61}$/)
+          .describe('id документа «pg_…» или таблицы «tb_…»'),
+        x: z.number().optional(),
+        y: z.number().optional(),
+      }),
+    },
+    async ({ board, doc: docId, x, y }) => {
+      if (!(await store.has(docId))) return fail(`Документа «${docId}» нет. Список — list_boards.`);
+      const target = await store.get(board);
+      const d = await store.get(docId);
+      const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(target);
+      const card = makeDocCard(docId, spot, {
+        title: getBoardName(d) ?? undefined,
+        excerpt: docExcerpt(docId, d) || undefined,
+        actor: agentOf(),
+      });
+      addElement(target, card, origin);
+      return text(
+        `Карточка ${docKind(docId) === 'table' ? 'таблицы' : 'документа'} на доске ${board}: ${card.id}.`,
+      );
+    },
+  );
+
   server.registerTool(
     'read_page',
     {
@@ -125,7 +170,7 @@ export async function handleRender(
   const fr = /^\/api\/frames\/([A-Za-z0-9-][A-Za-z0-9_-]{0,63})$/.exec(url.pathname);
   if (fr && req.method === 'GET') {
     const id = fr[1]!;
-    if (isPageId(id) || (await store.isDeleted(id)) || !(await store.has(id))) {
+    if (isDocId(id) || (await store.isDeleted(id)) || !(await store.has(id))) {
       json(res, 404, { error: 'Доски нет' });
       return true;
     }
@@ -136,10 +181,30 @@ export async function handleRender(
     json(res, 200, { frames });
     return true;
   }
+  // Карточки на досках (решение 0021): название и начало текста документов и таблиц.
+  if (url.pathname === '/api/docs' && req.method === 'GET') {
+    const ids = (url.searchParams.get('ids') ?? '')
+      .split(',')
+      .filter((id) => /^(pg|tb)_[A-Za-z0-9_-]{1,61}$/.test(id))
+      .slice(0, 100);
+    const docs = [];
+    for (const id of ids) {
+      if ((await store.isDeleted(id)) || !(await store.has(id))) continue;
+      const d = await store.get(id);
+      docs.push({
+        id,
+        kind: docKind(id),
+        title: getBoardName(d) ?? null,
+        excerpt: docExcerpt(id, d),
+      });
+    }
+    json(res, 200, { docs });
+    return true;
+  }
   const m = /^\/api\/render\/([A-Za-z0-9-][A-Za-z0-9_-]{0,63})\.png$/.exec(url.pathname);
   if (!m || req.method !== 'GET') return false;
   const board = m[1]!;
-  if (isPageId(board) || (await store.isDeleted(board)) || !(await store.has(board))) {
+  if (isDocId(board) || (await store.isDeleted(board)) || !(await store.has(board))) {
     json(res, 404, { error: 'Доски нет' });
     return true;
   }

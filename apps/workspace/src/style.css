@@ -1210,7 +1210,8 @@ p.bad {
   border-radius: 50%;
 }
 
-.project-chip[aria-selected='true'] {
+.project-chip[aria-selected='true'],
+.project-chip[aria-checked='true'] {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: transparent;
@@ -2186,6 +2187,15 @@ p.bad {
   gap: 12px;
   padding: calc(var(--gutter-t) + 4px) var(--gutter-r) var(--gutter-b) var(--gutter-l);
   background: var(--canvas-paper);
+  /* Канбан — не текст: ни мышь, ни долгое касание не выделяют слова карточек. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.kanban.dragging,
+.kanban.dragging * {
+  cursor: grabbing;
 }
 
 .kanban-head {
@@ -2228,7 +2238,8 @@ p.bad {
 }
 
 .kanban-col h3 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+  padding: 0 2px;
   font-size: 14px;
 }
 
@@ -2239,10 +2250,12 @@ p.bad {
 
 .kanban-col ul {
   display: grid;
+  flex: 1;
   align-content: start;
   gap: 8px;
-  margin: 0;
-  padding: 0;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 2px 4px 8px;
   overflow-y: auto;
   list-style: none;
 }
@@ -2268,14 +2281,41 @@ p.bad {
     0 1px 2px rgba(20, 22, 28, 0.12);
 }
 
-.kanban-card.dragging {
-  z-index: 5;
-  box-shadow: var(--shadow);
-  cursor: grabbing;
-  opacity: 0.92;
+.kanban-card.placeholder {
+  opacity: 0.35;
+  box-shadow: none;
+  outline: 2px dashed var(--line);
+  outline-offset: -2px;
 }
 
-.kanban-col[data-column='done'] .kanban-card {
+/* Призрак — поверх всех колонок, не перехватывает касания (колонку под пальцем ищем по точке). */
+.kanban-ghost {
+  position: fixed;
+  z-index: 60;
+  margin: 0;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+  transform: rotate(1.5deg) scale(1.02);
+}
+
+.kanban-ghost.high {
+  box-shadow:
+    inset 3px 0 0 var(--bad),
+    var(--shadow);
+}
+
+.kanban-slot {
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  background: var(--accent-soft);
+}
+
+.kanban-col[data-column='done'] .kanban-card:not(.placeholder) {
   opacity: 0.7;
 }
 
@@ -2627,5 +2667,283 @@ p.bad {
   .page-embed-bar button {
     min-height: 40px;
     min-width: 40px;
+  }
+}
+
+/* ---------- Документ поверх доски и таблицы (решение 0021) ---------- */
+
+.doc-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  background: var(--canvas-paper);
+}
+
+.doc-overlay .page-view {
+  padding-top: var(--gutter-t);
+}
+
+.doc-overlay .page-picker {
+  top: calc(var(--gutter-t) + 56px);
+}
+
+.doc-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: min(320px, calc(100vw - 48px));
+}
+
+.doc-menu .board-list {
+  width: 100%;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.doc-menu .muted {
+  width: 100%;
+  font-size: 13px;
+}
+
+.table-sheet {
+  max-width: 1200px;
+}
+
+.kt-search {
+  flex: 0 1 220px;
+  min-width: 120px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 15px var(--font-ui);
+}
+
+.kt-wrap {
+  margin: 12px -8px 0;
+  overflow-x: auto;
+}
+
+.kt {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font: 15px var(--font-ui);
+  color: var(--text);
+}
+
+.kt th,
+.kt td {
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  vertical-align: middle;
+}
+
+.kt th + th,
+.kt td + td {
+  border-left: 1px solid var(--line);
+}
+
+.kt thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  text-align: left;
+}
+
+.kt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 140px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: 600 14px var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kt-head.open,
+.kt-head:hover {
+  background: var(--surface-2);
+}
+
+.kt-type {
+  min-width: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.kt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kt-num {
+  width: 44px;
+  min-width: 44px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.kt-num button {
+  width: 100%;
+  min-height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 13px var(--font-ui);
+  cursor: pointer;
+}
+
+.kt tr.picked td {
+  background: var(--accent-soft);
+}
+
+.kt-row-delete {
+  display: block;
+  margin: 0 4px 6px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bad) !important;
+  color: #fff !important;
+  font: 600 12px var(--font-ui) !important;
+  min-height: 32px !important;
+}
+
+.kt-input {
+  width: 100%;
+  min-width: 140px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: 15px var(--font-ui);
+  outline: none;
+}
+
+.kt-input:focus {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.kt-input.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.kt-check {
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: 9px auto;
+  accent-color: var(--accent);
+}
+
+.kt-select {
+  width: 100%;
+  min-width: 140px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: 15px var(--font-ui);
+}
+
+.kt-url {
+  display: flex;
+  align-items: center;
+}
+
+.kt-url a {
+  padding: 0 10px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.kt-empty {
+  padding: 18px 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.kt tfoot td {
+  border-bottom: none;
+}
+
+.kt-total {
+  padding: 8px 10px !important;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.kt-total.kt-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.kt-menu {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--gutter-t) + 112px);
+  right: var(--gutter-r);
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(100% - var(--gutter-t) - var(--gutter-b) - 140px);
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.doc-overlay .kt-menu {
+  top: calc(var(--gutter-t) + 60px);
+}
+
+.kt-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kt-types .project-chip b {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.kt-menu-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (pointer: coarse) {
+  .kt,
+  .kt-input,
+  .kt-select,
+  .kt-search {
+    font-size: 16px;
+  }
+
+  .kt-search {
+    height: 40px;
   }
 }

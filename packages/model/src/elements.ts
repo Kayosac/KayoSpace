@@ -6,7 +6,8 @@
 export type ElementId = string;
 export type AssetId = string; // sha256 содержимого
 
-export type ElementType = 'stroke' | 'text' | 'sticky' | 'image' | 'frame' | 'arrow' | 'shape';
+export type ElementType =
+  'stroke' | 'text' | 'sticky' | 'image' | 'frame' | 'arrow' | 'shape' | 'doc';
 
 /** Кто создал или изменил элемент. Нужен, чтобы видеть и откатывать правки агентов. */
 export interface Actor {
@@ -111,6 +112,16 @@ export interface ShapeProps {
   label?: string;
 }
 
+/**
+ * Карточка документа или таблицы на доске (решение 0021): ссылка на документ «pg_…» или «tb_…».
+ * Название и начало текста — копия для отрисовки (обновляет устройство, когда документ меняется).
+ */
+export interface DocProps {
+  doc: string;
+  title?: string;
+  excerpt?: string;
+}
+
 export type StrokeElement = BaseElement<'stroke', StrokeProps>;
 export type TextElement = BaseElement<'text', TextProps>;
 export type StickyElement = BaseElement<'sticky', StickyProps>;
@@ -118,6 +129,7 @@ export type ImageElement = BaseElement<'image', ImageProps>;
 export type FrameElement = BaseElement<'frame', FrameProps>;
 export type ArrowElement = BaseElement<'arrow', ArrowProps>;
 export type ShapeElement = BaseElement<'shape', ShapeProps>;
+export type DocElement = BaseElement<'doc', DocProps>;
 
 export type CanvasElement =
   | StrokeElement
@@ -126,7 +138,8 @@ export type CanvasElement =
   | ImageElement
   | FrameElement
   | ArrowElement
-  | ShapeElement;
+  | ShapeElement
+  | DocElement;
 
 export interface Board {
   id: string;

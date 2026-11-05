@@ -134,6 +134,40 @@ function elementSvg(
         textBlock([el.props.name], el.x + 2, el.y - title * 1.6, title, '#555a66', { weight: 600 })
       );
     }
+    case 'doc': {
+      // Карточка документа или таблицы (решение 0021): метка, название, начало текста.
+      const pad = 16;
+      const table = el.props.doc.startsWith('tb_');
+      const titleLines = wrapLines(
+        el.props.title || (table ? 'Таблица' : 'Документ'),
+        el.w - pad * 2,
+        18,
+      ).slice(0, 2);
+      const room = Math.max(
+        0,
+        Math.floor((el.h - pad * 2 - 22 - titleLines.length * 18 * LINE - 8) / (14 * LINE)),
+      );
+      const body = (el.props.excerpt ?? '')
+        .split('\n')
+        .flatMap((l) => wrapLines(l, el.w - pad * 2, 14))
+        .slice(0, room);
+      return rotated(
+        el,
+        `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="10" fill="#ffffff" stroke="rgba(28,31,38,0.18)" stroke-width="1.5"/>` +
+          `<rect x="${n(el.x)}" y="${n(el.y)}" width="4" height="${n(el.h)}" rx="2" fill="${table ? '#2f9e66' : '#3e63dd'}"/>` +
+          textBlock([table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ'], el.x + pad, el.y + pad - 2, 11, '#6c7080', {
+            weight: 600,
+          }) +
+          textBlock(titleLines, el.x + pad, el.y + pad + 18, 18, INK, { weight: 700 }) +
+          textBlock(
+            body,
+            el.x + pad,
+            el.y + pad + 26 + titleLines.length * 18 * LINE,
+            14,
+            '#555a66',
+          ),
+      );
+    }
     case 'sticky': {
       const { size, lines } = stickyFont(el.props.content, el.w, el.h);
       const top = el.y + Math.max(size * 0.9, (el.h - lines.length * size * LINE) / 2);

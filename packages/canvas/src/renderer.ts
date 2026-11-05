@@ -737,7 +737,13 @@ export class Renderer {
     const ctx = this.ctx;
     const el = item.element;
     const type = el.type;
-    if (type === 'sticky' || type === 'text' || type === 'image' || type === 'shape') {
+    if (
+      type === 'sticky' ||
+      type === 'text' ||
+      type === 'image' ||
+      type === 'shape' ||
+      type === 'doc'
+    ) {
       // Элементы-рамки: рисуем в своей системе координат, повёрнутой вокруг центра.
       const r = el.rotation ?? 0;
       if (r) {
@@ -750,6 +756,7 @@ export class Renderer {
       }
       if (type === 'sticky' || type === 'text') this.drawNote(item, zoom);
       else if (type === 'image') this.drawImage(item, zoom);
+      else if (type === 'doc') this.drawDocCard(item, zoom);
       else this.drawShape(el as ShapeElement, item.color);
       if (r) ctx.restore();
       return;
@@ -773,6 +780,64 @@ export class Renderer {
     if (alpha !== 1) ctx.globalAlpha = alpha;
     ctx.fill(item.path, 'nonzero');
     if (alpha !== 1) ctx.globalAlpha = 1;
+  }
+
+  /** Карточка документа или таблицы (решение 0021): метка, название, начало текста. */
+  private drawDocCard(item: SceneItem, zoom: number): void {
+    const el = item.element;
+    if (el.type !== 'doc') return;
+    const ctx = this.ctx;
+    const table = el.props.doc.startsWith('tb_');
+    ctx.fillStyle = this.colors.frame;
+    ctx.beginPath();
+    ctx.roundRect(el.x, el.y, el.w, el.h, 10);
+    ctx.fill();
+    ctx.lineWidth = 1.5 / Math.max(zoom, 0.5);
+    ctx.strokeStyle = this.colors.frameLine;
+    ctx.stroke();
+    ctx.fillStyle = table ? TASK_DONE : this.colors.accent;
+    ctx.beginPath();
+    ctx.roundRect(el.x, el.y, 4, el.h, 2);
+    ctx.fill();
+    const pad = 16;
+    if (18 * zoom < 3) return; // текст неразличим
+    const title = el.props.title || (table ? 'Таблица' : 'Документ');
+    const key = `${el.w}|${el.h}|${title}|${el.props.excerpt ?? ''}`;
+    if (item.card?.key !== key) {
+      const iw = el.w - pad * 2;
+      const titleLines = wrapText(scaled(this.measurer(700), 18), title, iw).slice(0, 2);
+      const room = Math.max(
+        0,
+        Math.floor(
+          (el.h - pad * 2 - 22 - titleLines.length * 18 * LINE_HEIGHT - 8) / (14 * LINE_HEIGHT),
+        ),
+      );
+      const body = (el.props.excerpt ?? '')
+        .split('\n')
+        .flatMap((l) => wrapText(scaled(this.measurer(400), 14), l, iw))
+        .slice(0, room);
+      item.card = { key, title: titleLines, body };
+    }
+    ctx.textBaseline = 'middle';
+    ctx.font = `600 11px ${NOTE_FONT}`;
+    ctx.fillStyle = this.colors.ink;
+    ctx.globalAlpha = 0.55;
+    ctx.fillText(table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ', el.x + pad, el.y + pad + 5);
+    ctx.globalAlpha = 1;
+    ctx.font = `700 18px ${NOTE_FONT}`;
+    let y = el.y + pad + 22;
+    for (const l of item.card.title) {
+      ctx.fillText(l, el.x + pad, y + (18 * LINE_HEIGHT) / 2);
+      y += 18 * LINE_HEIGHT;
+    }
+    y += 6;
+    ctx.font = `400 14px ${NOTE_FONT}`;
+    ctx.globalAlpha = 0.7;
+    for (const l of item.card.body) {
+      ctx.fillText(l, el.x + pad, y + (14 * LINE_HEIGHT) / 2);
+      y += 14 * LINE_HEIGHT;
+    }
+    ctx.globalAlpha = 1;
   }
 
   private drawImage(item: SceneItem, zoom: number): void {

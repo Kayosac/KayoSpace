@@ -62,3 +62,23 @@ export function pageText(doc: Y.Doc): string {
       : (n.content ?? []).map(walk).join(n.type === 'doc' ? '\n' : ' ');
   return walk(readPage(doc)).trim();
 }
+
+/** Начало документа для карточки на доске: первые строки текста без разметки. */
+export function pageExcerpt(doc: Y.Doc, maxLines = 4, maxChars = 240): string {
+  const lines: string[] = [];
+  for (const raw of pageMarkdown(doc).split('\n')) {
+    if (lines.length >= maxLines) break;
+    if (/^\[\[board:/.test(raw) || /^(```|---)/.test(raw)) continue;
+    const t = raw
+      .replace(/^(#{1,3}|>)\s+/, '')
+      .replace(/^[-*] \[[ xX]\] /, (m) => (/x/i.test(m) ? '☑ ' : '☐ '))
+      .replace(/^[-*] /, '• ')
+      .replace(/\*\*|~~|`/g, '')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .trim();
+    if (t) lines.push(t);
+  }
+  const s = lines.join('\n');
+  return s.length > maxChars ? `${s.slice(0, maxChars - 1)}…` : s;
+}

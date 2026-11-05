@@ -31,7 +31,8 @@ import { registerLayoutTools } from './mcp-layout';
 import { registerExtraTools } from './mcp-extra';
 import { registerImageTools } from './mcp-images';
 import { registerPageTools } from './mcp-pages';
-import { isPageId, pageMarkdown } from '@kayospace/page';
+import { registerTableTools, tableText } from './mcp-tables';
+import { isPageId, isTableId, pageMarkdown } from '@kayospace/page';
 import type { Trash } from './trash';
 import type { History } from './history';
 import type { OpenAi } from './openai';
@@ -103,7 +104,10 @@ const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], is
 const boardId = z
   .string()
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
-  .refine((id) => !id.startsWith('pg_'), 'Это документ, а не доска: read_page / write_page')
+  .refine(
+    (id) => !id.startsWith('pg_') && !id.startsWith('tb_'),
+    'Это документ или таблица, а не доска: read_page / write_page, read_table / write_table',
+  )
   .describe('id доски: латиница, цифры, «-» и «_» (не в начале)');
 
 /** Файлы картинок на хабе — чтобы показать их агенту на снимке доски. */
@@ -139,7 +143,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.4.0' },
+      { name: 'kayospace', version: '0.5.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -158,8 +162,8 @@ export function createMcp(
       {
         annotations: { readOnlyHint: true },
         description:
-          'Список досок и документов Kayospace: id, название, kind (board — доска, page — документ), ' +
-          'число элементов и проект. Документы читай read_page, пиши write_page.',
+          'Список досок, документов и таблиц Kayospace: id, название, kind (board — доска, page — документ, ' +
+          'table — таблица), число элементов и проект. Документы — read_page/write_page, таблицы — read_table/write_table.',
       },
       async () => text(JSON.stringify(await store.list(), null, 2)),
     );
@@ -430,7 +434,10 @@ export function createMcp(
     if (opts.trash)
       registerExtraTools(server, store, opts.trash, MCP_ORIGIN, who, opts.history ?? null);
     // Документы (решение 0020) — тоже только у настоящих досок.
-    if (opts.trash) registerPageTools(server, store, MCP_ORIGIN);
+    if (opts.trash) {
+      registerPageTools(server, store, MCP_ORIGIN, who);
+      registerTableTools(server, store, MCP_ORIGIN);
+    }
     const assets = opts.assets;
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)
@@ -548,16 +555,16 @@ export function createMcp(
       },
       async ({ id }) => {
         const [board, element] = id.split('#');
-        if (board && isPageId(board) && (await store.has(board))) {
+        if (board && (isPageId(board) || isTableId(board)) && (await store.has(board))) {
           const doc = await store.get(board);
           return text(
             JSON.stringify(
               {
                 id,
                 title: getBoardName(doc) ?? board,
-                text: pageMarkdown(doc),
+                text: isTableId(board) ? tableText(doc) : pageMarkdown(doc),
                 url: boardLink(board),
-                metadata: { page: board },
+                metadata: isTableId(board) ? { table: board } : { page: board },
               },
               null,
               2,

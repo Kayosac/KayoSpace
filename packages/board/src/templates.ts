@@ -6,10 +6,10 @@
 import type { Actor, CanvasElement } from '@kayospace/model';
 import { makeFrame, makeSticky, makeText } from './factory';
 
-export type TemplateId = 'kanban' | 'week' | 'retro' | 'brainstorm' | 'meeting';
+// Канбан-шаблона больше нет (решение 0021): задачи показывает настоящий канбан «Задачи» → «Канбан».
+export type TemplateId = 'week' | 'retro' | 'brainstorm' | 'meeting';
 
 export const BOARD_TEMPLATES: readonly { id: TemplateId; name: string; hint: string }[] = [
-  { id: 'kanban', name: 'Канбан', hint: 'Сделать · В работе · Готово' },
   { id: 'week', name: 'Неделя', hint: 'Понедельник — воскресенье' },
   { id: 'retro', name: 'Ретро', hint: 'Хорошо · Улучшить · Дальше' },
   { id: 'brainstorm', name: 'Мозговой штурм', hint: 'Тема, идеи, отбор' },
@@ -52,12 +52,6 @@ function columns(
 /** Элементы шаблона (координаты — от (0, 0)). */
 export function templateElements(id: TemplateId, actor: Actor): CanvasElement[] {
   switch (id) {
-    case 'kanban':
-      return columns(['Сделать', 'В работе', 'Готово'], actor, {
-        w: 440,
-        h: 960,
-        stickers: ['Новая задача — перетащите в «В работе»', null, null],
-      });
     case 'week':
       return columns(
         ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'],

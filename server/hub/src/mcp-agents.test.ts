@@ -198,6 +198,7 @@ describe('подсказки для клиентов', () => {
       'list_versions',
       'read_board',
       'read_page',
+      'read_table',
       'search',
       'view_board',
     ]);

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { addElements, makeFrame, makeSticky } from '@kayospace/board';
+import { addElements, listElements, makeFrame, makeSticky } from '@kayospace/board';
 import { pageMarkdown } from '@kayospace/page';
 import type { Actor } from '@kayospace/model';
 import { startHub, type Hub } from './hub';
@@ -91,5 +91,61 @@ describe('документы (решение 0020)', () => {
     ).json()) as { frames: unknown[] };
     expect(frames.frames).toEqual([{ id: frame.id, name: 'Схема' }]);
     expect((await fetch(`http://127.0.0.1:${hub.port}/api/render/empty.png`)).status).toBe(404);
+  });
+
+  it('таблица: агент создаёт, дописывает и меняет строки; карточка на доске', async () => {
+    const made = await call('write_table', {
+      table: 'tb_buy',
+      name: 'Закупки',
+      columns: [
+        { name: 'Что', type: 'text' },
+        { name: 'Цена', type: 'number' },
+        { name: 'Куплено', type: 'checkbox' },
+      ],
+      rows: [{ values: { Что: 'Плитка', Цена: '1 200' } }, { values: { Что: 'Клей', Цвет: 'x' } }],
+    });
+    expect(made.content[0]!.text).toContain('Таблица создана');
+    expect(made.content[0]!.text).toContain('колонок нет: Цвет');
+    const json = JSON.parse(
+      (await call('read_table', { table: 'tb_buy', format: 'json' })).content[0]!.text,
+    ) as {
+      rows: { id: string; values: Record<string, unknown> }[];
+    };
+    expect(json.rows[0]!.values).toEqual({ Что: 'Плитка', Цена: 1200, Куплено: null });
+    await call('write_table', {
+      table: 'tb_buy',
+      rows: [{ id: json.rows[1]!.id, values: { Куплено: true } }],
+    });
+    const md = (await call('read_table', { table: 'tb_buy' })).content[0]!.text;
+    expect(md).toContain('| Клей |  | ✓ |');
+    expect(md).toContain('Цена — Число');
+    const list = JSON.parse((await call('list_boards', {})).content[0]!.text) as {
+      id: string;
+      kind: string;
+    }[];
+    expect(list.find((b) => b.id === 'tb_buy')?.kind).toBe('table');
+    const found = JSON.parse((await call('search', { query: 'клей' })).content[0]!.text) as {
+      results: { board: string; type: string }[];
+    };
+    expect(found.results[0]).toMatchObject({ board: 'tb_buy', type: 'table' });
+
+    // Карточка на доске; доска читается с подсказкой, как открыть.
+    const placed = await call('place_doc', { board: 'home', doc: 'tb_buy' });
+    expect(placed.isError).toBeFalsy();
+    const card = listElements(await hub.store.get('home')).find((e) => e.type === 'doc');
+    expect(card).toMatchObject({
+      props: { doc: 'tb_buy', title: 'Закупки', excerpt: '2 строки · Что, Цена, Куплено' },
+    });
+    expect((await call('read_board', { board: 'home' })).content[0]!.text).toContain('read_table');
+    const docs = (await (
+      await fetch(`http://127.0.0.1:${hub.port}/api/docs?ids=tb_buy,pg_none`)
+    ).json()) as { docs: unknown[] };
+    expect(docs.docs).toEqual([
+      { id: 'tb_buy', kind: 'table', title: 'Закупки', excerpt: '2 строки · Что, Цена, Куплено' },
+    ]);
+    // Картинка доски с карточкой рисуется.
+    const png = await fetch(`http://127.0.0.1:${hub.port}/api/render/home.png`);
+    expect(png.status).toBe(200);
+    expect((await call('add_sticky', { board: 'tb_buy', text: 'x' })).isError).toBe(true);
   });
 });

@@ -19,7 +19,9 @@ import { TasksPanel } from './TasksPanel';
 import { ChatPanel } from './ChatPanel';
 import { KanbanView } from './KanbanView';
 import { PageView } from './PageView';
-import { isPageId } from '@kayospace/page';
+import { docKind, hasTable, initTable, isDocId, pageIdFrom, tableIdFrom } from '@kayospace/page';
+import { TableView } from './TableView';
+import { DocOverlay, DocMenu, useDocCards, type DocSummary } from './DocOverlay';
 import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
 import { AssetStore, imageFiles } from './assets';
@@ -114,6 +116,10 @@ export function App() {
   const [presenting, setPresenting] = useState(false);
   // Канбан задач поверх доски (решение 0020).
   const [kanban, setKanban] = useState(false);
+  // Документ или таблица поверх доски (решение 0021); name — у только что созданного.
+  const [overlay, setOverlay] = useState<{ id: string; name?: string } | null>(null);
+  const openDocRef = useRef<(doc: string) => void>(() => {});
+  openDocRef.current = (doc) => setOverlay({ id: doc });
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -223,8 +229,9 @@ export function App() {
 
   // Доска: пересоздаётся при смене доски или подключения к хабу.
   const { board } = settings;
-  // Документ (решение 0020) — вместо холста редактор страницы.
-  const isPage = isPageId(board);
+  // Документ (решение 0020) или таблица (решение 0021) — вместо холста их редактор.
+  const mode = docKind(board);
+  const isPage = mode === 'page';
   useEffect(() => {
     const s = new BoardSession(board, hubUrl ? { url: hubUrl, token: hubToken } : null);
     setSession(s);
@@ -232,6 +239,9 @@ export function App() {
     const nameNewBoard = (): void => {
       if (pending?.id === board && s.getState().loaded) {
         if (!s.getState().name) s.rename(pending.name);
+        // Новая таблица — с колонками «Название» и «Готово».
+        if (docKind(board) === 'table' && !hasTable(s.doc))
+          initTable(s.doc, undefined, 'kayospace:table-init');
         // Шаблон (решение 0017) — только в пустую доску; не своя правка: «Отменить» его не стирает.
         if (pending.template && listElements(s.doc).length === 0) {
           addElements(s.doc, templateElements(pending.template, actor), 'template');
@@ -255,7 +265,7 @@ export function App() {
   // Холст для открытой доски.
   useEffect(() => {
     const host = stageRef.current;
-    if (!session || !host || isPageId(session.board)) return;
+    if (!session || !host || isDocId(session.board)) return;
     const s = settingsRef.current;
     const e = new CanvasEngine(host, session.doc, {
       actor,
@@ -272,6 +282,7 @@ export function App() {
       rotateWithFingers: s.rotateWithFingers,
       assets,
       lowLatency,
+      onOpenDoc: (doc) => openDocRef.current(doc),
     });
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const stopCamera = e.onCamera((c) => {
@@ -662,7 +673,7 @@ export function App() {
     (id: string, elementId: string, name: string | null, close = true) => {
       if (close || id !== board) setPanel(null);
       // Документ: элементов нет — просто открыть.
-      if (isPageId(id) || !elementId) {
+      if (isDocId(id) || !elementId) {
         if (id !== board) openBoard(id, name, false);
         return;
       }
@@ -706,6 +717,17 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [openBoard]);
   const boardLoaded = sessionState?.loaded ?? false;
+  // Карточки документов на доске: название и начало текста — с хаба (решение 0021).
+  useDocCards(engine, hubForPanels, boardLoaded);
+  const overlayId = overlay?.id ?? null;
+  const onDocSummary = useCallback(
+    (sum: DocSummary) => {
+      if (overlayId) engine?.refreshDocCards(overlayId, sum);
+    },
+    [engine, overlayId],
+  );
+  // Сменили доску — открытый поверх неё документ закрываем.
+  useEffect(() => setOverlay(null), [board]);
   useEffect(() => {
     const p = pendingShare.current;
     if (!p || !engine || !session || board !== INBOX_BOARD || !boardLoaded) return;
@@ -781,9 +803,7 @@ export function App() {
 
   return (
     <div
-      className={['app', presenting && 'presenting', isPage && 'page-mode']
-        .filter(Boolean)
-        .join(' ')}
+      className={['app', presenting && 'presenting', mode && 'page-mode'].filter(Boolean).join(' ')}
     >
       <div
         className="stage"
@@ -871,6 +891,23 @@ export function App() {
           onTasks={() => setPanel((p) => (p === 'tasks' ? null : 'tasks'))}
           onChat={() => setPanel((p) => (p === 'chat' ? null : 'chat'))}
           onImages={(files) => void insertFiles(files)}
+          docMenu={(close) => (
+            <DocMenu
+              hub={hubForPanels}
+              recent={settings.recentBoards}
+              onNew={(kind) => {
+                close();
+                const name = kind === 'table' ? 'Новая таблица' : 'Новый документ';
+                const id = (kind === 'table' ? tableIdFrom : pageIdFrom)(boardIdFromName(name));
+                engine.insertDocCard(id, { title: name });
+                setOverlay({ id, name });
+              }}
+              onExisting={(id, name) => {
+                close();
+                engine.insertDocCard(id, name ? { title: name } : {});
+              }}
+            />
+          )}
           onPaste={() => void pasteFromButton()}
           onAi={() => setAiPrompt((p) => !p)}
           aiOn={aiPrompt || (aiState?.kind ?? 'idle') !== 'idle'}
@@ -891,8 +928,34 @@ export function App() {
           onOpenBoard={(id, frame, title) => findElement(id, frame ?? '', title)}
         />
       )}
+      {mode === 'table' && session && (
+        <TableView
+          key={session.board}
+          session={session}
+          name={boardName}
+          onRename={(n) => session.rename(n)}
+        />
+      )}
+      {overlay && (
+        <DocOverlay
+          key={overlay.id}
+          id={overlay.id}
+          hub={hubForPanels}
+          boards={settings.recentBoards}
+          {...(overlay.name ? { initialName: overlay.name } : {})}
+          onSummary={onDocSummary}
+          onClose={() => setOverlay(null)}
+          onOpenBoard={(id, frame, title) => findElement(id, frame ?? '', title)}
+        />
+      )}
       {sessionState && !sessionState.loaded && (
-        <div className="loading">{isPage ? 'Открываю документ…' : 'Открываю доску…'}</div>
+        <div className="loading">
+          {isPage
+            ? 'Открываю документ…'
+            : mode === 'table'
+              ? 'Открываю таблицу…'
+              : 'Открываю доску…'}
+        </div>
       )}
       {panel === 'boards' && (
         <BoardsPanel

@@ -1609,13 +1609,16 @@ test('планшет: доска из шаблона, PDF страницами, 
         .map((f) => f.name),
     );
 
-  // Новая доска из шаблона «Канбан» — колонки уже на месте.
+  // Новая доска из шаблона «Ретро» — колонки уже на месте; канбана среди шаблонов нет.
   await page.getByTestId('board-title').tap();
   await page.getByLabel('Найти или создать доску').fill('Спринт');
-  await page.getByTestId('templates').getByRole('button', { name: 'Канбан' }).tap();
+  await expect(page.getByTestId('templates').getByRole('button', { name: 'Канбан' })).toHaveCount(
+    0,
+  );
+  await page.getByTestId('templates').getByRole('button', { name: 'Ретро' }).tap();
   await expect(page.getByTestId('board-title')).toHaveText('Спринт');
-  await expect.poll(frameNames).toEqual(['Сделать', 'В работе', 'Готово']);
-  await page.screenshot({ path: shot('template-kanban.png') });
+  await expect.poll(frameNames).toEqual(['Что было хорошо', 'Что улучшить', 'Что делаем дальше']);
+  await page.screenshot({ path: shot('template-retro.png') });
 
   // PDF — кнопкой «Картинка или PDF»: каждая страница во фрейме.
   await page.getByTestId('image-input').setInputFiles({
@@ -1625,7 +1628,13 @@ test('планшет: доска из шаблона, PDF страницами, 
   });
   await expect
     .poll(async () => (await frameNames()).sort(), { timeout: 20_000 })
-    .toEqual(['В работе', 'Готово', 'Договор — стр. 1', 'Договор — стр. 2', 'Сделать']);
+    .toEqual([
+      'Договор — стр. 1',
+      'Договор — стр. 2',
+      'Что было хорошо',
+      'Что делаем дальше',
+      'Что улучшить',
+    ]);
   await expect(page.locator('.toast')).toContainText('PDF на доске: 2 стр.');
   expect((await boardElements(page)).filter((e) => e.type === 'image')).toHaveLength(2);
   // Фрейм страницы шире самой страницы — его удобно брать за поля.
@@ -1648,7 +1657,7 @@ test('планшет: доска из шаблона, PDF страницами, 
   await page.getByTestId('present').tap();
   const title = page.getByTestId('present-title');
   await expect(title).toContainText('1 / 5');
-  await expect(title).toContainText('Сделать');
+  await expect(title).toContainText('Что было хорошо');
   await expect(page.locator('.toolbar')).toBeHidden();
   const surface = page.getByTestId('present-surface');
   await surface.tap({ position: { x: 1000, y: 400 } });
@@ -1915,7 +1924,18 @@ test('канбан: задачи колонками, перенос перета
   await page.mouse.down();
   await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
   await page.mouse.move(to.x + to.width / 2, to.y + 120, { steps: 10 });
+  // Карточка летит поверх колонок (не обрезана своей), колонка-цель подсвечена.
+  const ghost = page.locator('.kanban-ghost');
+  await expect(ghost).toBeVisible();
+  const g = (await ghost.boundingBox())!;
+  expect(g.x + g.width / 2).toBeGreaterThan(to.x);
+  expect(g.x + g.width / 2).toBeLessThan(to.x + to.width);
+  await expect(doing.locator('.kanban-slot')).toBeVisible();
+  await page.screenshot({ path: shot('kanban-drag.png') });
   await page.mouse.up();
+  await expect(ghost).toHaveCount(0);
+  // Текст при перетаскивании не выделился.
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
   await expect(doing.getByTestId('kanban-card')).toHaveCount(1);
   await expect(doing).toContainText('Заказать плитку');
   // Касание — действия: «→ Готово».
@@ -2016,4 +2036,156 @@ test('планшет: документ — заголовок, чек-лист �
   await page.waitForFunction(() => window.__kayospace?.engine);
   await client.close();
   await context.close();
+});
+
+async function tabletPage(browser: Browser, board: string): Promise<Page> {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ ...synced, board })] as const,
+  );
+  const page = await context.newPage();
+  page.on('pageerror', (e) => console.log(`[${board}] ошибка страницы: ${e.message}`));
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  return page;
+}
+
+const docCards = (page: Page) =>
+  page.evaluate(() =>
+    (
+      window.__kayospace!.engine as unknown as {
+        docCards(): { id: string; doc: string; title?: string; excerpt?: string }[];
+      }
+    ).docCards(),
+  );
+
+test('планшет: таблица — колонки по типам, ячейки и итоги касаниями; агент читает и дописывает', async ({
+  browser,
+}) => {
+  const page = await tabletPage(browser, `e2e-table-start-${Date.now()}`);
+  const { client, call } = await mcpClient('e2e-tables');
+  await page.getByTestId('board-title').tap();
+  await page.getByLabel('Найти или создать доску').fill('Смета кухни');
+  await page.getByTestId('create-table').tap();
+  const view = page.getByTestId('table-view');
+  await expect(view).toBeVisible();
+  await expect(page.getByTestId('page-title')).toHaveValue('Смета кухни');
+  const heads = view.getByTestId('column-head');
+  await expect(heads).toHaveText([/Название/, /Готово/]);
+
+  // Две строки, текст и флажок.
+  await view.getByTestId('table-add-row').tap();
+  await view.getByTestId('table-add-row').tap();
+  const rows = view.getByTestId('table-row');
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).locator('[data-col="Название"] input').fill('Плитка');
+  await rows.nth(1).locator('[data-col="Название"] input').fill('Клей');
+  await rows.nth(1).locator('[data-col="Готово"] input').tap();
+  await expect(rows.nth(1).locator('[data-col="Готово"] input')).toBeChecked();
+
+  // Новая колонка «Цена» — числом; итог — сумма.
+  await view.getByTestId('table-add-column').tap();
+  const menu = page.getByTestId('column-menu');
+  await menu.getByTestId('column-name').fill('Цена');
+  await menu.getByRole('radio', { name: /Число/ }).tap();
+  await menu.getByRole('button', { name: 'Закрыть' }).tap();
+  await expect(heads).toHaveText([/Название/, /Готово/, /Цена/]);
+  await rows.nth(0).locator('[data-col="Цена"] input').fill('1200');
+  await rows.nth(1).locator('[data-col="Цена"] input').fill('350,5');
+  await page.getByTestId('page-title').tap();
+  const totals = view.getByTestId('column-total');
+  await expect(totals.nth(2)).toHaveText(/Σ 1\s550,5/);
+  await expect(totals.nth(1)).toHaveText('1 из 2');
+
+  // Агент видит таблицу с типами и дописывает строку — она появляется сразу.
+  const list = JSON.parse(await call('list_boards', {})) as {
+    id: string;
+    name: string;
+    kind: string;
+  }[];
+  const table = list.find((b) => b.name === 'Смета кухни');
+  expect(table?.kind).toBe('table');
+  await expect
+    .poll(() => call('read_table', { table: table!.id }))
+    .toContain('| Клей | ✓ | 350,5 |');
+  await call('write_table', {
+    table: table!.id,
+    rows: [{ values: { Название: 'Затирка', Цена: 400 } }],
+  });
+  await expect(rows).toHaveCount(3);
+  await expect(totals.nth(2)).toHaveText(/Σ 1\s950,5/);
+
+  // Сортировка по цене (только на экране) и удаление строки касаниями.
+  await heads.nth(2).tap();
+  await menu.getByRole('radio', { name: 'По убыванию' }).tap();
+  await menu.getByRole('button', { name: 'Закрыть' }).tap();
+  await expect(rows.nth(0).locator('[data-col="Название"] input')).toHaveValue('Плитка');
+  await page.screenshot({ path: shot('table.png') });
+  await rows
+    .nth(2)
+    .getByRole('button', { name: /Строка/ })
+    .tap();
+  await rows.nth(2).getByTestId('row-delete').tap();
+  await expect(rows).toHaveCount(2);
+  await expect.poll(() => call('read_table', { table: table!.id })).not.toContain('Клей');
+  await client.close();
+  await page.context().close();
+});
+
+test('планшет: документ и таблица карточками на доске — открываются поверх касанием пальца', async ({
+  browser,
+}) => {
+  const board = `e2e-doc-cards-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-doc-cards');
+  await call('create_board', { board, name: 'Ремонт' });
+  const page = await tabletPage(browser, board);
+
+  // Новый документ с панели: карточка на доске, документ сразу открыт поверх.
+  await page.getByTestId('doc-button').tap();
+  await page.getByTestId('doc-popover').getByTestId('new-doc-card').tap();
+  const overlay = page.getByTestId('doc-overlay');
+  await expect(overlay).toBeVisible();
+  await expect(overlay.getByTestId('page-title')).toHaveValue('Новый документ');
+  await overlay.getByTestId('page-title').fill('План работ');
+  await overlay.getByTestId('page-editor').fill('Сначала демонтаж');
+  await overlay.getByTestId('doc-close').tap();
+  await expect(overlay).toHaveCount(0);
+  await expect
+    .poll(async () => (await docCards(page)).map((c) => [c.title, c.excerpt]))
+    .toEqual([['План работ', 'Сначала демонтаж']]);
+  const docId = (await docCards(page))[0]!.doc;
+  expect(docId).toMatch(/^pg_/);
+  await page.screenshot({ path: shot('doc-card.png') });
+
+  // Палец касается карточки — документ снова поверх, с тем же текстом.
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+  await page.getByTestId('stage').tap({ position: { x: 590, y: 410 } });
+  await expect(overlay).toBeVisible();
+  await expect(overlay.getByTestId('page-editor')).toContainText('Сначала демонтаж');
+  await page.screenshot({ path: shot('doc-overlay.png') });
+  await overlay.getByTestId('doc-close').tap();
+
+  // Таблица — тоже карточкой; агент кладёт на доску существующий документ.
+  await page.getByTestId('doc-button').tap();
+  await page.getByTestId('doc-popover').getByTestId('new-table-card').tap();
+  await expect(overlay.getByTestId('table-view')).toBeVisible();
+  await expect(overlay.getByTestId('column-head')).toHaveCount(2);
+  await overlay.getByTestId('doc-close').tap();
+  await expect.poll(async () => (await docCards(page)).length).toBe(2);
+  const tableCard = (await docCards(page)).find((c) => c.doc.startsWith('tb_'))!;
+  expect(tableCard.excerpt).toBe('0 строк · Название, Готово');
+  await call('place_doc', { board, doc: docId, x: 2000, y: 0 });
+  await expect.poll(async () => (await docCards(page)).length).toBe(3);
+  expect(await call('read_board', { board })).toContain('Документ «План работ»');
+  await client.close();
+  await page.context().close();
 });

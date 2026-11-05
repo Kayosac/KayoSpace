@@ -22,6 +22,8 @@ import {
   isIdentity,
   makeArrow,
   makeImage,
+  makeDocCard,
+  DOC_CARD_SIZE,
   makeShape,
   makeSticky,
   makeStroke,
@@ -167,7 +169,12 @@ export interface EngineOptions {
   assets?: AssetLoader;
   /** Канва низкой задержки для пера (по умолчанию — да). */
   lowLatency?: boolean;
+  /** Касание карточки документа (решение 0021): открыть документ поверх доски. */
+  onOpenDoc?: (doc: string, elementId: string) => void;
 }
+
+/** Копию названия и начала текста в карточке пишем не своей правкой: «Отменить» её не трогает. */
+export const DOC_CARD_ORIGIN = 'kayospace:doc-card';
 
 /** Хранилище картинок приложения: локальная копия или хаб. */
 export interface AssetLoader {
@@ -188,7 +195,15 @@ interface ActiveDraw {
 }
 
 type SelectGesture =
-  | { kind: 'move'; start: Pt; t: Transform; moved: boolean; editOnTap?: string }
+  | {
+      kind: 'move';
+      start: Pt;
+      t: Transform;
+      moved: boolean;
+      editOnTap?: string;
+      /** Касание без сдвига открывает документ этой карточки. */
+      openOnTap?: string;
+    }
   | { kind: 'scale'; anchor: Pt; corner: Pt; t: Transform; moved: boolean }
   | { kind: 'rotate'; center: Pt; start: number; t: Transform; moved: boolean }
   | { kind: 'lasso'; points: Pt[] }
@@ -332,9 +347,15 @@ export class CanvasEngine {
       drawingWith: () => this.input.drawingWith,
       onMultiTouch: () => this.input.cancel(),
       onPanChange: () => this.updateCursor(),
-      onTap: (fingers) => {
+      onTap: (fingers, at) => {
         if (fingers === 2) this.undo();
         else if (fingers === 3) this.redo();
+        else if (fingers === 1 && at) {
+          // Палец двигает холст, но касание карточки документа открывает его (решение 0021).
+          const p = screenToWorld(this.camera, at.x, at.y);
+          const hit = this.scene.pick(p.x, p.y, 10 / this.camera.zoom);
+          if (hit && this.scene.items.get(hit)?.element.type === 'doc') this.openDoc(hit);
+        }
       },
     });
     this.nav.handTool = this.tool === 'hand';
@@ -824,6 +845,71 @@ export class CanvasEngine {
     if (opts.blob) void this.images.put(assetId, opts.blob);
     this.insert([el]);
     return el.id;
+  }
+
+  /** Карточка документа или таблицы в центре экрана (или в точке at, экранные координаты). */
+  insertDocCard(doc: string, info: { title?: string; excerpt?: string } = {}, at?: Pt): string {
+    const c = at
+      ? screenToWorld(this.camera, at.x, at.y)
+      : screenToWorld(this.camera, this.renderer.width / 2, this.renderer.height / 2);
+    const el = {
+      ...makeDocCard(
+        doc,
+        { x: c.x - DOC_CARD_SIZE.w / 2, y: c.y - DOC_CARD_SIZE.h / 2 },
+        { ...info, actor: this.opts.actor },
+      ),
+      rotation: -(this.camera.rotation ?? 0),
+    };
+    this.insert([el]);
+    return el.id;
+  }
+
+  /** Карточки документов на доске. */
+  docCards(): { id: string; doc: string; title?: string; excerpt?: string }[] {
+    const out: { id: string; doc: string; title?: string; excerpt?: string }[] = [];
+    for (const item of this.scene.items.values()) {
+      const el = item.element;
+      if (el.type === 'doc') out.push({ id: el.id, ...el.props });
+    }
+    return out;
+  }
+
+  /**
+   * Обновить копию названия и начала текста у карточек документа (не своя правка — не отменяется).
+   * Возвращает, сколько карточек изменилось.
+   */
+  refreshDocCards(doc: string, info: { title?: string; excerpt?: string }): number {
+    let n = 0;
+    this.doc.transact(() => {
+      for (const card of this.docCards()) {
+        if (card.doc !== doc) continue;
+        if (
+          (card.title ?? '') === (info.title ?? '') &&
+          (card.excerpt ?? '') === (info.excerpt ?? '')
+        )
+          continue;
+        const el = getElement(this.doc, card.id);
+        if (el?.type !== 'doc') continue;
+        elementsMap(this.doc).set(card.id, {
+          ...el,
+          props: {
+            doc,
+            ...(info.title ? { title: info.title } : {}),
+            ...(info.excerpt ? { excerpt: info.excerpt } : {}),
+          },
+        });
+        n++;
+      }
+    }, DOC_CARD_ORIGIN);
+    return n;
+  }
+
+  /** Открыть документ карточки (обработчик — у приложения). */
+  openDoc(elementId: string): boolean {
+    const el = getElement(this.doc, elementId);
+    if (el?.type !== 'doc' || !this.opts.onOpenDoc) return false;
+    this.opts.onOpenDoc(el.props.doc, el.id);
+    return true;
   }
 
   /**
@@ -1600,6 +1686,7 @@ export class CanvasEngine {
           t: IDENTITY,
           moved: false,
           ...(only && (t === 'sticky' || t === 'text') ? { editOnTap: only } : {}),
+          ...(only && t === 'doc' ? { openOnTap: only } : {}),
         };
         this.selectionChanged();
         return;
@@ -1627,6 +1714,7 @@ export class CanvasEngine {
           t: IDENTITY,
           moved: false,
           ...(editOnTap ? { editOnTap } : {}),
+          ...(!additive && t === 'doc' ? { openOnTap: hit } : {}),
         };
       }
       this.selectionChanged();
@@ -1691,6 +1779,9 @@ export class CanvasEngine {
       } else if (g.kind === 'move' && g.editOnTap) {
         this.startEditing(g.editOnTap);
         return;
+      } else if (g.kind === 'move' && g.openOnTap) {
+        this.openDoc(g.openOnTap);
+        return;
       } else if (g.kind === 'shape') {
         let el = this.draftShape(g);
         if (el?.type === 'arrow') {
@@ -1724,6 +1815,7 @@ export class CanvasEngine {
         const hit = this.scene.pick(g.start.x, g.start.y, 4 / z);
         const t = hit ? this.scene.items.get(hit)?.element.type : undefined;
         if (hit && (t === 'sticky' || t === 'text')) this.startEditing(hit);
+        else if (hit && t === 'doc') this.openDoc(hit);
         else this.placeNote(kind, g.start);
         return;
       } else if (g.kind === 'lasso' && g.points.length >= 3) {

@@ -52,7 +52,10 @@ const MAX_SEND_BYTES = 3.5 * 1024 * 1024;
 const boardId = z
   .string()
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
-  .refine((id) => !id.startsWith('pg_'), 'Это документ, а не доска: read_page / write_page');
+  .refine(
+    (id) => !id.startsWith('pg_') && !id.startsWith('tb_'),
+    'Это документ или таблица, а не доска: read_page / write_page, read_table / write_table',
+  );
 
 interface Loaded {
   id: string;

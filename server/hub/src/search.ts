@@ -6,7 +6,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { elementText, listElements } from '@kayospace/board';
-import { isPageId, pageMarkdown } from '@kayospace/page';
+import { isPageId, isTableId, pageMarkdown, tableLines } from '@kayospace/page';
 import type * as Y from 'yjs';
 import { json } from './devices-api';
 
@@ -36,13 +36,20 @@ export async function searchBoards(
   for (const info of await store.list()) {
     const doc = await store.get(info.id);
     // Документ (решение 0020): ищем по строкам страницы.
-    if (isPageId(info.id)) {
-      for (const line of pageMarkdown(doc).split('\n')) {
+    if (isPageId(info.id) || isTableId(info.id)) {
+      const table = isTableId(info.id);
+      for (const line of table ? tableLines(doc) : pageMarkdown(doc).split('\n')) {
         const t = line.replace(/^(#{1,3}|>|[-*]( \[[ xX]\])?|\d+\.)\s+/, '').trim();
         const low = t.toLowerCase();
         const at = low.indexOf(q);
         if (!t || at < 0) continue;
-        const hit = { board: info.id, boardName: info.name, id: '', type: 'page', text: t };
+        const hit = {
+          board: info.id,
+          boardName: info.name,
+          id: '',
+          type: table ? 'table' : 'page',
+          text: t,
+        };
         (at === 0 || /[\s.,;:!?()«»"'-]/.test(low[at - 1]!) ? word : rest).push(hit);
       }
       continue;
