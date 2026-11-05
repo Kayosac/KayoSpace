@@ -197,6 +197,7 @@ describe('подсказки для клиентов', () => {
       'list_trash',
       'list_versions',
       'read_board',
+      'read_page',
       'search',
       'view_board',
     ]);

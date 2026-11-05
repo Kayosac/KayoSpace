@@ -15,6 +15,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/model/package.json packages/model/
 COPY packages/board/package.json packages/board/
 COPY packages/sync/package.json packages/sync/
+COPY packages/page/package.json packages/page/
 COPY server/hub/package.json server/hub/
 RUN pnpm install --filter "@kayospace/hub..." --prod --no-frozen-lockfile
 
@@ -22,6 +23,7 @@ COPY tsconfig.base.json ./
 COPY packages/model packages/model
 COPY packages/board packages/board
 COPY packages/sync packages/sync
+COPY packages/page packages/page
 COPY server/hub server/hub
 
 # Claude Code хранит настройки в домашней папке — она у пользователя node своя.

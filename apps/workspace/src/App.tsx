@@ -17,6 +17,9 @@ import { TrashPanel } from './TrashPanel';
 import { HistoryPanel } from './HistoryPanel';
 import { TasksPanel } from './TasksPanel';
 import { ChatPanel } from './ChatPanel';
+import { KanbanView } from './KanbanView';
+import { PageView } from './PageView';
+import { isPageId } from '@kayospace/page';
 import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
 import { AssetStore, imageFiles } from './assets';
@@ -109,6 +112,8 @@ export function App() {
   >(null);
   // Презентация по фреймам (решение 0017).
   const [presenting, setPresenting] = useState(false);
+  // Канбан задач поверх доски (решение 0020).
+  const [kanban, setKanban] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,6 +223,8 @@ export function App() {
 
   // Доска: пересоздаётся при смене доски или подключения к хабу.
   const { board } = settings;
+  // Документ (решение 0020) — вместо холста редактор страницы.
+  const isPage = isPageId(board);
   useEffect(() => {
     const s = new BoardSession(board, hubUrl ? { url: hubUrl, token: hubToken } : null);
     setSession(s);
@@ -248,7 +255,7 @@ export function App() {
   // Холст для открытой доски.
   useEffect(() => {
     const host = stageRef.current;
-    if (!session || !host) return;
+    if (!session || !host || isPageId(session.board)) return;
     const s = settingsRef.current;
     const e = new CanvasEngine(host, session.doc, {
       actor,
@@ -505,9 +512,14 @@ export function App() {
             .some((c) => engine.scene.items.get(c)?.element.type === 'stroke')
         );
       });
-      // Картинку выделенного видит ИИ: для распознавания всегда, для своего запроса — если есть рисунки.
+      // Картинку выделенного (или видимого) видит ИИ: для распознавания всегда, для своего запроса
+      // и чата — если там есть рукописное или рисунки (решение 0020).
+      const freeform = action === 'prompt' || action === 'chat';
       const image =
-        action === 'recognize' || (action === 'prompt' && ink) ? await engine.exportImage() : null;
+        action === 'recognize' ||
+        (freeform && (ink || (selection.length === 0 && engine.hasInkIn(area))))
+          ? await engine.exportImage()
+          : null;
       await ai.start({
         board,
         action,
@@ -649,6 +661,11 @@ export function App() {
   const findElement = useCallback(
     (id: string, elementId: string, name: string | null, close = true) => {
       if (close || id !== board) setPanel(null);
+      // Документ: элементов нет — просто открыть.
+      if (isPageId(id) || !elementId) {
+        if (id !== board) openBoard(id, name, false);
+        return;
+      }
       if (id === board && engine?.focusElement(elementId)) return;
       pendingFocus.current = { board: id, id: elementId };
       if (id !== board) openBoard(id, name, false);
@@ -763,7 +780,11 @@ export function App() {
   }, [session]);
 
   return (
-    <div className={presenting ? 'app presenting' : 'app'}>
+    <div
+      className={['app', presenting && 'presenting', isPage && 'page-mode']
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div
         className="stage"
         ref={stageRef}
@@ -859,7 +880,20 @@ export function App() {
           }
         />
       )}
-      {sessionState && !sessionState.loaded && <div className="loading">Открываю доску…</div>}
+      {isPage && session && (
+        <PageView
+          key={session.board}
+          session={session}
+          name={boardName}
+          hub={hubForPanels}
+          boards={settings.recentBoards}
+          onRename={(n) => session.rename(n)}
+          onOpenBoard={(id, frame, title) => findElement(id, frame ?? '', title)}
+        />
+      )}
+      {sessionState && !sessionState.loaded && (
+        <div className="loading">{isPage ? 'Открываю документ…' : 'Открываю доску…'}</div>
+      )}
       {panel === 'boards' && (
         <BoardsPanel
           current={board}
@@ -919,6 +953,10 @@ export function App() {
           onFind={(id, elementId, name) => {
             // На планшете панель закрывает доску — после перехода прячем её; на компьютере оставляем.
             findElement(id, elementId, name, !finePointer());
+          }}
+          onKanban={() => {
+            setPanel(null);
+            setKanban(true);
           }}
           onClose={() => setPanel(null)}
         />
@@ -983,6 +1021,20 @@ export function App() {
           onOpenBoard={(id, name) => openBoard(id, name, false)}
           updates={updates}
           onClose={() => setPanel(null)}
+        />
+      )}
+      {kanban && (
+        <KanbanView
+          hub={hubForPanels}
+          board={board}
+          boardName={boardName}
+          doc={session?.doc ?? null}
+          engine={engine}
+          onOpen={(id, elementId, name) => {
+            setKanban(false);
+            findElement(id, elementId, name);
+          }}
+          onClose={() => setKanban(false)}
         />
       )}
       {presenting && engine && (

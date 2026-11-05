@@ -25,6 +25,7 @@ export function TasksPanel({
   doc,
   engine,
   onFind,
+  onKanban,
   onClose,
 }: {
   hub: Hub | null;
@@ -33,6 +34,8 @@ export function TasksPanel({
   doc: Y.Doc | null;
   engine: CanvasEngine | null;
   onFind: (board: string, id: string, name: string | null) => void;
+  /** Открыть канбан (решение 0020). */
+  onKanban: () => void;
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState<TaskFilter>('active');
@@ -81,6 +84,9 @@ export function TasksPanel({
     <aside className="panel tasks-panel" aria-label="Задачи" data-testid="tasks-panel">
       <div className="panel-head">
         <h2>Задачи</h2>
+        <button className="secondary kanban-open" onClick={onKanban} data-testid="open-kanban">
+          Канбан
+        </button>
         <button className="icon-btn" aria-label="Закрыть" onClick={onClose}>
           <CloseIcon />
         </button>

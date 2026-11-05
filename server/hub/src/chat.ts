@@ -72,15 +72,23 @@ export class ChatStore {
 }
 
 /** Последние реплики разговора — для задания Claude. */
+/** Последние столько реплик — целиком, старые — кратко (решение 0020: меньше лимитов подписки). */
+export const FULL_MESSAGES = 4;
+
 export function chatContext(messages: readonly ChatMessage[]): string {
   const recent = messages.filter((m) => !m.error).slice(-CONTEXT_MESSAGES);
   if (recent.length === 0) return '';
+  const cut = recent.length - FULL_MESSAGES;
   return [
-    'Разговор до этого (старое — выше):',
-    ...recent.map(
-      (m) =>
-        `${m.role === 'user' ? 'Человек' : 'Ты'}: ${m.text.replace(/\s+/g, ' ').slice(0, 1500)}` +
-        (m.changes ? ` [предложено правок: ${m.changes}]` : ''),
-    ),
+    'Разговор до этого (старое — выше, кратко):',
+    ...recent.map((m, i) => {
+      const flat = m.text.replace(/\s+/g, ' ').trim();
+      const max = i < cut ? 160 : 1500;
+      const body = flat.length > max ? `${flat.slice(0, max)}…` : flat;
+      return (
+        `${m.role === 'user' ? 'Человек' : 'Ты'}: ${body}` +
+        (m.changes ? ` [предложено правок: ${m.changes}]` : '')
+      );
+    }),
   ].join('\n');
 }

@@ -86,7 +86,10 @@ export function registerLayoutTools(
   agentOf: () => Actor,
   origin: unknown,
 ): void {
-  const boardId = z.string().regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/);
+  const boardId = z
+    .string()
+    .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+    .refine((id) => !id.startsWith('pg_'), 'Это документ, а не доска: read_page / write_page');
 
   server.registerTool(
     'add_elements',

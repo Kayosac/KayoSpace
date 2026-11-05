@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { boardIdFromName, hubHttpUrl } from '@kayospace/sync';
 import type { Project } from '@kayospace/model';
 import { BOARD_TEMPLATES, type BoardBackground, type TemplateId } from '@kayospace/board';
+import { isPageId, pageIdFrom } from '@kayospace/page';
 
 const BACKGROUNDS: { value: BoardBackground; name: string }[] = [
   { value: 'dots', name: 'Точки' },
@@ -17,6 +18,7 @@ import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
 import {
   CloseIcon,
+  DocIcon,
   ExportIcon,
   HistoryIcon,
   PlayIcon,
@@ -182,6 +184,13 @@ export function BoardsPanel({
     const title = query.trim() || 'Новая доска';
     onOpen(boardIdFromName(title), title, true);
   };
+  // Документ (решение 0020): id с «pg_» — по нему сразу видно, что это страница.
+  const createPage = (): void => {
+    const title = query.trim() || 'Новый документ';
+    onOpen(pageIdFrom(boardIdFromName(title)), title, true);
+  };
+  const isPage = isPageId(current);
+  const what = isPage ? 'этого документа' : 'этой доски';
 
   return (
     <aside className="panel boards" aria-label="Доски" data-testid="boards-panel">
@@ -192,7 +201,7 @@ export function BoardsPanel({
         </button>
       </div>
       <label className="field">
-        <span>Название этой доски</span>
+        <span>Название {what}</span>
         <CommitInput
           value={currentName ?? ''}
           placeholder={current}
@@ -201,7 +210,7 @@ export function BoardsPanel({
         />
       </label>
       <label className="field">
-        <span>Проект этой доски</span>
+        <span>Проект {what}</span>
         <select
           value={membership.get(current) ?? ''}
           onChange={(e) => onMoveBoard(e.target.value || null)}
@@ -215,25 +224,27 @@ export function BoardsPanel({
           ))}
         </select>
       </label>
-      <div className="field">
-        <span>Фон этой доски</span>
-        <div className="backgrounds" role="radiogroup" aria-label="Фон доски">
-          {BACKGROUNDS.map((b) => (
-            <button
-              key={b.value}
-              className="bg-option"
-              role="radio"
-              aria-checked={background === b.value}
-              aria-label={b.name}
-              data-bg={b.value}
-              onClick={() => onBackground(b.value)}
-            >
-              <i />
-              <span>{b.name}</span>
-            </button>
-          ))}
+      {!isPage && (
+        <div className="field">
+          <span>Фон этой доски</span>
+          <div className="backgrounds" role="radiogroup" aria-label="Фон доски">
+            {BACKGROUNDS.map((b) => (
+              <button
+                key={b.value}
+                className="bg-option"
+                role="radio"
+                aria-checked={background === b.value}
+                aria-label={b.name}
+                data-bg={b.value}
+                onClick={() => onBackground(b.value)}
+              >
+                <i />
+                <span>{b.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
       <div className="projects" role="tablist" aria-label="Проекты" data-testid="projects">
         <button
           role="tab"
@@ -369,9 +380,18 @@ export function BoardsPanel({
               onClick={() => onOpen(b.id, b.name, false)}
               onMouseEnter={() => setActive(i)}
             >
+              {isPageId(b.id) && <DocIcon />}
               <span className="board-title">{b.name ?? b.id}</span>
               <span className="board-meta">
-                {b.id === current ? 'открыта' : b.elements !== undefined ? `${b.elements} эл.` : ''}
+                {isPageId(b.id)
+                  ? b.id === current
+                    ? 'открыт'
+                    : 'документ'
+                  : b.id === current
+                    ? 'открыта'
+                    : b.elements !== undefined
+                      ? `${b.elements} эл.`
+                      : ''}
               </span>
             </button>
           </li>
@@ -386,6 +406,15 @@ export function BoardsPanel({
             <PlusIcon />
             <span>
               {query.trim() ? `Создать «${query.trim()}»` : 'Новая доска'}
+              {shown ? ` в «${shown.name}»` : ''}
+            </span>
+          </button>
+        </li>
+        <li>
+          <button className="create" onClick={createPage} data-testid="create-page">
+            <DocIcon />
+            <span>
+              {query.trim() ? `Документ «${query.trim()}»` : 'Новый документ'}
               {shown ? ` в «${shown.name}»` : ''}
             </span>
           </button>
@@ -430,7 +459,7 @@ export function BoardsPanel({
           )}
         </>
       )}
-      {frames.length > 0 && (
+      {!isPage && frames.length > 0 && (
         <>
           <div className="section-row">
             <h3 className="section-title">Фреймы этой доски</h3>
@@ -450,16 +479,18 @@ export function BoardsPanel({
           </ul>
         </>
       )}
-      <div className="row export-row">
-        <button className="secondary" onClick={() => onExport('board')} data-testid="export-png">
-          <ExportIcon />
-          PNG
-        </button>
-        <button className="secondary" onClick={() => onExport('pdf')} data-testid="export-pdf">
-          <ExportIcon />
-          PDF{frames.length > 0 ? ` (${frames.length} стр.)` : ''}
-        </button>
-      </div>
+      {!isPage && (
+        <div className="row export-row">
+          <button className="secondary" onClick={() => onExport('board')} data-testid="export-png">
+            <ExportIcon />
+            PNG
+          </button>
+          <button className="secondary" onClick={() => onExport('pdf')} data-testid="export-pdf">
+            <ExportIcon />
+            PDF{frames.length > 0 ? ` (${frames.length} стр.)` : ''}
+          </button>
+        </div>
+      )}
       <div className="row board-danger">
         <button
           className={confirmDelete ? 'danger-btn confirm' : 'danger-btn'}
@@ -470,7 +501,13 @@ export function BoardsPanel({
           }}
           data-testid="delete-board"
         >
-          {confirmDelete ? 'Точно удалить доску?' : 'Удалить эту доску'}
+          {confirmDelete
+            ? isPage
+              ? 'Точно удалить документ?'
+              : 'Точно удалить доску?'
+            : isPage
+              ? 'Удалить этот документ'
+              : 'Удалить эту доску'}
         </button>
         {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
         {!confirmDelete && (

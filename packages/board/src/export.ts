@@ -73,14 +73,42 @@ function describe(el: CanvasElement): string | null {
   }
 }
 
-export function boardToMarkdown(doc: Y.Doc, boardId?: string): string {
-  const elements = listElements(doc);
+/** Область доски (мировые координаты) — чтобы читать не всю доску, а видимое или выделенное. */
+export interface Region {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Элементы, задевающие область (решение 0020): то, что человек видит или выделил. */
+export function elementsInRegion(elements: readonly CanvasElement[], r: Region): CanvasElement[] {
+  return elements.filter(
+    (el) => el.x <= r.x + r.w && el.x + el.w >= r.x && el.y <= r.y + r.h && el.y + el.h >= r.y,
+  );
+}
+
+export function boardToMarkdown(
+  doc: Y.Doc,
+  boardId?: string,
+  opts: { region?: Region } = {},
+): string {
+  const all = listElements(doc);
+  const elements = opts.region ? elementsInRegion(all, opts.region) : all;
   const name = getBoardName(doc) ?? boardId ?? 'Без названия';
   const lines: string[] = [`# Доска: ${name}`, ''];
   if (boardId) lines.push(`id: ${boardId}`, '');
+  if (opts.region) {
+    const r = opts.region;
+    lines.push(
+      `Показана только область (${round(r.x)}, ${round(r.y)}) ${round(r.w)}×${round(r.h)}: ` +
+        `${elements.length} из ${all.length} элементов доски. Вся доска — read_board без region.`,
+      '',
+    );
+  }
 
   if (elements.length === 0) {
-    lines.push('Доска пустая.');
+    lines.push(opts.region ? 'В этой области пусто.' : 'Доска пустая.');
     return lines.join('\n');
   }
 
@@ -124,11 +152,14 @@ function pointCount(el: CanvasElement): number {
 }
 
 /** Компактный JSON: всё, кроме точек штрихов (вместо них — количество). */
-export function boardToJSON(doc: Y.Doc, boardId?: string): unknown {
+export function boardToJSON(doc: Y.Doc, boardId?: string, opts: { region?: Region } = {}): unknown {
+  const all = listElements(doc);
+  const elements = opts.region ? elementsInRegion(all, opts.region) : all;
   return {
     id: boardId,
     name: getBoardName(doc) ?? null,
-    elements: listElements(doc).map((el) =>
+    ...(opts.region ? { region: opts.region, totalElements: all.length } : {}),
+    elements: elements.map((el) =>
       el.type === 'stroke'
         ? { ...el, props: { ...el.props, points: undefined, pointCount: pointCount(el) } }
         : el,
