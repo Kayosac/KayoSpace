@@ -21,7 +21,8 @@
   задачи-стикеры (`tasks.ts`).
 - `packages/sync` — протокол синхронизации и клиент (браузер и Node).
 - `packages/page` — документы (решение 0020): схема TipTap, markdown ↔ страница, страница в Yjs — общие для приложения и хаба;
-  таблицы (`table.ts`) и карточки на доске (`summary.ts`) — решение 0021.
+  таблицы (`table.ts`) и карточки на доске (`summary.ts`) — решение 0021; формулы (`formula.ts`), артефакты
+  (`artifact.ts`), markdown без потерь (`markdown.ts`) — решение 0023.
 - `packages/canvas` — движок холста без React: камера, сцена, отрисовка, навигация, инструменты (решение 0006);
   упрощённая отрисовка при отдалении, фреймы, экспорт PNG/PDF (решение 0009).
 - `server/hub` — хаб: WebSocket-синк, хранение досок на диске, REST, MCP, OAuth для коннектора Claude,
@@ -33,14 +34,16 @@
   (`handwriting.ts`), OpenAI — картинки, голос, распознавание (`openai.ts`, ключ только на хабе) — решение 0018;
   задачи (`tasks.ts`), чат с ИИ (`chat.ts`), лимиты OpenAI из приложения — решение 0019; документы для агентов
   и картинки фрагментов (`mcp-pages.ts`) — решение 0020; таблицы для агентов (`mcp-tables.ts`), карточки (`/api/docs`) — решение 0021;
-  документы картинкой, миниатюры и PDF (`doc-render.ts`, `doc-export.ts`, `pdf.ts`) — решение 0022.
+  документы картинкой, миниатюры и PDF (`doc-render.ts`, `doc-export.ts`, `pdf.ts`) — решение 0022;
+  артефакты для агентов (`mcp-artifacts.ts`), `.md` и исходники (`/api/export`) — решение 0023.
 - `apps/pen-lab` — стенд замера пера; умеет синхронизировать штрихи через хаб.
 - `apps/workspace` — основное приложение: холст, панель инструментов, настройки, доска в IndexedDB + синк;
   корзина (`TrashPanel.tsx`), презентация (`Presentation.tsx`), импорт PDF (`pdf-import.ts`, pdf.js) — решение 0017;
   история (`HistoryPanel.tsx`), голос (`voice.ts`) — решение 0018; задачи (`TasksPanel.tsx`),
   чат (`ChatPanel.tsx`), Настройки → OpenAI (`OpenAiSection.tsx`) — решение 0019; канбан (`KanbanView.tsx`),
   документ (`PageView.tsx`, TipTap) — решение 0020; таблица (`TableView.tsx`), документ поверх доски
-  и карточки (`DocOverlay.tsx`) — решение 0021.
+  и карточки (`DocOverlay.tsx`) — решение 0021; артефакт (`ArtifactView.tsx`), «В Claude» (`claude.ts`),
+  импорт `.md` (`md-import.ts`) — решение 0023.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
   single-instance, barcode-scanner (Android), свои `plugins/secure-store` (токен устройства в хранилище ОС)
   и `plugins/share-target` («Поделиться» в Android → доска «Входящие»).
@@ -121,3 +124,7 @@
 - Надпись в рамке — `TextProps.fit`: шрифт подбирается под рамку (`Renderer.fitText`), рамка тянется свободно.
 - Контур фигуры — `shapePolygon` из `model`: один для холста, ластика и хаба; заливка — `Style.fill`.
 - Неразличимый при отдалении текст рисуем полосками (`textBars`), а не прячем.
+- Формула — свойство колонки (`Column.formula`), значения не хранятся: считает `computeTable` — везде одна.
+- Артефакт — Yjs-документ с id `ar_` (`isArtifactId`), Map «artifact»; показываем только в `iframe` с `sandbox`
+  без `allow-same-origin`. Правит его Claude (`save_artifact`), приложение — смотрит.
+- Markdown документа — без потерь: новое в схеме страницы — сразу в `markdown.ts` и в круговой тест.

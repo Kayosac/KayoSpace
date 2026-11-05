@@ -18,6 +18,7 @@ import {
   addColumn,
   addRow,
   cellText,
+  computeTable,
   findColumn,
   hasTable,
   initTable,
@@ -69,13 +70,14 @@ export function registerTableTools(
       const doc = await store.get(table);
       const name = getBoardName(doc) ?? table;
       if (format === 'json') {
-        const { columns, rows } = readTable(doc);
+        const { columns, rows, errors } = computeTable(readTable(doc));
         return text(
           JSON.stringify(
             {
               table,
               name,
               columns,
+              ...(Object.keys(errors).length ? { formulaErrors: errors } : {}),
               rows: rows.map((r) => ({
                 id: r.id,
                 values: Object.fromEntries(
@@ -101,7 +103,8 @@ export function registerTableTools(
       description:
         'Создать или изменить таблицу: колонки (новые по названию; у существующих можно сменить тип и варианты), ' +
         'строки (с id — изменить, без id — добавить; значения по названию колонки), удалить строки. ' +
-        `Типы колонок: ${TYPES_HELP}. Дата — YYYY-MM-DD, флажок — true/false, выбор — один из options. ` +
+        `Типы колонок: ${TYPES_HELP}. Дата — YYYY-MM-DD, флажок — true/false, выбор — один из options, ` +
+        'формула — в formula (значения считаются сами, писать их в строки не нужно). ' +
         'Новая таблица: id «tb_…» и name; без columns получит «Название» и «Готово».',
       inputSchema: z.object({
         table: tableId,
@@ -113,6 +116,13 @@ export function registerTableTools(
               name: z.string().min(1).max(80),
               type: z.enum(types).optional(),
               options: z.array(z.string().max(60)).max(50).optional(),
+              formula: z
+                .string()
+                .max(1000)
+                .optional()
+                .describe(
+                  'для type "formula": [Колонка], + − * / ^, ЕСЛИ/IF, ОКРУГЛ/ROUND, СУММ/SUM([Колонка]), ДНИ/DAYS, СЕГОДНЯ/TODAY',
+                ),
             }),
           )
           .max(40)
@@ -147,17 +157,29 @@ export function registerTableTools(
           if (columns?.length)
             initTable(
               doc,
-              columns.map((c) => ({ name: c.name, type: c.type ?? 'text', options: c.options })),
+              columns.map((c) => ({
+                name: c.name,
+                type: c.type ?? 'text',
+                options: c.options,
+                formula: c.formula,
+              })),
             );
           else initTable(doc);
         } else {
           for (const c of columns ?? []) {
             const have = findColumn(readTable(doc).columns, c.name);
-            if (!have) addColumn(doc, { name: c.name, type: c.type ?? 'text', options: c.options });
-            else if (c.type || c.options)
+            if (!have)
+              addColumn(doc, {
+                name: c.name,
+                type: c.type ?? (c.formula ? 'formula' : 'text'),
+                options: c.options,
+                formula: c.formula,
+              });
+            else if (c.type || c.options || c.formula)
               updateColumn(doc, have.id, {
                 ...(c.type ? { type: c.type } : {}),
                 ...(c.options ? { options: c.options } : {}),
+                ...(c.formula ? { formula: c.formula } : {}),
               });
           }
         }
@@ -198,7 +220,7 @@ export function registerTableTools(
 
 /** Строки таблицы текстом — для fetch. */
 export function tableText(doc: Y.Doc): string {
-  const { columns, rows } = readTable(doc);
+  const { columns, rows } = computeTable(readTable(doc));
   return rows
     .map((r) => columns.map((c) => `${c.name}: ${cellText(c, r.cells[c.id])}`).join('; '))
     .join('\n');

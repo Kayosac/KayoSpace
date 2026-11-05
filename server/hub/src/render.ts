@@ -8,7 +8,7 @@
  */
 
 import { Resvg } from '@resvg/resvg-js';
-import { decodeStroke, shapePolygon, type CanvasElement } from '@kayospace/model';
+import { decodeStroke, docCardLabel, shapePolygon, type CanvasElement } from '@kayospace/model';
 
 export interface Area {
   x: number;
@@ -140,7 +140,7 @@ function elementSvg(
     }
     case 'doc': {
       const pad = 16;
-      const table = el.props.doc.startsWith('tb_');
+      const kind = docCardLabel(el.props.doc);
       // С миниатюрой (решение 0022): страница сверху, внизу — полоса с названием.
       const thumb = el.props.thumb ? images.get(el.props.thumb) : undefined;
       if (thumb) {
@@ -155,37 +155,22 @@ function elementSvg(
             `<rect x="${n(el.x)}" y="${n(el.y + el.h - bar)}" width="${n(el.w)}" height="${n(bar)}" fill="#f6f5f1"/>` +
             `<rect x="${n(el.x)}" y="${n(el.y + el.h - bar)}" width="${n(el.w)}" height="1" fill="rgba(28,31,38,0.12)"/>` +
             textBlock(
-              wrapLines(
-                el.props.title || (table ? 'Таблица' : 'Документ'),
-                el.w - pad * 2 - 70,
-                14,
-              ).slice(0, 1),
+              wrapLines(el.props.title || kind.name, el.w - pad * 2 - 70, 14).slice(0, 1),
               el.x + pad,
               el.y + el.h - bar / 2 - 9,
               14,
               INK,
               { weight: 700 },
             ) +
-            textBlock(
-              [table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ'],
-              el.x + el.w - pad,
-              el.y + el.h - bar / 2 - 6,
-              10,
-              '#6c7080',
-              {
-                weight: 600,
-                anchor: 'end',
-              },
-            ) +
+            textBlock([kind.label], el.x + el.w - pad, el.y + el.h - bar / 2 - 6, 10, '#6c7080', {
+              weight: 600,
+              anchor: 'end',
+            }) +
             '</g>' +
             `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="10" fill="none" stroke="rgba(28,31,38,0.18)" stroke-width="1.5"/>`,
         );
       }
-      const titleLines = wrapLines(
-        el.props.title || (table ? 'Таблица' : 'Документ'),
-        el.w - pad * 2,
-        18,
-      ).slice(0, 2);
+      const titleLines = wrapLines(el.props.title || kind.name, el.w - pad * 2, 18).slice(0, 2);
       const room = Math.max(
         0,
         Math.floor((el.h - pad * 2 - 22 - titleLines.length * 18 * LINE - 8) / (14 * LINE)),
@@ -197,8 +182,8 @@ function elementSvg(
       return rotated(
         el,
         `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="10" fill="#ffffff" stroke="rgba(28,31,38,0.18)" stroke-width="1.5"/>` +
-          `<rect x="${n(el.x)}" y="${n(el.y)}" width="4" height="${n(el.h)}" rx="2" fill="${table ? '#2f9e66' : '#3e63dd'}"/>` +
-          textBlock([table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ'], el.x + pad, el.y + pad - 2, 11, '#6c7080', {
+          `<rect x="${n(el.x)}" y="${n(el.y)}" width="4" height="${n(el.h)}" rx="2" fill="${kind.accent ?? '#3e63dd'}"/>` +
+          textBlock([kind.label], el.x + pad, el.y + pad - 2, 11, '#6c7080', {
             weight: 600,
           }) +
           textBlock(titleLines, el.x + pad, el.y + pad + 18, 18, INK, { weight: 700 }) +

@@ -16,6 +16,9 @@
       "allow": [
         {
           "url": "https://github.com/Kayosac/KayoSpace/*"
+        },
+        {
+          "url": "https://claude.ai/*"
         }
       ]
     }

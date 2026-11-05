@@ -17,7 +17,7 @@ import {
   listProjects,
 } from '@kayospace/board';
 import { isValidBoardId } from '@kayospace/sync';
-import { isPageId, isTableId } from '@kayospace/page';
+import { isArtifactId, isPageId, isTableId } from '@kayospace/page';
 
 export interface BoardInfo {
   id: string;
@@ -26,7 +26,7 @@ export interface BoardInfo {
   /** Проект доски (id и название); null — без проекта. */
   project: { id: string; name: string } | null;
   /** board — доска, page — документ (решение 0020), table — таблица (решение 0021). */
-  kind: 'board' | 'page' | 'table';
+  kind: 'board' | 'page' | 'table' | 'artifact';
 }
 
 export class BoardStore {
@@ -120,7 +120,13 @@ export class BoardStore {
         name: getBoardName(doc) ?? null,
         elements: listElements(doc).length,
         project: pid ? { id: pid, name: names.get(pid) ?? '' } : null,
-        kind: isPageId(id) ? 'page' : isTableId(id) ? 'table' : 'board',
+        kind: isPageId(id)
+          ? 'page'
+          : isTableId(id)
+            ? 'table'
+            : isArtifactId(id)
+              ? 'artifact'
+              : 'board',
       });
     }
     return out;

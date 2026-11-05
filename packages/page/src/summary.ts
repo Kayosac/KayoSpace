@@ -4,14 +4,15 @@
  */
 
 import type * as Y from 'yjs';
+import { artifactExcerpt, isArtifactId, readArtifact } from './artifact';
 import { isTableId, readTable } from './table';
 import { isPageId, pageExcerpt } from './yjs';
 
-export type DocKind = 'page' | 'table';
+export type DocKind = 'page' | 'table' | 'artifact';
 
-/** Что за документ по id: «pg_» — страница, «tb_» — таблица, иначе — не документ. */
+/** Что за документ по id: «pg_» — страница, «tb_» — таблица, «ar_» — артефакт, иначе — не документ. */
 export function docKind(id: string): DocKind | null {
-  return isPageId(id) ? 'page' : isTableId(id) ? 'table' : null;
+  return isPageId(id) ? 'page' : isTableId(id) ? 'table' : isArtifactId(id) ? 'artifact' : null;
 }
 
 /** Документ или таблица — то, что открывается не холстом. */
@@ -31,5 +32,8 @@ export function tableExcerpt(doc: Y.Doc): string {
 }
 
 export function docExcerpt(id: string, doc: Y.Doc): string {
-  return docKind(id) === 'table' ? tableExcerpt(doc) : pageExcerpt(doc);
+  const kind = docKind(id);
+  if (kind === 'table') return tableExcerpt(doc);
+  if (kind === 'artifact') return artifactExcerpt(readArtifact(doc));
+  return pageExcerpt(doc);
 }

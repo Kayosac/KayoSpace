@@ -32,7 +32,8 @@ import { registerExtraTools } from './mcp-extra';
 import { registerImageTools } from './mcp-images';
 import { docsInRegion, docsMarkdown, registerPageTools } from './mcp-pages';
 import { registerTableTools, tableText } from './mcp-tables';
-import { isPageId, isTableId, pageMarkdown } from '@kayospace/page';
+import { registerArtifactTools } from './mcp-artifacts';
+import { isArtifactId, isPageId, isTableId, pageMarkdown, readArtifact } from '@kayospace/page';
 import type { Trash } from './trash';
 import type { History } from './history';
 import type { OpenAi } from './openai';
@@ -105,8 +106,8 @@ const boardId = z
   .string()
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
   .refine(
-    (id) => !id.startsWith('pg_') && !id.startsWith('tb_'),
-    'Это документ или таблица, а не доска: read_page / write_page, read_table / write_table',
+    (id) => !id.startsWith('pg_') && !id.startsWith('tb_') && !id.startsWith('ar_'),
+    'Это документ, таблица или артефакт, а не доска: read_page, read_table, read_artifact',
   )
   .describe('id доски: латиница, цифры, «-» и «_» (не в начале)');
 
@@ -143,7 +144,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.6.0' },
+      { name: 'kayospace', version: '0.7.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -163,7 +164,8 @@ export function createMcp(
         annotations: { readOnlyHint: true },
         description:
           'Список досок, документов и таблиц Kayospace: id, название, kind (board — доска, page — документ, ' +
-          'table — таблица), число элементов и проект. Документы — read_page/write_page, таблицы — read_table/write_table.',
+          'table — таблица, artifact — артефакт из чата), число элементов и проект. Документы — read_page/write_page, ' +
+          'таблицы — read_table/write_table, артефакты — read_artifact/save_artifact.',
       },
       async () => text(JSON.stringify(await store.list(), null, 2)),
     );
@@ -453,6 +455,7 @@ export function createMcp(
     // Документы и таблицы; в черновике ИИ — только чтение (решение 0022).
     registerPageTools(server, store, MCP_ORIGIN, who, !opts.trash);
     registerTableTools(server, store, MCP_ORIGIN, !opts.trash);
+    registerArtifactTools(server, store, MCP_ORIGIN, who, !opts.trash);
     const assets = opts.assets;
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)
@@ -570,14 +573,22 @@ export function createMcp(
       },
       async ({ id }) => {
         const [board, element] = id.split('#');
-        if (board && (isPageId(board) || isTableId(board)) && (await store.has(board))) {
+        if (
+          board &&
+          (isPageId(board) || isTableId(board) || isArtifactId(board)) &&
+          (await store.has(board))
+        ) {
           const doc = await store.get(board);
           return text(
             JSON.stringify(
               {
                 id,
                 title: getBoardName(doc) ?? board,
-                text: isTableId(board) ? tableText(doc) : pageMarkdown(doc),
+                text: isTableId(board)
+                  ? tableText(doc)
+                  : isArtifactId(board)
+                    ? (readArtifact(doc)?.source ?? '')
+                    : pageMarkdown(doc),
                 url: boardLink(board),
                 metadata: isTableId(board) ? { table: board } : { page: board },
               },

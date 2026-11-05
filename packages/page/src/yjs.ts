@@ -82,3 +82,76 @@ export function pageExcerpt(doc: Y.Doc, maxLines = 4, maxChars = 240): string {
   const s = lines.join('\n');
   return s.length > maxChars ? `${s.slice(0, maxChars - 1)}…` : s;
 }
+
+/** Текст заголовка (без разметки) — чтобы найти раздел по названию. */
+function headingText(n: JSONContent): string {
+  const walk = (x: JSONContent): string =>
+    x.type === 'text' ? (x.text ?? '') : (x.content ?? []).map(walk).join('');
+  return walk(n).trim();
+}
+
+/**
+ * Правка одного раздела (решение 0023): раздел — заголовок с этим текстом и всё до следующего
+ * заголовка того же или старшего уровня. markdown заменяет тело раздела (заголовок остаётся;
+ * если markdown начинается с заголовка — заменяет и его). Нет такого раздела — он дописывается
+ * в конец заголовком второго уровня. Возвращает, был ли раздел.
+ */
+export function writeSection(
+  doc: Y.Doc,
+  heading: string,
+  markdown: string,
+  origin?: unknown,
+): boolean {
+  const page = readPage(doc);
+  const blocks = (page.content ?? []).filter(
+    (b, i, all) => !(all.length === 1 && b.type === 'paragraph' && !b.content),
+  );
+  const want = heading
+    .replace(/^#+\s*/, '')
+    .trim()
+    .toLowerCase();
+  const at = blocks.findIndex((b) => b.type === 'heading' && headingText(b).toLowerCase() === want);
+  const add = markdownToPage(markdown).content ?? [];
+  let next: JSONContent[];
+  if (at < 0) {
+    const replacesHeading = add[0]?.type === 'heading';
+    next = [
+      ...blocks,
+      ...(replacesHeading
+        ? []
+        : [
+            {
+              type: 'heading',
+              attrs: { level: 2 },
+              content: [{ type: 'text', text: heading.trim() }],
+            },
+          ]),
+      ...add,
+    ];
+  } else {
+    const level = Number(blocks[at]!.attrs?.level ?? 1);
+    let end = at + 1;
+    while (
+      end < blocks.length &&
+      !(blocks[end]!.type === 'heading' && Number(blocks[end]!.attrs?.level ?? 1) <= level)
+    )
+      end++;
+    const head = add[0]?.type === 'heading' ? [] : [blocks[at]!];
+    next = [...blocks.slice(0, at), ...head, ...add, ...blocks.slice(end)];
+  }
+  doc.transact(() => {
+    prosemirrorJSONToYXmlFragment(
+      pageSchema(),
+      { type: 'doc', content: next.length ? next : [{ type: 'paragraph' }] },
+      doc.getXmlFragment(PAGE_FIELD),
+    );
+  }, origin);
+  return at >= 0;
+}
+
+/** Документ в .md для экспорта: название — заголовком первого уровня, если его нет в начале. */
+export function pageFileMarkdown(doc: Y.Doc, title: string | null): string {
+  const body = pageMarkdown(doc);
+  if (!title || body.startsWith(`# ${title}`)) return `${body}\n`;
+  return `# ${title}\n\n${body}\n`;
+}

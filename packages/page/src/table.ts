@@ -6,6 +6,7 @@
  */
 
 import * as Y from 'yjs';
+import { FormulaError, evaluate, parseFormula, type Value } from './formula';
 
 export const TABLE_FIELD = 'table';
 export const TABLE_PREFIX = 'tb_';
@@ -16,7 +17,7 @@ export function tableIdFrom(boardLikeId: string): string {
   return `${TABLE_PREFIX}${boardLikeId}`.slice(0, 64);
 }
 
-export type ColumnType = 'text' | 'number' | 'checkbox' | 'date' | 'select' | 'url';
+export type ColumnType = 'text' | 'number' | 'checkbox' | 'date' | 'select' | 'url' | 'formula';
 
 export const COLUMN_TYPES: readonly { type: ColumnType; name: string }[] = [
   { type: 'text', name: 'Текст' },
@@ -25,6 +26,7 @@ export const COLUMN_TYPES: readonly { type: ColumnType; name: string }[] = [
   { type: 'date', name: 'Дата' },
   { type: 'select', name: 'Выбор' },
   { type: 'url', name: 'Ссылка' },
+  { type: 'formula', name: 'Формула' },
 ];
 
 export interface Column {
@@ -33,6 +35,8 @@ export interface Column {
   type: ColumnType;
   /** Варианты для «Выбора». */
   options?: string[];
+  /** Формула (решение 0023): [Колонка], арифметика, функции; значения не хранятся — считаются. */
+  formula?: string;
 }
 
 export type Cell = string | number | boolean | null;
@@ -80,6 +84,8 @@ export function hasTable(doc: Y.Doc): boolean {
 export function coerceCell(type: ColumnType, v: unknown, options?: readonly string[]): Cell {
   if (v === null || v === undefined) return null;
   switch (type) {
+    case 'formula':
+      return null; // значение формулы не хранится — оно считается
     case 'number': {
       if (typeof v === 'number') return Number.isFinite(v) ? v : null;
       const s = String(v).replace(/\s/g, '').replace(',', '.');
@@ -117,11 +123,13 @@ export function coerceCell(type: ColumnType, v: unknown, options?: readonly stri
 
 function readColumn(m: Y.Map<unknown>): Column {
   const options = m.get('options') as string[] | undefined;
+  const formula = m.get('formula') as string | undefined;
   return {
     id: String(m.get('id')),
     name: String(m.get('name') ?? ''),
     type: (m.get('type') as ColumnType) ?? 'text',
     ...(options?.length ? { options } : {}),
+    ...(formula ? { formula } : {}),
   };
 }
 
@@ -167,6 +175,7 @@ export function addColumn(doc: Y.Doc, c: Omit<Column, 'id'>, origin?: unknown): 
     m.set('name', c.name.trim() || 'Колонка');
     m.set('type', c.type);
     if (c.options?.length) m.set('options', [...c.options]);
+    if (c.formula) m.set('formula', c.formula);
     arr(doc, 'columns').push([m]);
   }, origin);
   return id;
@@ -198,8 +207,17 @@ export function updateColumn(
       if (opts.length) m.set('options', opts);
       else m.delete('options');
     }
+    if (patch.formula !== undefined) {
+      if (patch.formula.trim()) m.set('formula', patch.formula.trim());
+      else m.delete('formula');
+    }
     if (patch.type !== undefined && patch.type !== m.get('type')) {
       m.set('type', patch.type);
+      // Формула значений не хранит: старые значения колонки убираем.
+      if (patch.type === 'formula') {
+        for (const r of arr(doc, 'rows').toArray()) r.delete(id);
+        return;
+      }
       const options = m.get('options') as string[] | undefined;
       for (const r of arr(doc, 'rows').toArray()) {
         const v = r.get(id);
@@ -245,6 +263,7 @@ export function moveColumn(doc: Y.Doc, id: string, delta: number, origin?: unkno
     m.set('name', c.name);
     m.set('type', c.type);
     if (c.options) m.set('options', c.options);
+    if (c.formula) m.set('formula', c.formula);
     cols.insert(to, [m]);
   }, origin);
 }
@@ -314,6 +333,11 @@ export function removeRows(doc: Y.Doc, ids: readonly string[], origin?: unknown)
 export function cellText(c: Column, v: Cell | undefined): string {
   if (v === null || v === undefined) return '';
   if (c.type === 'checkbox') return v ? '✓' : '';
+  if (c.type === 'formula') {
+    if (typeof v === 'boolean') return v ? 'да' : 'нет';
+    if (typeof v === 'number') return v.toLocaleString('ru-RU', { maximumFractionDigits: 6 });
+    return String(v);
+  }
   if (c.type === 'date' && typeof v === 'string') {
     const [y, m, d] = v.split('-');
     return d && m && y ? `${d}.${m}.${y}` : v;
@@ -328,7 +352,11 @@ export function compareCells(c: Column, a: Cell | undefined, b: Cell | undefined
   const ea = a === null || a === undefined || a === '';
   const eb = b === null || b === undefined || b === '';
   if (ea || eb) return ea === eb ? 0 : ea ? 1 : -1;
-  if (c.type === 'number') return Number(a) - Number(b);
+  if (
+    c.type === 'number' ||
+    (c.type === 'formula' && typeof a === 'number' && typeof b === 'number')
+  )
+    return Number(a) - Number(b);
   if (c.type === 'checkbox') return Number(b) - Number(a);
   return String(a).localeCompare(String(b), 'ru', { numeric: true, sensitivity: 'base' });
 }
@@ -336,7 +364,10 @@ export function compareCells(c: Column, a: Cell | undefined, b: Cell | undefined
 /** Итог колонки: сумма чисел, число отмеченных флажков, иначе — сколько заполнено. */
 export function columnTotal(c: Column, rows: readonly Row[]): string {
   const vals = rows.map((r) => r.cells[c.id]).filter((v) => v !== undefined && v !== null);
-  if (c.type === 'number') {
+  if (
+    c.type === 'number' ||
+    (c.type === 'formula' && vals.length && vals.every((v) => typeof v === 'number'))
+  ) {
     const sum = vals.reduce<number>((s, v) => s + Number(v), 0);
     return vals.length ? `Σ ${sum.toLocaleString('ru-RU', { maximumFractionDigits: 6 })}` : '';
   }
@@ -348,7 +379,7 @@ const esc = (s: string): string => s.replace(/\|/g, '\\|').replace(/\n+/g, ' ');
 
 /** Таблица в markdown (для агентов): шапка с типами колонок, строки по порядку. */
 export function tableToMarkdown(doc: Y.Doc): string {
-  const { columns, rows } = readTable(doc);
+  const { columns, rows } = computeTable(readTable(doc));
   if (!columns.length) return '(пустая таблица)';
   const typeName = (t: ColumnType) => COLUMN_TYPES.find((x) => x.type === t)?.name ?? t;
   const head = `| ${columns.map((c) => esc(c.name)).join(' | ')} |`;
@@ -359,7 +390,7 @@ export function tableToMarkdown(doc: Y.Doc): string {
   const types = columns
     .map(
       (c) =>
-        `${c.name} — ${typeName(c.type)}${c.options?.length ? ` (${c.options.join(', ')})` : ''}`,
+        `${c.name} — ${typeName(c.type)}${c.options?.length ? ` (${c.options.join(', ')})` : ''}${c.formula ? ` = ${c.formula}` : ''}`,
     )
     .join('; ');
   return [`Колонки: ${types}. Строк: ${rows.length}.`, '', head, sep, ...body].join('\n');
@@ -367,7 +398,7 @@ export function tableToMarkdown(doc: Y.Doc): string {
 
 /** Текст таблицы — по строке на строку таблицы (для поиска). */
 export function tableLines(doc: Y.Doc): string[] {
-  const { columns, rows } = readTable(doc);
+  const { columns, rows } = computeTable(readTable(doc));
   return rows
     .map((r) =>
       columns
@@ -382,4 +413,82 @@ export function tableLines(doc: Y.Doc): string[] {
 export function findColumn(columns: readonly Column[], ref: string): Column | undefined {
   const low = ref.trim().toLowerCase();
   return columns.find((c) => c.id === ref) ?? columns.find((c) => c.name.toLowerCase() === low);
+}
+
+/** Таблица с посчитанными формулами; errors — «id строки|id колонки» → причина ошибки. */
+export interface ComputedTable extends TableData {
+  errors: Record<string, string>;
+}
+
+function todayIso(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * Посчитать формулы (решение 0023): ячейки колонок «Формула» заполняются значениями. Формула может
+ * ссылаться на другие формулы; цикл — ошибка у всех его участников.
+ */
+export function computeTable(data: TableData, today: string = todayIso()): ComputedTable {
+  const formulas = data.columns.filter((c) => c.type === 'formula');
+  if (!formulas.length) return { ...data, errors: {} };
+  const byName = new Map(data.columns.map((c) => [c.name.trim().toLowerCase(), c]));
+  const parsed = new Map<string, ReturnType<typeof parseFormula> | FormulaError>();
+  for (const c of formulas) {
+    try {
+      parsed.set(c.id, parseFormula(c.formula ?? ''));
+    } catch (e) {
+      parsed.set(c.id, e instanceof FormulaError ? e : new FormulaError(String(e)));
+    }
+  }
+  const memo = new Map<string, Value>();
+  const errors: Record<string, string> = {};
+  const busy = new Set<string>();
+  const colOf = (name: string): Column => {
+    const c = byName.get(name.trim().toLowerCase());
+    if (!c) throw new FormulaError(`нет колонки «${name}»`);
+    return c;
+  };
+  const valueAt = (row: Row, c: Column): Value => {
+    if (c.type !== 'formula') return (row.cells[c.id] ?? null) as Value;
+    const key = `${row.id}|${c.id}`;
+    if (memo.has(key)) return memo.get(key)!;
+    if (errors[key]) throw new FormulaError(`ошибка в «${c.name}»`);
+    if (busy.has(key)) throw new FormulaError('формулы ссылаются друг на друга по кругу');
+    busy.add(key);
+    try {
+      const tree = parsed.get(c.id)!;
+      if (tree instanceof FormulaError) throw tree;
+      const v = evaluate(tree, {
+        cell: (name) => valueAt(row, colOf(name)),
+        column: (name) => {
+          const cc = colOf(name);
+          return data.rows.map((r) => valueAt(r, cc));
+        },
+        today,
+      });
+      const out = typeof v === 'number' && !Number.isFinite(v) ? null : v;
+      memo.set(key, out);
+      return out;
+    } catch (e) {
+      errors[key] = e instanceof Error ? e.message : String(e);
+      throw e instanceof FormulaError ? e : new FormulaError(String(e));
+    } finally {
+      busy.delete(key);
+    }
+  };
+  const rows = data.rows.map((r) => {
+    const cells = { ...r.cells };
+    for (const c of formulas) {
+      try {
+        const v = valueAt(r, c);
+        if (v !== null) cells[c.id] = v;
+      } catch {
+        // Ошибка уже записана в errors.
+      }
+    }
+    return { id: r.id, cells };
+  });
+  return { columns: data.columns, rows, errors };
 }

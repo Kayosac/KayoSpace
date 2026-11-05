@@ -196,6 +196,7 @@ describe('подсказки для клиентов', () => {
       'list_tasks',
       'list_trash',
       'list_versions',
+      'read_artifact',
       'read_board',
       'read_page',
       'read_table',

@@ -47,7 +47,9 @@ export function sharedFiles(p: SharedPayload): File[] {
   return (p.files ?? [])
     .filter(
       (f) =>
-        (f.mime.startsWith('image/') && f.mime !== 'image/svg+xml') || f.mime === 'application/pdf',
+        (f.mime.startsWith('image/') && f.mime !== 'image/svg+xml') ||
+        f.mime === 'application/pdf' ||
+        f.mime === 'text/markdown',
     )
     .map((f) => {
       const bin = atob(f.data);

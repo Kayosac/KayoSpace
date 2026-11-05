@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getBoardName } from '@kayospace/board';
 import type { CanvasEngine } from '@kayospace/canvas';
-import { docExcerpt, docKind, hasTable, initTable, isDocId } from '@kayospace/page';
+import { docExcerpt, docKind, hasTable, initTable, isDocId, type DocKind } from '@kayospace/page';
 import { hubHttpUrl } from '@kayospace/sync';
 import { BoardSession } from './session';
 import type { Hub } from './devices';
 import type { RecentBoard } from './settings';
 import { PageView } from './PageView';
 import { TableView } from './TableView';
+import { ArtifactView } from './ArtifactView';
+
+/** Как назвать документ в интерфейсе: «Таблица», «открываю таблицу…», «таблица» в списке. */
+export const KIND_WORDS: Record<DocKind, { name: string; acc: string; meta: string }> = {
+  page: { name: 'Документ', acc: 'документ', meta: 'документ' },
+  table: { name: 'Таблица', acc: 'таблицу', meta: 'таблица' },
+  artifact: { name: 'Артефакт', acc: 'артефакт', meta: 'артефакт' },
+};
 
 export interface DocSummary {
   title?: string;
@@ -92,16 +100,20 @@ export function DocOverlay({
     if (session.getState().loaded) onSummary(summaryOf(id, session));
     onClose();
   };
-  const table = docKind(id) === 'table';
+  const kind = docKind(id);
+  const table = kind === 'table';
+  const what = KIND_WORDS[kind ?? 'page'];
   return (
-    <div
-      className="doc-overlay"
-      role="dialog"
-      aria-label={table ? 'Таблица' : 'Документ'}
-      data-testid="doc-overlay"
-    >
+    <div className="doc-overlay" role="dialog" aria-label={what.name} data-testid="doc-overlay">
       {!state.loaded ? (
-        <div className="loading">{table ? 'Открываю таблицу…' : 'Открываю документ…'}</div>
+        <div className="loading">Открываю {what.acc}…</div>
+      ) : kind === 'artifact' ? (
+        <ArtifactView
+          session={session}
+          name={state.name}
+          onRename={(n) => session.rename(n)}
+          onClose={close}
+        />
       ) : table ? (
         <TableView
           session={session}
@@ -176,9 +188,7 @@ export function DocMenu({
           <li key={d.id}>
             <button onClick={() => onExisting(d.id, d.name)} data-testid="existing-doc">
               <span className="board-title">{d.name ?? d.id}</span>
-              <span className="board-meta">
-                {docKind(d.id) === 'table' ? 'таблица' : 'документ'}
-              </span>
+              <span className="board-meta">{KIND_WORDS[docKind(d.id) ?? 'page'].meta}</span>
             </button>
           </li>
         ))}

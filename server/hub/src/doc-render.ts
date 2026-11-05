@@ -7,7 +7,15 @@
 
 import type * as Y from 'yjs';
 import { getBoardName, getElement, listElements } from '@kayospace/board';
-import { cellText, readPage, readTable, type Column } from '@kayospace/page';
+import {
+  cellText,
+  computeTable,
+  htmlText,
+  readArtifact,
+  readPage,
+  readTable,
+  type Column,
+} from '@kayospace/page';
 
 type JSONContent = ReturnType<typeof readPage>;
 import { boardSvg, contentArea, loadImages, renderPng } from './render';
@@ -176,6 +184,26 @@ export interface EmbedImage {
 
 type EmbedLoader = (board: string, frame: string | null) => Promise<EmbedImage | null>;
 
+function codeItems(node: JSONContent, x: number, w: number): Item[] {
+  const text = (node.content ?? []).map((t) => t.text ?? '').join('');
+  const lines = text.split('\n');
+  const size = 13;
+  const lh = size * 1.45;
+  return lines.map((l, i) => ({
+    h: lh + (i === 0 ? 8 : 0) + (i === lines.length - 1 ? 8 : 0),
+    gap: i === 0 ? 8 : 0,
+    draw: (y) =>
+      `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(lh + (i === 0 ? 8 : 0) + (i === lines.length - 1 ? 8 : 0))}" fill="#f1efe9"/>` +
+      lineSvg(
+        [{ text: l, code: true }],
+        x + 12,
+        y + (i === 0 ? 8 : 0) + (lh - size * 1.25) / 2,
+        size,
+        INK,
+      ),
+  }));
+}
+
 async function blockItems(
   node: JSONContent,
   x: number,
@@ -186,7 +214,7 @@ async function blockItems(
   switch (node.type) {
     case 'heading': {
       const level = Number(node.attrs?.level ?? 1);
-      const size = level === 1 ? 26 : level === 2 ? 21 : 18;
+      const size = level === 1 ? 26 : level === 2 ? 21 : level === 3 ? 18 : 16;
       return textItems(runsOf(node.content), x, w, size, { bold: true, gap: size * 0.8, lh: 1.3 });
     }
     case 'paragraph': {
@@ -206,25 +234,8 @@ async function blockItems(
           it.draw(y).replaceAll(`fill="${INK}"`, `fill="${MUTED}"`),
       }));
     }
-    case 'codeBlock': {
-      const text = (node.content ?? []).map((t) => t.text ?? '').join('');
-      const lines = text.split('\n');
-      const size = 13;
-      const lh = size * 1.45;
-      return lines.map((l, i) => ({
-        h: lh + (i === 0 ? 8 : 0) + (i === lines.length - 1 ? 8 : 0),
-        gap: i === 0 ? 8 : 0,
-        draw: (y) =>
-          `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(lh + (i === 0 ? 8 : 0) + (i === lines.length - 1 ? 8 : 0))}" fill="#f1efe9"/>` +
-          lineSvg(
-            [{ text: l, code: true }],
-            x + 12,
-            y + (i === 0 ? 8 : 0) + (lh - size * 1.25) / 2,
-            size,
-            INK,
-          ),
-      }));
-    }
+    case 'codeBlock':
+      return codeItems(node, x, w);
     case 'horizontalRule':
       return [
         {
@@ -281,6 +292,79 @@ async function blockItems(
           out.push(...(await blockItems(c, x + indent, w - indent, embed, depth + 1)));
       }
       return out;
+    }
+    case 'image': {
+      // Картинка документа: вложенная (data:) — как есть, по ссылке — подписью (хаб по ссылкам не ходит).
+      const src = String(node.attrs?.src ?? '');
+      const alt = String(node.attrs?.alt ?? '') || 'Картинка';
+      const m = /^data:(image\/(?:png|jpeg|gif|svg\+xml));base64,/.exec(src);
+      if (!m) {
+        return [
+          {
+            h: 40,
+            gap: 10,
+            draw: (y) =>
+              `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="40" rx="8" fill="#f1efe9" stroke="${LINE_C}"/>` +
+              lineSvg([{ text: `Картинка: ${alt}` }], x + 14, y + 10, 14, MUTED),
+          },
+        ];
+      }
+      const ih = Math.min(420, w * 0.6);
+      return [
+        {
+          h: ih,
+          gap: 10,
+          draw: (y) =>
+            `<image x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(ih)}" preserveAspectRatio="xMinYMin meet" href="${src.replace(/"/g, '')}"/>`,
+        },
+      ];
+    }
+    case 'table': {
+      // Простая таблица из markdown: равные колонки, шапка — первой строкой.
+      const rows = node.content ?? [];
+      const cols = Math.max(1, ...rows.map((r) => (r.content ?? []).length));
+      const cw = w / cols;
+      const size = 13;
+      const pad = 6;
+      return rows.map((r, ri) => {
+        const cells = (r.content ?? []).map((c) =>
+          wrapRuns(
+            (c.content ?? []).flatMap((p, k) => [
+              ...(k ? [{ text: '\n' }] : []),
+              ...runsOf(p.content),
+            ]),
+            cw - pad * 2,
+            size,
+          ),
+        );
+        const lines = Math.max(1, ...cells.map((c) => c.length));
+        const h = lines * size * 1.4 + pad * 2;
+        const header = r.content?.[0]?.type === 'tableHeader';
+        return {
+          h,
+          gap: ri === 0 ? 10 : 0,
+          draw: (y) =>
+            (header
+              ? `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" fill="#f1efe9"/>`
+              : '') +
+            `<line x1="${n(x)}" y1="${n(y + h)}" x2="${n(x + w)}" y2="${n(y + h)}" stroke="${LINE_C}"/>` +
+            cells
+              .map((c, ci) =>
+                c
+                  .map((l, k) =>
+                    lineSvg(
+                      header ? l.map((t) => ({ ...t, bold: true })) : l,
+                      x + ci * cw + pad,
+                      y + pad + k * size * 1.4,
+                      size,
+                      INK,
+                    ),
+                  )
+                  .join(''),
+              )
+              .join(''),
+        };
+      });
     }
     case 'boardEmbed': {
       const a = node.attrs ?? {};
@@ -433,7 +517,7 @@ function columnWidths(
 
 /** Страницы таблицы (SVG A4): шапка повторяется на каждой странице, внизу — итоги не нужны. */
 export function tablePages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
-  const { columns, rows } = readTable(doc);
+  const { columns, rows } = computeTable(readTable(doc));
   const title = getBoardName(doc) ?? 'Без названия';
   const top = noTitle ? noHeader : titleHeader(title);
   if (!columns.length) return paginate([], top).map((p) => pageSvg(p, scale));
@@ -519,4 +603,41 @@ export function thumbnailPng(firstPage: string, aspect = 320 / 200, width = 480)
     `width="${width}" height="${Math.round(width / aspect)}" viewBox="${MARGIN - 16} ${MARGIN - 16} ${cropW} ${n(cropH)}"`,
   );
   return renderPng(svg);
+}
+
+/** Артефакт (решение 0023) — страницы: код, схема Mermaid и текст страницы HTML — моноширинным. */
+export function artifactPages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
+  const a = readArtifact(doc);
+  if (!a) return [];
+  if (a.kind === 'svg') return [svgPage(a.source, scale)];
+  const perLine = Math.floor((CONTENT_W - 24) / (13 * 0.62));
+  const lines = (a.kind === 'html' ? htmlText(a.source) : a.source)
+    .split('\n')
+    .flatMap((l) => {
+      const out: string[] = [];
+      for (let i = 0; i < l.length; i += perLine) out.push(l.slice(i, i + perLine));
+      return out.length ? out : [''];
+    })
+    .slice(0, 4000);
+  const items: Item[] =
+    a.kind === 'html'
+      ? lines.flatMap((l) => (l ? textItems([{ text: l }], MARGIN, CONTENT_W, 15, { gap: 6 }) : []))
+      : codeItems(
+          { type: 'codeBlock', content: [{ type: 'text', text: lines.join('\n') }] },
+          MARGIN,
+          CONTENT_W,
+        );
+  const title = getBoardName(doc) ?? 'Артефакт';
+  return paginate(items, noTitle ? noHeader : titleHeader(title)).map((p) => pageSvg(p, scale));
+}
+
+/** Рисунок SVG вписан в страницу A4 (или в миниатюру — тогда сразу картинкой карточки). */
+export function svgPage(source: string, scale = 1, w = PAGE_W, h = PAGE_H, pad = MARGIN): string {
+  const href = `data:image/svg+xml;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w * scale}" height="${h * scale}" viewBox="0 0 ${w} ${h}">` +
+    `<rect width="${w}" height="${h}" fill="#ffffff"/>` +
+    `<image x="${pad}" y="${pad}" width="${w - pad * 2}" height="${h - pad * 2}" preserveAspectRatio="xMidYMid meet" href="${href}"/>` +
+    '</svg>'
+  );
 }

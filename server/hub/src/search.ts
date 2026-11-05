@@ -6,7 +6,15 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { elementText, listElements } from '@kayospace/board';
-import { isPageId, isTableId, pageMarkdown, tableLines } from '@kayospace/page';
+import {
+  artifactText,
+  isArtifactId,
+  isPageId,
+  isTableId,
+  pageMarkdown,
+  readArtifact,
+  tableLines,
+} from '@kayospace/page';
 import type * as Y from 'yjs';
 import { json } from './devices-api';
 
@@ -36,9 +44,17 @@ export async function searchBoards(
   for (const info of await store.list()) {
     const doc = await store.get(info.id);
     // Документ (решение 0020): ищем по строкам страницы.
-    if (isPageId(info.id) || isTableId(info.id)) {
+    if (isPageId(info.id) || isTableId(info.id) || isArtifactId(info.id)) {
       const table = isTableId(info.id);
-      for (const line of table ? tableLines(doc) : pageMarkdown(doc).split('\n')) {
+      const art = isArtifactId(info.id) ? readArtifact(doc) : null;
+      const lines = table
+        ? tableLines(doc)
+        : art
+          ? artifactText(art).split('\n')
+          : isArtifactId(info.id)
+            ? []
+            : pageMarkdown(doc).split('\n');
+      for (const line of lines) {
         const t = line.replace(/^(#{1,3}|>|[-*]( \[[ xX]\])?|\d+\.)\s+/, '').trim();
         const low = t.toLowerCase();
         const at = low.indexOf(q);
@@ -47,7 +63,7 @@ export async function searchBoards(
           board: info.id,
           boardName: info.name,
           id: '',
-          type: table ? 'table' : 'page',
+          type: table ? 'table' : isArtifactId(info.id) ? 'artifact' : 'page',
           text: t,
         };
         (at === 0 || /[\s.,;:!?()«»"'-]/.test(low[at - 1]!) ? word : rest).push(hit);

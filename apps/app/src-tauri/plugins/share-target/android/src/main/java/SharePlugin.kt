@@ -69,15 +69,19 @@ class SharePlugin(private val activity: Activity) : Plugin(activity) {
         val files = JSArray()
         for (uri in streams(intent).take(MAX_FILES)) {
             val mime = activity.contentResolver.getType(uri) ?: intent.type ?: continue
-            if (!mime.startsWith("image/") && mime != "application/pdf") continue
+            // Картинки, PDF и файлы .md (решение 0023): markdown приходит как text/markdown или text/plain.
+            val name = displayName(uri)
+            val markdown = mime == "text/markdown" || mime == "text/x-markdown" ||
+                (mime.startsWith("text/") && name?.lowercase()?.endsWith(".md") == true)
+            if (!mime.startsWith("image/") && mime != "application/pdf" && !markdown) continue
             val bytes = activity.contentResolver.openInputStream(uri)?.use { input ->
                 val buf = input.readBytes()
                 if (buf.size > MAX_BYTES) null else buf
             } ?: continue
             files.put(
                 JSObject().apply {
-                    put("name", displayName(uri) ?: "image")
-                    put("mime", mime)
+                    put("name", name ?: "image")
+                    put("mime", if (markdown) "text/markdown" else mime)
                     put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
                 },
             )

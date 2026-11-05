@@ -14,6 +14,7 @@ import {
   removeRows,
   updateColumn,
   updateRow,
+  computeTable,
   type Cell,
   type Column,
   type ColumnType,
@@ -21,6 +22,7 @@ import {
 } from '@kayospace/page';
 import type { BoardSession } from './session';
 import { CommitInput } from './CommitInput';
+import { openInClaude } from './claude';
 import { CloseIcon } from './icons';
 
 /** Свои правки таблицы — только их отменяет «Отменить» (правки агентов и других устройств — нет). */
@@ -33,6 +35,7 @@ const TYPE_ICON: Record<ColumnType, string> = {
   date: '📅',
   select: '▾',
   url: '↗',
+  formula: 'ƒ',
 };
 
 /** Таблица из Yjs-документа: перечитывается при любой правке (своей, агента, другого устройства). */
@@ -138,6 +141,30 @@ function CellEditor({
   }
 }
 
+/** Значение формулы: только показать; ошибка — «#ОШИБКА» с причиной по касанию. */
+function FormulaCell({
+  column,
+  value,
+  error,
+}: {
+  column: Column;
+  value: Cell | undefined;
+  error: string | undefined;
+}) {
+  const [show, setShow] = useState(false);
+  if (error)
+    return (
+      <button className="kt-formula err" title={error} onClick={() => setShow((v) => !v)}>
+        {show ? error : '#ОШИБКА'}
+      </button>
+    );
+  return (
+    <span className={typeof value === 'number' ? 'kt-formula num' : 'kt-formula'}>
+      {cellText(column, value)}
+    </span>
+  );
+}
+
 /** Настройки колонки: название, тип, варианты, сортировка, порядок, удаление — касаниями. */
 function ColumnMenu({
   column,
@@ -146,9 +173,15 @@ function ColumnMenu({
   sort,
   onSort,
   doc,
+  columns,
+  formulaError,
   onClose,
 }: {
   column: Column;
+  /** Все колонки — для вставки ссылок в формулу. */
+  columns: readonly Column[];
+  /** Первая ошибка формулы этой колонки (если есть). */
+  formulaError: string | null;
   first: boolean;
   last: boolean;
   sort: 'asc' | 'desc' | null;
@@ -194,6 +227,44 @@ function ColumnMenu({
           ))}
         </div>
       </div>
+      {column.type === 'formula' && (
+        <div className="field" data-testid="column-formula-field">
+          <span>Формула</span>
+          <CommitInput
+            value={column.formula ?? ''}
+            placeholder="[Цена] * [Количество]"
+            spellCheck={false}
+            autoCapitalize="off"
+            onCommit={(v) => updateColumn(doc, column.id, { formula: v }, TABLE_ORIGIN)}
+            data-testid="column-formula"
+          />
+          <div className="kt-types" aria-label="Вставить колонку">
+            {columns
+              .filter((c) => c.id !== column.id)
+              .map((c) => (
+                <button
+                  key={c.id}
+                  className="project-chip"
+                  onClick={() =>
+                    updateColumn(
+                      doc,
+                      column.id,
+                      { formula: `${(column.formula ?? '').trim()} [${c.name}]`.trim() },
+                      TABLE_ORIGIN,
+                    )
+                  }
+                >
+                  [{c.name}]
+                </button>
+              ))}
+          </div>
+          <small className="muted">
+            + − × / ^ и скобки; ЕСЛИ(условие; да; нет), ОКРУГЛ(x; 2), СУММ([Колонка]), СРЗНАЧ, МИН,
+            МАКС, СЧЁТ, ДНИ(дата; СЕГОДНЯ()), «текст» & [Колонка].
+          </small>
+          {formulaError && <small className="bad">{formulaError}</small>}
+        </div>
+      )}
       {column.type === 'select' && (
         <label className="field">
           <span>Варианты через запятую</span>
@@ -276,7 +347,10 @@ export function TableView({
   onClose?: () => void;
 }) {
   const doc = session.doc;
-  const data = useTable(doc);
+  const raw = useTable(doc);
+  // Формулы (решение 0023) считаются при каждом изменении таблицы.
+  const data = useMemo(() => computeTable(raw), [raw]);
+  const order = useMemo(() => new Map(raw.rows.map((r, i) => [r.id, i + 1])), [raw]);
   const [menu, setMenu] = useState<string | null>(null);
   const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null);
   const [query, setQuery] = useState('');
@@ -360,6 +434,13 @@ export function TableView({
         />
         <span className="page-tool-gap" />
         <button
+          className="page-tool wide"
+          onClick={() => void openInClaude(session.board, name)}
+          data-testid="to-claude"
+        >
+          В Claude
+        </button>
+        <button
           className="page-tool"
           title="Отменить"
           aria-label="Отменить"
@@ -410,7 +491,7 @@ export function TableView({
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const n = data.rows.indexOf(r) + 1;
+                  const n = order.get(r.id) ?? 0;
                   return (
                     <tr
                       key={r.id}
@@ -444,12 +525,20 @@ export function TableView({
                           data-testid="cell"
                           data-col={c.name}
                         >
-                          <CellEditor
-                            column={c}
-                            value={r.cells[c.id]}
-                            label={`${c.name}, строка ${n}`}
-                            onChange={(v) => updateRow(doc, r.id, { [c.id]: v }, TABLE_ORIGIN)}
-                          />
+                          {c.type === 'formula' ? (
+                            <FormulaCell
+                              column={c}
+                              value={r.cells[c.id]}
+                              error={data.errors[`${r.id}|${c.id}`]}
+                            />
+                          ) : (
+                            <CellEditor
+                              column={c}
+                              value={r.cells[c.id]}
+                              label={`${c.name}, строка ${n}`}
+                              onChange={(v) => updateRow(doc, r.id, { [c.id]: v }, TABLE_ORIGIN)}
+                            />
+                          )}
                         </td>
                       ))}
                     </tr>
@@ -488,6 +577,10 @@ export function TableView({
           sort={sort?.col === menuCol.id ? sort.dir : null}
           onSort={(dir) => setSort(dir ? { col: menuCol.id, dir } : null)}
           doc={doc}
+          columns={data.columns}
+          formulaError={
+            Object.entries(data.errors).find(([k]) => k.endsWith(`|${menuCol.id}`))?.[1] ?? null
+          }
           onClose={() => setMenu(null)}
         />
       )}
