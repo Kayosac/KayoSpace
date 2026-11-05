@@ -25,7 +25,7 @@ describe('корзина', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'kayospace-trash-'));
   });
-  afterEach(() => rm(dir, { recursive: true, force: true }));
+  afterEach(() => rm(dir, { recursive: true, force: true, maxRetries: 5 }));
 
   it('удалённое попадает в корзину пачкой, возвращается, через 7 дней пропадает', async () => {
     let now = 1_000_000_000;
@@ -60,6 +60,7 @@ describe('корзина', () => {
 
     now += 8 * DAY;
     expect(await trash.list('plan')).toEqual([]);
+    await trash.flush();
   });
 
   it('удаление отменили на устройстве — из корзины убирается', async () => {
@@ -74,6 +75,7 @@ describe('корзина', () => {
     elementsMap(doc).set(a.id, a); // «Отменить» на устройстве
     await new Promise((r) => setTimeout(r, 5));
     expect(await trash.list('plan')).toEqual([]);
+    await trash.flush();
   });
 
   it('пачки — по действию и автору', () => {
@@ -107,7 +109,7 @@ describe('корзина, изменения и проекты через хаб
   afterEach(async () => {
     await client.close();
     await hub.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const r = (await client.callTool({ name, arguments: args })) as {

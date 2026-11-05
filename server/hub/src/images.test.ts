@@ -150,7 +150,7 @@ describe('картинки через MCP', () => {
   afterEach(async () => {
     await client.close();
     await hub.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
   type Result = {
     content: { type: string; text?: string; data?: string; mimeType?: string }[];
