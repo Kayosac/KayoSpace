@@ -7,6 +7,8 @@ FROM node:22-alpine
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     COREPACK_HOME=/usr/local/share/corepack
 RUN corepack enable
+# Шрифт с кириллицей — для картинки доски, которую видят агенты (view_board, решение 0015).
+RUN apk add --no-cache font-dejavu
 
 WORKDIR /app
 

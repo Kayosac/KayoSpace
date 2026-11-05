@@ -1,6 +1,6 @@
 {
   "name": "@kayospace/hub",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Хаб Kayospace: синхронизация досок, хранение, MCP для агентов",
@@ -23,6 +23,7 @@
     "@kayospace/sync": "workspace:*",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "@resvg/resvg-js": "^2.6.2",
     "tsx": "^4.20.0",
     "uqr": "^0.1.3",
     "ws": "^8.18.0",

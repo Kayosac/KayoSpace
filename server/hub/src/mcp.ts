@@ -3,6 +3,7 @@
  * Запись идёт прямо в Yjs-документ хаба — подключённые устройства видят её сразу.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Actor } from '@kayospace/model';
@@ -16,6 +17,7 @@ import {
   freeSpot,
   getBoardName,
   getElement,
+  listElements,
   makeArrow,
   makeFrame,
   makeShape,
@@ -25,6 +27,9 @@ import {
 } from '@kayospace/board';
 import type { ArrowEnd, CanvasElement } from '@kayospace/model';
 import { searchBoards } from './search';
+import { registerLayoutTools } from './mcp-layout';
+import { AGENT_GUIDE } from './agent-guide';
+import { boardSvg, contentArea, loadImages, renderPng, type Area } from './render';
 import type { BoardInfo } from './store';
 import type * as Y from 'yjs';
 
@@ -37,6 +42,37 @@ export interface BoardSource {
 
 export const MCP_ORIGIN = 'mcp';
 
+/** Имя агента в текущем запросе MCP (задаёт хаб по токену или User-Agent). */
+export const agentContext = new AsyncLocalStorage<string>();
+
+/** Как назвать агента: приложение OAuth, Claude Code по User-Agent или просто «mcp». */
+export function agentNameFor(
+  req: { headers: Record<string, string | string[] | undefined> },
+  oauthClient: string | null,
+): string {
+  const named = clientName(oauthClient ?? undefined);
+  if (named) return named;
+  const ua = String(req.headers['user-agent'] ?? '');
+  if (/claude[- ]?code/i.test(ua)) return 'claude-code';
+  if (/openai|chatgpt/i.test(ua)) return 'chatgpt';
+  if (/claude/i.test(ua)) return 'claude';
+  return 'mcp';
+}
+
+/** Имя клиента MCP для подписи правок: только безопасные символы, не длиннее 40. */
+export function clientName(name: string | undefined): string | undefined {
+  const clean = name
+    ?.replace(/[^\p{L}\p{N} ._-]/gu, '')
+    .trim()
+    .slice(0, 40);
+  return clean || undefined;
+}
+
+/** Ссылка, по которой приложение открывает доску (и показывает элемент). */
+export function boardLink(board: string, element?: string): string {
+  return `kayospace://board/${encodeURIComponent(board)}${element ? `?element=${encodeURIComponent(element)}` : ''}`;
+}
+
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
 
@@ -46,10 +82,31 @@ const boardId = z
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
   .describe('id доски: латиница, цифры, «-» и «_» (не в начале)');
 
-export function createMcp(store: BoardSource, opts: { actorName?: string } = {}) {
-  const agent: Actor = { kind: 'agent', name: opts.actorName ?? 'mcp' };
+/** Файлы картинок на хабе — чтобы показать их агенту на снимке доски. */
+export interface AssetSource {
+  get(id: string): Promise<Buffer | null>;
+  head(id: string): Promise<{ type: string } | null>;
+}
+
+export function createMcp(
+  store: BoardSource,
+  opts: { actorName?: string; assets?: AssetSource | null } = {},
+) {
   return createMcpHandler(() => {
-    const server = new McpServer({ name: 'kayospace', version: '0.1.0' });
+    const server = new McpServer(
+      { name: 'kayospace', version: '0.2.0' },
+      { instructions: AGENT_GUIDE },
+    );
+    // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
+    // какой агент что изменил.
+    const who = (): Actor => ({
+      kind: 'agent',
+      name:
+        opts.actorName ??
+        agentContext.getStore() ??
+        clientName(server.server.getClientVersion()?.name) ??
+        'mcp',
+    });
 
     server.registerTool(
       'list_boards',
@@ -102,7 +159,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
         if (boardName && !getBoardName(doc)) setBoardName(doc, boardName, MCP_ORIGIN);
         const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(doc);
         // Шрифт стикера подбирается под его размер сам — стикер остаётся квадратным.
-        const sticky = makeSticky(content, { ...spot, color, actor: agent });
+        const sticky = makeSticky(content, { ...spot, color, actor: who() });
         addElement(doc, sticky, MCP_ORIGIN);
         return text(`Стикер добавлен: ${sticky.id} в (${spot.x}, ${spot.y}).`);
       },
@@ -125,7 +182,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       async ({ board, text: content, x, y, width, color }) => {
         const doc = await store.get(board);
         const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(doc);
-        const base = makeText(content, { ...spot, w: width, color, actor: agent });
+        const base = makeText(content, { ...spot, w: width, color, actor: who() });
         const el = { ...base, h: estimateNoteHeight(content, base.w, { sticky: false }) };
         addElement(doc, el, MCP_ORIGIN);
         return text(`Текст добавлен: ${el.id} в (${spot.x}, ${spot.y}).`);
@@ -150,7 +207,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       },
       async ({ board, shape, x, y, w, h, color, lineWidth }) => {
         const doc = await store.get(board);
-        const el = makeShape(shape, { x, y, w, h }, { size: lineWidth ?? 2, color, actor: agent });
+        const el = makeShape(shape, { x, y, w, h }, { size: lineWidth ?? 2, color, actor: who() });
         addElement(doc, el, MCP_ORIGIN);
         return text(`Фигура добавлена: ${el.id}.`);
       },
@@ -174,7 +231,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       },
       async ({ board, name, x, y, w, h }) => {
         const doc = await store.get(board);
-        const el = makeFrame(name, { x, y, w, h }, { actor: agent });
+        const el = makeFrame(name, { x, y, w, h }, { actor: who() });
         addElement(doc, el, MCP_ORIGIN);
         return text(`Фрейм добавлен: ${el.id}.`);
       },
@@ -216,7 +273,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
         const b = resolve(to);
         if (typeof a === 'string') return fail(a);
         if (typeof b === 'string') return fail(b);
-        const base = makeArrow(a.at, b.at, { heads, size: 2, color, actor: agent });
+        const base = makeArrow(a.at, b.at, { heads, size: 2, color, actor: who() });
         const el = { ...base, props: { ...base.props, start: a.end, end: b.end } };
         addElement(doc, el, MCP_ORIGIN);
         return text(`Стрелка добавлена: ${el.id}.`);
@@ -243,7 +300,7 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
         const doc = await store.get(board);
         const el = getElement(doc, id);
         if (!el) return fail(`Элемента ${id} нет на доске.`);
-        let next: CanvasElement = { ...el, updatedBy: agent, updatedAt: Date.now() };
+        let next: CanvasElement = { ...el, updatedBy: who(), updatedAt: Date.now() };
         if (x !== undefined || y !== undefined) {
           const dx = (x ?? el.x) - el.x;
           const dy = (y ?? el.y) - el.y;
@@ -298,15 +355,128 @@ export function createMcp(store: BoardSource, opts: { actorName?: string } = {})
       },
     );
 
+    registerLayoutTools(server, store, who, MCP_ORIGIN);
+
+    server.registerTool(
+      'view_board',
+      {
+        description:
+          'Посмотреть на доску картинкой (PNG): рукописные заметки, рисунки, схемы, картинки — то, ' +
+          'чего нет в тексте read_board. Можно всю доску, один фрейм (frame) или область (region). ' +
+          'Вместе с картинкой приходит соответствие: координаты на доске = область.x + пиксель / масштаб.',
+        inputSchema: z.object({
+          board: boardId,
+          frame: z.string().optional().describe('id фрейма'),
+          region: z
+            .object({
+              x: z.number(),
+              y: z.number(),
+              w: z.number().positive(),
+              h: z.number().positive(),
+            })
+            .optional()
+            .describe('область доски в её координатах'),
+          maxSize: z
+            .number()
+            .int()
+            .min(256)
+            .max(2048)
+            .optional()
+            .describe('длинная сторона картинки в пикселях, по умолчанию 1600'),
+        }),
+      },
+      async ({ board, frame, region, maxSize }) => {
+        if (!(await store.has(board))) return fail(`Доски «${board}» нет. Список — list_boards.`);
+        const doc = await store.get(board);
+        const all = listElements(doc);
+        let area: Area | null;
+        if (frame) {
+          const f = getElement(doc, frame);
+          if (!f || f.type !== 'frame') return fail(`Фрейма ${frame} на доске нет.`);
+          area = contentArea([f]);
+        } else if (region) {
+          area = region;
+        } else {
+          area = contentArea(all);
+        }
+        if (!area) return text('Доска пустая — смотреть нечего.');
+        const pad = region ? 0 : 40;
+        const padded = {
+          x: area.x - pad,
+          y: area.y - pad,
+          w: area.w + pad * 2,
+          h: area.h + pad * 2,
+        };
+        const images = await loadImages(all, opts.assets ?? null);
+        const { svg, width, height, scale } = boardSvg(all, padded, { maxSize, images });
+        const png = renderPng(svg);
+        return {
+          content: [
+            { type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' },
+            {
+              type: 'text' as const,
+              text:
+                `Картинка ${width}×${height} px, область доски (${Math.round(padded.x)}, ${Math.round(padded.y)}) ` +
+                `${Math.round(padded.w)}×${Math.round(padded.h)}, масштаб ${Math.round(scale * 1000) / 1000} px на единицу.`,
+            },
+          ],
+        };
+      },
+    );
+
     server.registerTool(
       'search',
       {
-        description: 'Найти текст на всех досках (стикеры, тексты, подписи). Регистр не важен.',
+        description:
+          'Найти текст на всех досках: стикеры, надписи, подписи фигур и стрелок, названия фреймов. ' +
+          'Регистр не важен. Результат — { results: [{ id, title, url, text, board, type }] }; ' +
+          'id подходит для fetch, url открывает доску в приложении.',
         inputSchema: z.object({ query: z.string().min(1) }),
       },
       async ({ query }) => {
         const hits = await searchBoards(store, query, 200);
-        return text(hits.length ? JSON.stringify(hits, null, 2) : 'Ничего не найдено.');
+        const results = hits.map((h) => ({
+          id: `${h.board}#${h.id}`,
+          title: `${h.boardName ?? h.board}: ${h.text.replace(/\s+/g, ' ').slice(0, 80)}`,
+          url: boardLink(h.board, h.id),
+          text: h.text,
+          board: h.board,
+          boardName: h.boardName,
+          element: h.id,
+          type: h.type,
+        }));
+        return text(JSON.stringify({ results }, null, 2));
+      },
+    );
+
+    server.registerTool(
+      'fetch',
+      {
+        description:
+          'Получить доску целиком по id из search (вида «доска#элемент») или по id доски: ' +
+          'текст доски в markdown и ссылка на неё. Для рукописного и рисунков — view_board.',
+        inputSchema: z.object({ id: z.string().min(1) }),
+      },
+      async ({ id }) => {
+        const [board, element] = id.split('#');
+        const parsed = boardId.safeParse(board);
+        if (!parsed.success || !(await store.has(parsed.data)))
+          return fail(`Доски «${board}» нет.`);
+        const doc = await store.get(parsed.data);
+        const name = getBoardName(doc) ?? parsed.data;
+        return text(
+          JSON.stringify(
+            {
+              id,
+              title: name,
+              text: boardToMarkdown(doc, parsed.data),
+              url: boardLink(parsed.data, element),
+              metadata: { board: parsed.data, ...(element ? { element } : {}) },
+            },
+            null,
+            2,
+          ),
+        );
       },
     );
 

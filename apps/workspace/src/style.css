@@ -1297,11 +1297,55 @@ p.bad {
   font-size: 13px;
 }
 
-.update-banner {
+.top-center {
   position: absolute;
   top: calc(var(--gutter-t) + 48px);
   left: 50%;
   transform: translate(-50%);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  max-width: calc(100vw - 24px);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.top-center > * {
+  pointer-events: auto;
+}
+
+.agent-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 6px 6px 6px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+}
+
+.agent-bar .agent-icon {
+  display: flex;
+  color: var(--accent);
+}
+
+.agent-bar .agent-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-bar .link-btn {
+  padding: 0 4px;
+}
+
+.update-banner {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1312,7 +1356,6 @@ p.bad {
   border-radius: 12px;
   box-shadow: var(--shadow);
   font-size: 13.5px;
-  z-index: 6;
 }
 
 .update-banner .link-btn {

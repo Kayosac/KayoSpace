@@ -10,3 +10,4 @@ export * from './bench-board';
 export * from './lod';
 export * from './frames';
 export * from './pdf';
+export * from './agent-activity';

@@ -119,6 +119,13 @@ export class OAuthServer {
   }
 
   /** Действующий ли OAuth-токен доступа. */
+  /** Название клиента (приложения), которому выдан токен: «Claude», «ChatGPT»… */
+  clientName(token: string | undefined): string | null {
+    if (!token) return null;
+    const g = this.data.access[hash(token)];
+    return (g && this.data.clients[g.clientId]?.name) || null;
+  }
+
   validAccessToken(token: string | undefined): boolean {
     if (!token) return false;
     const g = this.data.access[hash(token)];

@@ -186,15 +186,20 @@ describe('MCP', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_arrow',
+      'add_elements',
       'add_frame',
       'add_shape',
       'add_sticky',
       'add_text',
+      'arrange_elements',
       'delete_elements',
+      'fetch',
       'list_boards',
+      'move_elements',
       'read_board',
       'search',
       'update_element',
+      'view_board',
     ]);
     await client.close();
   });
@@ -478,7 +483,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(10);
+    expect(tools.length).toBe(15);
     await client.close();
   });
 

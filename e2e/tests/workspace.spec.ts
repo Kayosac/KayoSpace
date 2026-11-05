@@ -1316,3 +1316,57 @@ test('поиск по всем доскам ведёт к стикеру; фон
   );
   expect(bg).toBe('grid');
 });
+
+test('агент через MCP раскладывает стикеры — на устройстве видно, что он сделал, и это можно отменить', async ({
+  browser,
+  request,
+}) => {
+  const board = 'e2e-agent';
+  const page = await openDevice(browser, { ...synced, board });
+  await expect(page.getByTestId('sync')).toHaveAttribute('data-sync', 'synced');
+  await drawWave(page, 300, 300);
+  await expect.poll(() => hubElements(request, board)).toBe(1);
+
+  // Агент — настоящий клиент MCP, как Claude Code.
+  const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+  const client = new Client({ name: 'e2e-agent', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://${HUB_ADDRESS}/mcp`), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${HUB_TOKEN}`, 'User-Agent': 'claude-code/2.0' },
+      },
+    }),
+  );
+  const r = (await client.callTool({
+    name: 'add_elements',
+    arguments: {
+      board,
+      items: [{ text: 'Идея 1' }, { text: 'Идея 2' }, { text: 'Идея 3' }],
+      newFrame: 'От агента',
+    },
+  })) as { isError?: boolean };
+  expect(r.isError).toBeFalsy();
+  await expect.poll(() => hubElements(request, board)).toBe(5);
+
+  const bar = page.getByTestId('agent-bar');
+  await expect(bar).toContainText('Claude Code');
+  await expect(bar).toContainText('добавил 4');
+  await bar.getByRole('button', { name: 'Показать' }).click();
+  await page.screenshot({ path: shot('agent-activity.png') });
+
+  // Картинка доски для агента — с рукописным штрихом.
+  const view = (await client.callTool({ name: 'view_board', arguments: { board } })) as {
+    content: { type: string; mimeType?: string }[];
+  };
+  expect(view.content.some((c) => c.type === 'image' && c.mimeType === 'image/png')).toBe(true);
+  await client.close();
+
+  // Отменить — и на устройстве, и на хабе остаётся только своё.
+  await page.getByTestId('agent-revert').click();
+  await expect(bar).toHaveCount(0);
+  await expect.poll(() => elements(page)).toBe(1);
+  await expect.poll(() => hubElements(request, board)).toBe(1);
+  // Отмену можно отменить: агентские правки возвращаются.
+  await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
+  await expect.poll(() => elements(page)).toBe(5);
+});

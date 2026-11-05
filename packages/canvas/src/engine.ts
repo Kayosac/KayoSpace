@@ -58,6 +58,7 @@ import {
   type Camera,
 } from './camera';
 import { eraseFromPoints } from './erase';
+import { AgentTracker, type AgentActivity } from './agent-activity';
 import { ImageCache } from './images';
 import { boxFromDrag, insideBox, snapAngle } from './shapes';
 import { Navigation } from './navigation';
@@ -260,6 +261,12 @@ export class CanvasEngine {
   private raf = 0;
   /** Предпросмотр черновика ИИ: копия доски с его правками, которую рисуем вместо доски. */
   private ai: AiPreview | null = null;
+  /** Правки агентов, пришедшие по сети (MCP), — показать и отменить. */
+  private readonly agents: AgentTracker;
+  private agentActivity: AgentActivity | null = null;
+  private readonly agentListeners = new Set<(a: AgentActivity | null) => void>();
+  private agentGlow: ReadonlySet<string> | null = null;
+  private agentGlowTimer: ReturnType<typeof setTimeout> | null = null;
   private state: EngineState;
   private hasCamera: boolean;
   /** Время последней отрисовки, мс — для отладки и e2e-проверок. */
@@ -413,6 +420,17 @@ export class CanvasEngine {
     meta.observe(onMeta);
     this.cleanups.push(() => meta.unobserve(onMeta));
 
+    const elements = elementsMap(doc);
+    this.agents = new AgentTracker(elements, (a) => this.onAgentChange(a), {
+      localOrigin: LOCAL_ORIGIN,
+    });
+    const onElements = (e: Y.YMapEvent<CanvasElement>): void => this.agents.handle(e);
+    elements.observe(onElements);
+    this.cleanups.push(() => {
+      elements.unobserve(onElements);
+      if (this.agentGlowTimer) clearTimeout(this.agentGlowTimer);
+    });
+
     this.cleanups.push(
       this.scene.onChange((dirty) => {
         if (this.selection.size > 0) {
@@ -474,6 +492,80 @@ export class CanvasEngine {
     this.nav.handTool = tool === 'hand';
     this.updateCursor();
     this.emit();
+  }
+
+  // ---------- Правки агентов ----------
+
+  /** Подписка на правки агентов: последняя пачка или null (отменена, скрыта). */
+  onAgentActivity(cb: (a: AgentActivity | null) => void): () => void {
+    this.agentListeners.add(cb);
+    cb(this.agentActivity);
+    return () => this.agentListeners.delete(cb);
+  }
+
+  private onAgentChange(a: AgentActivity | null): void {
+    this.agentActivity = a;
+    if (a) this.glow(a.ids);
+    else this.glow(null);
+    for (const cb of [...this.agentListeners]) cb(a);
+  }
+
+  /** Подсветить элементы на несколько секунд (null — снять). */
+  private glow(ids: readonly string[] | null, ms = 5000): void {
+    if (this.agentGlowTimer) clearTimeout(this.agentGlowTimer);
+    this.agentGlowTimer = null;
+    this.agentGlow = ids && ids.length > 0 ? new Set(ids) : null;
+    if (this.agentGlow) {
+      this.agentGlowTimer = setTimeout(() => {
+        this.agentGlow = null;
+        this.renderer.invalidateAll();
+        this.schedule();
+      }, ms);
+    }
+    this.renderer.invalidateAll();
+    this.schedule();
+  }
+
+  /** Показать, что изменил агент: вид — на эти элементы, подсветка. */
+  showAgentActivity(): void {
+    const a = this.agentActivity;
+    if (!a) return;
+    const items = a.ids.map((id) => this.scene.items.get(id)).filter((i) => !!i);
+    if (items.length === 0) return;
+    const b = items.reduce(
+      (acc, i) => ({
+        minX: Math.min(acc.minX, i.bounds.minX),
+        minY: Math.min(acc.minY, i.bounds.minY),
+        maxX: Math.max(acc.maxX, i.bounds.maxX),
+        maxY: Math.max(acc.maxY, i.bounds.maxY),
+      }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    );
+    // С запасом: сверху плашка, у фреймов — заголовок.
+    const pad = 80 / Math.max(this.camera.zoom, 0.1);
+    this.zoomToBounds({
+      minX: b.minX - pad,
+      minY: b.minY - pad,
+      maxX: b.maxX + pad,
+      maxY: b.maxY + pad,
+    });
+    if (this.camera.zoom > 1) this.zoomBy(1 / this.camera.zoom);
+    this.glow(a.ids);
+  }
+
+  /**
+   * Отменить последнюю пачку правок агента. Это своя правка: её, в свою очередь, отменяет «Отменить».
+   * Элементы, которые после агента правил человек, остаются как есть.
+   */
+  revertAgentActivity(): { reverted: number; skipped: number } {
+    this.undoManager.stopCapturing();
+    const r = this.agents.revert(this.doc, LOCAL_ORIGIN);
+    this.undoManager.stopCapturing();
+    return r;
+  }
+
+  dismissAgentActivity(): void {
+    this.agents.dismiss();
   }
 
   /** Фон доски для всех устройств: точки, клетка, линейка или чистый лист. */
@@ -1892,6 +1984,9 @@ export class CanvasEngine {
               return item ? [item] : [];
             }),
           };
+        } else if (this.agentGlow) {
+          // Что агент только что изменил — подсвечено несколько секунд.
+          overlay.ai = { ids: this.agentGlow, deleted: [] };
         }
         this.renderer.paint(this.camera, ai?.scene ?? this.scene, overlay);
         this.paints++;
