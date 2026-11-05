@@ -68,6 +68,10 @@ function describe(el: CanvasElement): string | null {
       const kind = el.props.heads === 'none' ? 'Линия' : 'Стрелка';
       return `- ${kind} ${end(el.props.start)} → ${end(el.props.end)}${el.props.label ? ' ' + quote(el.props.label) : ''} [arrow:${el.id}]`;
     }
+    case 'doc': {
+      const kind = el.props.doc.startsWith('tb_') ? 'Таблица' : 'Документ';
+      return `- ${kind} ${quote(el.props.title ?? el.props.doc)} ${pos} [doc:${el.id}] → ${el.props.doc} (${el.props.doc.startsWith('tb_') ? 'read_table' : 'read_page'})${who(el)}`;
+    }
     case 'stroke':
       return null; // штрихи описываются сводкой
   }
@@ -187,6 +191,8 @@ export function elementText(el: CanvasElement): string {
     case 'shape':
     case 'arrow':
       return el.props.label ?? '';
+    case 'doc':
+      return [el.props.title, el.props.excerpt].filter(Boolean).join('\n');
     default:
       return '';
   }

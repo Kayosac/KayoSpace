@@ -307,3 +307,10 @@ export const DocIcon = () => (
     <path d="M13 3.5V8h5M9 12h6M9 15.5h6" />
   </Svg>
 );
+
+export const TableIcon = () => (
+  <Svg>
+    <rect x="4" y="5" width="16" height="14" rx="1.5" />
+    <path d="M4 10h16M4 14.5h16M10 10v9" />
+  </Svg>
+);

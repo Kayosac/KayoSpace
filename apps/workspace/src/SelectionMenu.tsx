@@ -79,6 +79,9 @@ export function SelectionMenu({
   // Задачи (решение 0019): только для стикеров.
   const stickies = !none && engine.selectionIsStickies();
   const task = stickies ? engine.getSelectedTask() : null;
+  // Одна карточка документа (решение 0021) — «Открыть» поверх доски.
+  const sel = state.selected === 1 ? [...engine.getSelection()][0] : undefined;
+  const docCard = sel && engine.scene.items.get(sel)?.element.type === 'doc' ? sel : null;
 
   if (
     state.selected === 0 ||
@@ -159,6 +162,11 @@ export function SelectionMenu({
         >
           <TaskIcon />
           <span>Задача</span>
+        </button>
+      )}
+      {docCard && (
+        <button onClick={() => engine.openDoc(docCard)} data-testid="open-doc">
+          <span>Открыть</span>
         </button>
       )}
       <button title="Дублировать (Ctrl/⌘ D)" onClick={() => engine.duplicateSelection()}>

@@ -183,7 +183,7 @@ describe('корзина, изменения и проекты через хаб
     ).toContain('kayospace://board/smeta');
     await call('create_board', { board: 'loose', name: 'Разное' });
     // Из шаблона — сразу с колонками.
-    await call('create_board', { board: 'kanban', name: 'Задачи', template: 'kanban' });
+    await call('create_board', { board: 'kanban', name: 'Задачи', template: 'retro' });
     expect(
       listElements(await hub.store.get('kanban')).filter((e) => e.type === 'frame'),
     ).toHaveLength(3);

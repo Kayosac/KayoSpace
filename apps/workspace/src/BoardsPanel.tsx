@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { boardIdFromName, hubHttpUrl } from '@kayospace/sync';
 import type { Project } from '@kayospace/model';
 import { BOARD_TEMPLATES, type BoardBackground, type TemplateId } from '@kayospace/board';
-import { isPageId, pageIdFrom } from '@kayospace/page';
+import { docKind, isDocId, isPageId, pageIdFrom, tableIdFrom } from '@kayospace/page';
 
 const BACKGROUNDS: { value: BoardBackground; name: string }[] = [
   { value: 'dots', name: 'Точки' },
@@ -19,6 +19,7 @@ import { finePointer } from './touch';
 import {
   CloseIcon,
   DocIcon,
+  TableIcon,
   ExportIcon,
   HistoryIcon,
   PlayIcon,
@@ -189,8 +190,15 @@ export function BoardsPanel({
     const title = query.trim() || 'Новый документ';
     onOpen(pageIdFrom(boardIdFromName(title)), title, true);
   };
-  const isPage = isPageId(current);
-  const what = isPage ? 'этого документа' : 'этой доски';
+  // Таблица (решение 0021): id с «tb_».
+  const createTable = (): void => {
+    const title = query.trim() || 'Новая таблица';
+    onOpen(tableIdFrom(boardIdFromName(title)), title, true);
+  };
+  const kind = docKind(current);
+  const isPage = kind !== null;
+  const what =
+    kind === 'page' ? 'этого документа' : kind === 'table' ? 'этой таблицы' : 'этой доски';
 
   return (
     <aside className="panel boards" aria-label="Доски" data-testid="boards-panel">
@@ -381,12 +389,15 @@ export function BoardsPanel({
               onMouseEnter={() => setActive(i)}
             >
               {isPageId(b.id) && <DocIcon />}
+              {docKind(b.id) === 'table' && <TableIcon />}
               <span className="board-title">{b.name ?? b.id}</span>
               <span className="board-meta">
-                {isPageId(b.id)
+                {isDocId(b.id)
                   ? b.id === current
                     ? 'открыт'
-                    : 'документ'
+                    : isPageId(b.id)
+                      ? 'документ'
+                      : 'таблица'
                   : b.id === current
                     ? 'открыта'
                     : b.elements !== undefined
@@ -406,6 +417,15 @@ export function BoardsPanel({
             <PlusIcon />
             <span>
               {query.trim() ? `Создать «${query.trim()}»` : 'Новая доска'}
+              {shown ? ` в «${shown.name}»` : ''}
+            </span>
+          </button>
+        </li>
+        <li>
+          <button className="create" onClick={createTable} data-testid="create-table">
+            <TableIcon />
+            <span>
+              {query.trim() ? `Таблица «${query.trim()}»` : 'Новая таблица'}
               {shown ? ` в «${shown.name}»` : ''}
             </span>
           </button>
@@ -502,12 +522,16 @@ export function BoardsPanel({
           data-testid="delete-board"
         >
           {confirmDelete
-            ? isPage
+            ? kind === 'page'
               ? 'Точно удалить документ?'
-              : 'Точно удалить доску?'
-            : isPage
+              : kind === 'table'
+                ? 'Точно удалить таблицу?'
+                : 'Точно удалить доску?'
+            : kind === 'page'
               ? 'Удалить этот документ'
-              : 'Удалить эту доску'}
+              : kind === 'table'
+                ? 'Удалить эту таблицу'
+                : 'Удалить эту доску'}
         </button>
         {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
         {!confirmDelete && (

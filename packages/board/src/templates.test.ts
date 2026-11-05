@@ -23,11 +23,12 @@ describe('шаблоны досок', () => {
     }
   });
 
-  it('канбан — три колонки по порядку', () => {
-    const names = templateElements('kanban', me)
+  it('ретро — три колонки по порядку; канбана среди шаблонов нет', () => {
+    expect(BOARD_TEMPLATES.map((t) => t.id)).not.toContain('kanban');
+    const names = templateElements('retro', me)
       .filter((e) => e.type === 'frame')
       .sort((a, b) => a.x - b.x)
       .map((e) => (e.type === 'frame' ? e.props.name : ''));
-    expect(names).toEqual(['Сделать', 'В работе', 'Готово']);
+    expect(names).toEqual(['Что было хорошо', 'Что улучшить', 'Что делаем дальше']);
   });
 });

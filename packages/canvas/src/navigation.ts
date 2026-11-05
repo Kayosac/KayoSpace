@@ -20,8 +20,11 @@ export interface NavigationOptions {
   onMultiTouch?(): void;
   /** Начало и конец перетаскивания — для курсора. */
   onPanChange?(panning: boolean): void;
-  /** Короткое касание несколькими пальцами без движения: 2 — отменить, 3 — повторить. */
-  onTap?(fingers: number): void;
+  /**
+   * Короткое касание без движения: 2 пальца — отменить, 3 — повторить; один палец (когда палец
+   * двигает холст) — с точкой касания (координаты элемента), например открыть карточку документа.
+   */
+  onTap?(fingers: number, at?: { x: number; y: number }): void;
 }
 
 /** Касание шире этого (CSS-пиксели) — скорее ладонь, чем палец. */
@@ -376,6 +379,14 @@ export class Navigation {
           // Пальцы чуть сдвинули холст за время тапа — возвращаем как было.
           this.opts.setCamera(tap.camera);
           this.opts.onTap?.(tap.fingers);
+        } else if (
+          !tap.failed &&
+          tap.fingers === 1 &&
+          this.touchPans &&
+          e.timeStamp - tap.start <= TAP_MAX_MS
+        ) {
+          const at = [...tap.origin.values()][0];
+          if (at) this.opts.onTap?.(1, at);
         }
       }
       if (this.pinch) {

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
 import type { CanvasEngine, EngineState, Tool } from '@kayospace/canvas';
 import type { StrokeTool } from '@kayospace/model';
 import { HIGHLIGHTER_COLOR, STICKY_COLORS, type ShapeKind } from '@kayospace/canvas';
@@ -8,6 +15,7 @@ import { Popover } from './Popover';
 import { SizePicker } from './SizePicker';
 import {
   ArrowIcon,
+  DocIcon,
   EllipseIcon,
   EraserIcon,
   FrameIcon,
@@ -93,6 +101,7 @@ export function Toolbar({
   onTasks,
   onChat,
   onImages,
+  docMenu,
   onPaste,
   onAi,
   aiOn,
@@ -107,6 +116,8 @@ export function Toolbar({
   /** Чат с ИИ (решение 0019). */
   onChat: () => void;
   onImages: (files: File[]) => void;
+  /** Меню «Документ или таблица» (решение 0021): close — закрыть окно. */
+  docMenu?: (close: () => void) => ReactNode;
   onPaste: () => void;
   onAi: () => void;
   aiOn: boolean;
@@ -123,7 +134,8 @@ export function Toolbar({
   // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
   const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
   const showSizes = !stickyPalette && tool !== 'text' && tool !== 'frame';
-  const [open, setOpen] = useState<'color' | 'size' | null>(null);
+  const [open, setOpen] = useState<'color' | 'size' | 'doc' | null>(null);
+  const docBtn = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(null), []);
   const colorBtn = useRef<HTMLButtonElement>(null);
   const sizeBtn = useRef<HTMLButtonElement>(null);
@@ -164,6 +176,19 @@ export function Toolbar({
         >
           <ImageIcon />
         </button>
+        {docMenu && (
+          <button
+            ref={docBtn}
+            className="tool"
+            aria-label="Документ или таблица"
+            title="Документ или таблица на доске"
+            aria-expanded={open === 'doc'}
+            onClick={() => setOpen((o) => (o === 'doc' ? null : 'doc'))}
+            data-testid="doc-button"
+          >
+            <DocIcon />
+          </button>
+        )}
         <input
           ref={fileRef}
           type="file"
@@ -278,6 +303,11 @@ export function Toolbar({
               }}
             />
           )}
+        </Popover>
+      )}
+      {open === 'doc' && docMenu && (
+        <Popover anchor={docBtn} label="Документ или таблица" onClose={close} testId="doc-popover">
+          {docMenu(close)}
         </Popover>
       )}
       {open === 'size' && showSizes && (

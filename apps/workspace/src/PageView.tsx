@@ -304,6 +304,7 @@ export function PageView({
   boards,
   onRename,
   onOpenBoard,
+  onClose,
 }: {
   session: BoardSession;
   name: string | null;
@@ -312,6 +313,8 @@ export function PageView({
   boards: readonly BoardOption[];
   onRename: (name: string) => void;
   onOpenBoard: (board: string, frame: string | null, title: string | null) => void;
+  /** Документ открыт поверх доски — кнопка «К доске». */
+  onClose?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -356,6 +359,11 @@ export function PageView({
   return (
     <div className="page-view" data-testid="page-view">
       <div className="page-toolbar" role="toolbar" aria-label="Оформление текста">
+        {onClose && (
+          <button className="page-tool wide" onClick={onClose} data-testid="doc-close">
+            ← К доске
+          </button>
+        )}
         {TOOLS.map((t) => (
           <button
             key={t.title}

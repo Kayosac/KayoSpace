@@ -211,8 +211,10 @@ describe('MCP', () => {
       'list_versions',
       'move_board',
       'move_elements',
+      'place_doc',
       'read_board',
       'read_page',
+      'read_table',
       'restore_board',
       'restore_elements',
       'restore_version',
@@ -221,6 +223,7 @@ describe('MCP', () => {
       'update_task',
       'view_board',
       'write_page',
+      'write_table',
     ]);
     await client.close();
   });
@@ -614,7 +617,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(34);
+    expect(tools.length).toBe(37);
     await client.close();
   });
 
