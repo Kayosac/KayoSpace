@@ -23,8 +23,10 @@ import {
 } from '@kayospace/board';
 import {
   ROUND_RECT_RADIUS,
+  docCardLabel,
   shapePolygon,
   type ArrowElement,
+  type DocCardLabel,
   type CanvasElement,
   type FrameElement,
   type ShapeElement,
@@ -826,7 +828,7 @@ export class Renderer {
     const el = item.element;
     if (el.type !== 'doc') return;
     const ctx = this.ctx;
-    const table = el.props.doc.startsWith('tb_');
+    const kind = docCardLabel(el.props.doc);
     ctx.fillStyle = this.colors.frame;
     ctx.beginPath();
     ctx.roundRect(el.x, el.y, el.w, el.h, 10);
@@ -836,18 +838,18 @@ export class Renderer {
       ? (this.images?.get(el.props.thumb, Math.max(el.w, el.h) * zoom * this.dpr) ?? null)
       : null;
     if (thumb) {
-      this.drawDocThumb(el, thumb, zoom, table);
+      this.drawDocThumb(el, thumb, zoom, kind);
       return;
     }
     ctx.lineWidth = 1.5 / Math.max(zoom, 0.5);
     ctx.strokeStyle = this.colors.frameLine;
     ctx.stroke();
-    ctx.fillStyle = table ? TASK_DONE : this.colors.accent;
+    ctx.fillStyle = kind.accent ?? this.colors.accent;
     ctx.beginPath();
     ctx.roundRect(el.x, el.y, 4, el.h, 2);
     ctx.fill();
     const pad = 16;
-    const title = el.props.title || (table ? 'Таблица' : 'Документ');
+    const title = el.props.title || kind.name;
     if (18 * zoom < 3) {
       textBars(
         ctx,
@@ -881,7 +883,7 @@ export class Renderer {
     ctx.font = `600 11px ${NOTE_FONT}`;
     ctx.fillStyle = this.colors.ink;
     ctx.globalAlpha = 0.55;
-    ctx.fillText(table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ', el.x + pad, el.y + pad + 5);
+    ctx.fillText(kind.label, el.x + pad, el.y + pad + 5);
     ctx.globalAlpha = 1;
     ctx.font = `700 18px ${NOTE_FONT}`;
     let y = el.y + pad + 22;
@@ -903,7 +905,7 @@ export class Renderer {
     el: CanvasElement & { type: 'doc' },
     src: CanvasImageSource,
     zoom: number,
-    table: boolean,
+    kind: DocCardLabel,
   ): void {
     const ctx = this.ctx;
     const bar = Math.min(44, el.h * 0.3);
@@ -935,13 +937,13 @@ export class Renderer {
     const cy = el.y + areaH + bar / 2;
     ctx.textBaseline = 'middle';
     ctx.font = `600 10px ${NOTE_FONT}`;
-    const label = table ? 'ТАБЛИЦА' : 'ДОКУМЕНТ';
+    const label = kind.label;
     const lw = ctx.measureText(label).width;
-    ctx.fillStyle = table ? TASK_DONE : this.colors.accent;
+    ctx.fillStyle = kind.accent ?? this.colors.accent;
     ctx.fillText(label, el.x + el.w - pad - lw, cy);
     ctx.font = `700 14px ${NOTE_FONT}`;
     ctx.fillStyle = this.colors.ink;
-    let title = el.props.title || (table ? 'Таблица' : 'Документ');
+    let title = el.props.title || kind.name;
     const room = el.w - pad * 3 - lw;
     if (ctx.measureText(title).width > room) {
       while (title.length > 1 && ctx.measureText(`${title}…`).width > room)

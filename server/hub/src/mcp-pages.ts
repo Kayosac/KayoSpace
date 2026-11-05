@@ -28,15 +28,30 @@ import type { Actor } from '@kayospace/model';
 import {
   docExcerpt,
   docKind,
+  readArtifact,
+  type DocKind,
   isDocId,
   isPageId,
   pageMarkdown,
   tableToMarkdown,
   writePage,
+  writeSection,
 } from '@kayospace/page';
+import { nameInbox } from './mcp-artifacts';
 import { boardSvg, contentArea, loadImages, renderPng } from './render';
 import type { BoardInfo } from './store';
 import { json } from './devices-api';
+
+const KIND_NAME: Record<DocKind, string> = {
+  page: 'Документ',
+  table: 'Таблица',
+  artifact: 'Артефакт',
+};
+const KIND_GENITIVE: Record<DocKind, string> = {
+  page: 'документа',
+  table: 'таблицы',
+  artifact: 'артефакта',
+};
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -53,8 +68,9 @@ const pageId = z
   .describe('id документа: «pg_» и латиница, цифры, «-», «_»');
 
 export const PAGE_SYNTAX =
-  'Разметка: # / ## / ### заголовки, абзацы, «- » список, «1. » нумерованный, «- [ ] » / «- [x] » чек-лист, ' +
-  '«> » цитата, ``` код, --- разделитель; в строке **жирный**, *курсив*, `код`, ~~зачёркнутый~~, [ссылка](https://…). ' +
+  'Разметка — обычный markdown: # … ###### заголовки, абзацы, «- » список, «1. » нумерованный, «- [ ] » / «- [x] » чек-лист, ' +
+  '«> » цитата, ``` код (с языком), --- разделитель, таблицы | a | b |, картинки ![подпись](https://…), вложенные списки; ' +
+  'в строке **жирный**, *курсив*, `код`, ~~зачёркнутый~~, [ссылка](https://…). ' +
   'Фрагмент доски — отдельной строкой [[board:<id доски>#<id фрейма>|Название]] (фрейм можно не указывать — тогда вся доска).';
 
 export function registerPageTools(
@@ -70,7 +86,7 @@ export function registerPageTools(
       'place_doc',
       {
         description:
-          'Положить на доску карточку документа или таблицы (решение 0021): название и начало текста; ' +
+          'Положить на доску карточку документа, таблицы или артефакта: название и начало текста; ' +
           'человек касается карточки — документ открывается поверх доски. Без x/y — справа от занятого.',
         inputSchema: z.object({
           board: z
@@ -79,8 +95,8 @@ export function registerPageTools(
             .refine((id) => !isDocId(id), 'Карточку кладут на доску, а не в документ'),
           doc: z
             .string()
-            .regex(/^(pg|tb)_[A-Za-z0-9_-]{1,61}$/)
-            .describe('id документа «pg_…» или таблицы «tb_…»'),
+            .regex(/^(pg|tb|ar)_[A-Za-z0-9_-]{1,61}$/)
+            .describe('id документа «pg_…», таблицы «tb_…» или артефакта «ar_…»'),
           x: z.number().optional(),
           y: z.number().optional(),
         }),
@@ -89,6 +105,7 @@ export function registerPageTools(
         if (!(await store.has(docId)))
           return fail(`Документа «${docId}» нет. Список — list_boards.`);
         const target = await store.get(board);
+        nameInbox(board, target, origin);
         const d = await store.get(docId);
         const spot = x !== undefined && y !== undefined ? { x, y } : freeSpot(target);
         const card = makeDocCard(docId, spot, {
@@ -98,7 +115,7 @@ export function registerPageTools(
         });
         addElement(target, card, origin);
         return text(
-          `Карточка ${docKind(docId) === 'table' ? 'таблицы' : 'документа'} на доске ${board}: ${card.id}.`,
+          `Карточка ${KIND_GENITIVE[docKind(docId) ?? 'page']} на доске ${board}: ${card.id}.`,
         );
       },
     );
@@ -129,20 +146,30 @@ export function registerPageTools(
     {
       description:
         'Создать или изменить документ. mode "append" (по умолчанию) — дописать в конец, ' +
+        '"section" — заменить один раздел: section — текст его заголовка, markdown — новое тело раздела ' +
+        '(начни с заголовка, чтобы переименовать; раздела нет — допишется в конец), ' +
         '"replace" — заменить содержимое целиком (меняется только отличающееся; используй, только когда правишь сам текст — сначала read_page). ' +
         'Новый документ: дай id «pg_…» и name. ' +
         PAGE_SYNTAX,
       inputSchema: z.object({
         page: pageId,
         markdown: z.string().max(200_000),
-        mode: z.enum(['append', 'replace']).optional(),
+        mode: z.enum(['append', 'replace', 'section']).optional(),
+        section: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('заголовок раздела для mode "section"'),
         name: z.string().min(1).max(120).optional().describe('название (для нового — обязательно)'),
         project: z.string().optional().describe('id или название проекта для нового документа'),
       }),
     },
-    async ({ page, markdown, mode, name, project }) => {
+    async ({ page, markdown, mode, section, name, project }) => {
       const existed = await store.has(page);
       if (!existed && !name) return fail('Новому документу нужно название (name).');
+      if (mode === 'section' && !section)
+        return fail('Для mode "section" нужен section — заголовок раздела.');
       let pid: string | undefined;
       if (project && !existed) {
         const ws = await store.get(WORKSPACE_ID);
@@ -153,10 +180,16 @@ export function registerPageTools(
       }
       const doc = await store.get(page);
       if (name) setBoardName(doc, name, origin);
-      writePage(doc, markdown, mode ?? 'append', origin);
+      let note = '';
+      if (mode === 'section') {
+        const found = writeSection(doc, section!, markdown, origin);
+        note = found
+          ? ` Раздел «${section}» заменён.`
+          : ` Раздела «${section}» не было — дописан в конец.`;
+      } else writePage(doc, markdown, mode ?? 'append', origin);
       if (pid) setBoardProject(await store.get(WORKSPACE_ID), page, pid, origin);
       return text(
-        `${existed ? 'Документ изменён' : 'Документ создан'}: ${page}. Ссылка: kayospace://board/${page}`,
+        `${existed ? 'Документ изменён' : 'Документ создан'}: ${page}.${note} Ссылка: kayospace://board/${page}`,
       );
     },
   );
@@ -245,9 +278,7 @@ export async function docsInRegion(
   store: { has(id: string): Promise<boolean>; get(id: string): Promise<Y.Doc> },
   board: Y.Doc,
   region: Region,
-): Promise<
-  { card: string; doc: string; kind: 'page' | 'table'; title: string; content: string }[]
-> {
+): Promise<{ card: string; doc: string; kind: DocKind; title: string; content: string }[]> {
   const out = [];
   const seen = new Set<string>();
   for (const el of elementsInRegion(listElements(board), region)) {
@@ -257,7 +288,12 @@ export async function docsInRegion(
     if (!(await store.has(id))) continue;
     const d = await store.get(id);
     const kind = docKind(id) ?? 'page';
-    let content = kind === 'table' ? tableToMarkdown(d) : pageMarkdown(d);
+    let content =
+      kind === 'table'
+        ? tableToMarkdown(d)
+        : kind === 'artifact'
+          ? (readArtifact(d)?.source ?? '')
+          : pageMarkdown(d);
     if (kind === 'page') {
       // Фрагменты досок внутри документа — тоже текстом (только то, что во фрейме).
       const parts: string[] = [];
@@ -288,11 +324,11 @@ export async function docsInRegion(
 export function docsMarkdown(docs: Awaited<ReturnType<typeof docsInRegion>>): string {
   if (!docs.length) return '';
   return (
-    '\n\n## Документы и таблицы в области (содержимое)\n\n' +
+    '\n\n## Документы, таблицы и артефакты в области (содержимое)\n\n' +
     docs
       .map(
         (d) =>
-          `### ${d.kind === 'table' ? 'Таблица' : 'Документ'} «${d.title}» (${d.doc}, карточка ${d.card})\n\n${d.content}`,
+          `### ${KIND_NAME[d.kind]} «${d.title}» (${d.doc}, карточка ${d.card})\n\n${d.content}`,
       )
       .join('\n\n')
   );

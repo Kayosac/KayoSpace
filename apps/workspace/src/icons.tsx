@@ -314,3 +314,10 @@ export const TableIcon = () => (
     <path d="M4 10h16M4 14.5h16M10 10v9" />
   </Svg>
 );
+
+export const ArtifactIcon = () => (
+  <Svg>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <path d="M10 10l-2.5 2.5L10 15M14 10l2.5 2.5L14 15" />
+  </Svg>
+);

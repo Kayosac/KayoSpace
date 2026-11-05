@@ -8,6 +8,7 @@ import {
 import { TASK_STATUSES, TASK_STATUS_NAMES, type AlignMode } from '@kayospace/board';
 import { AI_MENU, type AiAction } from './ai';
 import { CommitInput } from './CommitInput';
+import { openInClaude } from './claude';
 import { CopyIcon, DuplicateIcon, MoreIcon, SparkleIcon, TaskIcon, TrashIcon } from './icons';
 
 const ALIGN: { mode: AlignMode; name: string; min: number }[] = [
@@ -82,6 +83,8 @@ export function SelectionMenu({
   // Одна карточка документа (решение 0021) — «Открыть» поверх доски.
   const sel = state.selected === 1 ? [...engine.getSelection()][0] : undefined;
   const docCard = sel && engine.scene.items.get(sel)?.element.type === 'doc' ? sel : null;
+  const docEl = docCard ? engine.scene.items.get(docCard)?.element : undefined;
+  const docCardEl = docEl?.type === 'doc' ? docEl : null;
 
   if (
     state.selected === 0 ||
@@ -167,6 +170,14 @@ export function SelectionMenu({
       {docCard && (
         <button onClick={() => engine.openDoc(docCard)} data-testid="open-doc">
           <span>Открыть</span>
+        </button>
+      )}
+      {docCardEl && (
+        <button
+          onClick={() => void openInClaude(docCardEl.props.doc, docCardEl.props.title ?? null)}
+          data-testid="card-to-claude"
+        >
+          <span>В Claude</span>
         </button>
       )}
       <button title="Дублировать (Ctrl/⌘ D)" onClick={() => engine.duplicateSelection()}>

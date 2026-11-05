@@ -15,6 +15,8 @@
   --surface-2: #f1efe9;
   /* QR всегда чёрным по белому — иначе не все камеры его прочитают (в тёмной теме тоже). */
   --qr-paper: #ffffff;
+  /* Страница артефакта — на белом, как в Claude, в любой теме. */
+  --artifact-paper: #ffffff;
   --text: #1c1f26;
   --muted: #6c7080;
   --line: rgba(28, 31, 38, 0.12);
@@ -3149,4 +3151,143 @@ p.bad {
 
 .current-swatch.filled {
   border-radius: 5px;
+}
+
+/* ---------- Таблицы и картинки в документе (решение 0023) ---------- */
+
+.page-content table {
+  width: 100%;
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.94em;
+}
+
+.page-content th,
+.page-content td {
+  min-width: 60px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.page-content th {
+  background: var(--surface-2);
+  font-weight: 600;
+  text-align: left;
+}
+
+.page-content td > p,
+.page-content th > p {
+  margin: 0;
+}
+
+.page-content .selectedCell {
+  background: var(--accent-soft);
+}
+
+.page-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.8em 0;
+  border-radius: 8px;
+}
+
+.page-content img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+}
+
+.page-content h4,
+.page-content h5,
+.page-content h6 {
+  font-size: 16px;
+  margin: 0.8em 0 0.2em;
+}
+
+.page-content h6 {
+  color: var(--muted);
+}
+
+/* Формулы в таблице (решение 0023). */
+.kt-formula {
+  display: block;
+  min-height: 40px;
+  padding: 10px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kt-formula.num {
+  text-align: right;
+}
+
+button.kt-formula.err {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--bad);
+  font: 600 13px var(--font-ui);
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+th .kt-type {
+  font-style: normal;
+}
+
+/* Артефакт (решение 0023): живой — в песочнице на всю ширину, или исходником. */
+.artifact-seg {
+  display: flex;
+  gap: 2px;
+}
+
+.artifact-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 12px var(--gutter-r) 8px var(--gutter-l);
+  padding: 0 4px;
+}
+
+.artifact-head .page-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.artifact-frame,
+.artifact-source,
+.artifact-empty {
+  flex: 1;
+  min-height: 0;
+  margin: 0 var(--gutter-r) calc(var(--gutter-b) + 12px) var(--gutter-l);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.artifact-frame {
+  width: auto;
+  background: var(--artifact-paper);
+}
+
+.artifact-source {
+  overflow: auto;
+  padding: 16px;
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/1.5 var(--font-mono, ui-monospace, Menlo, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.artifact-empty {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
 }

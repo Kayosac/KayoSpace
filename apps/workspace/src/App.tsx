@@ -19,8 +19,21 @@ import { TasksPanel } from './TasksPanel';
 import { ChatPanel } from './ChatPanel';
 import { KanbanView } from './KanbanView';
 import { PageView } from './PageView';
-import { docKind, hasTable, initTable, isDocId, pageIdFrom, tableIdFrom } from '@kayospace/page';
+import {
+  ARTIFACT_KINDS,
+  artifactExt,
+  docKind,
+  hasTable,
+  initTable,
+  isDocId,
+  pageIdFrom,
+  readArtifact,
+  tableIdFrom,
+} from '@kayospace/page';
 import { TableView } from './TableView';
+import { ArtifactView } from './ArtifactView';
+import { onNotify } from './notify';
+import { importMarkdown, isMarkdown, markdownFiles, markdownOf } from './md-import';
 import { DocOverlay, DocMenu, useDocCards, type DocSummary } from './DocOverlay';
 import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
@@ -131,6 +144,7 @@ export function App() {
     setToast(text);
     if (text && ms > 0) toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
+  useEffect(() => onNotify((text, ms) => showToast(text, ms)), [showToast]);
   const ai = useMemo(() => new AiController(), []);
   const [aiPrompt, setAiPrompt] = useState(false);
   /** Название новой доски — запишем в неё, когда она откроется. */
@@ -502,9 +516,31 @@ export function App() {
    * остальное, а также документы и таблицы — картинкой или PDF с хаба.
    */
   const exportItem = useCallback(
-    async (id: string, name: string | null, format: 'png' | 'pdf') => {
+    async (id: string, name: string | null, format: 'png' | 'pdf' | 'md' | 'src') => {
       if (id === board && engine && !isDocId(id))
         return exportTo(format === 'png' ? 'board' : 'pdf');
+      // Открытый документ в .md — прямо с устройства (решение 0023).
+      if (format === 'md' && id === board && session) {
+        const saved = await saveFile(
+          new TextEncoder().encode(markdownOf(session.doc, name ?? id)),
+          fileName(name ?? id, 'md'),
+          'text/markdown',
+        );
+        showToast(saved ? 'Файл сохранён' : null, 2500);
+        return;
+      }
+      // Исходник открытого артефакта — тоже с устройства.
+      const art = format === 'src' && id === board && session ? readArtifact(session.doc) : null;
+      if (art) {
+        const kind = ARTIFACT_KINDS.find((k) => k.kind === art.kind)!;
+        const saved = await saveFile(
+          new TextEncoder().encode(art.source),
+          fileName(name ?? id, artifactExt(art)),
+          kind.mime,
+        );
+        showToast(saved ? 'Файл сохранён' : null, 2500);
+        return;
+      }
       const base = hubForPanels ? hubHttpUrl(hubForPanels.url) : null;
       if (!base || !hubForPanels) {
         showToast('Экспорт неоткрытого — через хаб: подключите синхронизацию');
@@ -515,24 +551,41 @@ export function App() {
         const path =
           format === 'png'
             ? `/api/render/${encodeURIComponent(id)}.png?max=2048`
-            : `/api/export/${encodeURIComponent(id)}.pdf`;
+            : `/api/export/${encodeURIComponent(id)}.${format}`;
         const r = await fetch(`${base}${path}`, {
           headers: hubForPanels.token ? { Authorization: `Bearer ${hubForPanels.token}` } : {},
         });
         if (r.status === 404) throw new Error('пусто или нет на хабе');
         if (!r.ok) throw new Error(`хаб ответил ${r.status}`);
         const title = name ?? id;
+        // У исходника расширение — по виду артефакта, его называет хаб.
+        const ext =
+          format === 'src'
+            ? (/\.([A-Za-z0-9]{1,8})$/.exec(
+                decodeURIComponent(
+                  /filename\*=UTF-8''([^;]+)/.exec(
+                    r.headers.get('Content-Disposition') ?? '',
+                  )?.[1] ?? '',
+                ),
+              )?.[1] ?? 'txt')
+            : format;
         const saved = await saveFile(
           await r.blob(),
-          fileName(title, format),
-          format === 'png' ? 'image/png' : 'application/pdf',
+          fileName(title, ext),
+          format === 'png'
+            ? 'image/png'
+            : format === 'md'
+              ? 'text/markdown'
+              : format === 'src'
+                ? (r.headers.get('Content-Type')?.split(';')[0] ?? 'text/plain')
+                : 'application/pdf',
         );
         showToast(saved ? 'Файл сохранён' : null, 2500);
       } catch (e) {
         showToast(e instanceof Error ? `Не сохранилось: ${e.message}` : 'Не сохранилось');
       }
     },
-    [board, engine, exportTo, hubForPanels, showToast],
+    [board, engine, exportTo, hubForPanels, showToast, session],
   );
 
   /** Почему ИИ недоступен (null — доступен). */
@@ -655,13 +708,36 @@ export function App() {
   );
 
   /** Файлы с кнопки, перетаскивания или буфера: картинки — картинками, PDF — страницами. */
+  const boardLoaded = sessionState?.loaded ?? false;
+  // Карточки документов на доске: название и начало текста — с хаба (решение 0021).
+  const refreshDocCards = useDocCards(engine, hubForPanels, boardLoaded);
   const insertFiles = useCallback(
     async (files: File[], at?: { x: number; y: number }) => {
-      const images = files.filter((f) => !isPdf(f));
+      const md = files.filter(isMarkdown);
+      const images = files.filter((f) => !isPdf(f) && !isMarkdown(f));
       if (images.length) await insertImages(images, at);
       for (const f of files.filter(isPdf)) await importPdf(f);
+      // .md — документом с карточкой на доске (решение 0023).
+      let k = 0;
+      for (const f of md) {
+        if (!engine) break;
+        showToast(`Документ из ${f.name}…`, 0);
+        const id = pageIdFrom(boardIdFromName(f.name.replace(/\.(md|markdown)$/i, '')));
+        try {
+          const { title } = await importMarkdown(id, f, hubForPanels);
+          const p = at ? { x: at.x + k * 30, y: at.y + k * 30 } : undefined;
+          engine.insertDocCard(id, { title }, p);
+          k++;
+          showToast(`Документ «${title}» на доске`, 3000);
+        } catch (e) {
+          showToast(
+            e instanceof Error ? `Не открылся ${f.name}: ${e.message}` : 'Не открылся файл',
+          );
+        }
+      }
+      if (md.length) refreshDocCards(2000);
     },
-    [insertImages, importPdf],
+    [insertImages, importPdf, engine, hubForPanels, showToast, refreshDocCards],
   );
 
   // Буфер обмена (Ctrl/⌘ C, X, V): элементы доски, текст и картинки из других программ.
@@ -758,9 +834,6 @@ export function App() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [openBoard]);
-  const boardLoaded = sessionState?.loaded ?? false;
-  // Карточки документов на доске: название и начало текста — с хаба (решение 0021).
-  const refreshDocCards = useDocCards(engine, hubForPanels, boardLoaded);
   const overlayId = overlay?.id ?? null;
   const onDocSummary = useCallback(
     (sum: DocSummary) => {
@@ -786,6 +859,10 @@ export function App() {
           await importPdf(file);
           continue;
         }
+        if (isMarkdown(file)) {
+          await insertFiles([file]);
+          continue;
+        }
         try {
           const img = await assets.add(file);
           const id = engine.insertImage(
@@ -801,7 +878,17 @@ export function App() {
       // Меню выделения закрыло бы только что присланное.
       engine.clearSelection();
     })();
-  }, [engine, session, board, boardLoaded, boardName, shareTick, showToast, importPdf]);
+  }, [
+    engine,
+    session,
+    board,
+    boardLoaded,
+    boardName,
+    shareTick,
+    showToast,
+    importPdf,
+    insertFiles,
+  ]);
 
   /** Кнопка «Вставить» (планшет без клавиатуры): системный буфер, если доступен, иначе — свой. */
   const pasteFromButton = useCallback(async () => {
@@ -861,7 +948,11 @@ export function App() {
         onDrop={(e) => {
           e.preventDefault();
           setDropping(false);
-          const files = [...imageFiles(e.dataTransfer.files), ...pdfFiles(e.dataTransfer.files)];
+          const files = [
+            ...imageFiles(e.dataTransfer.files),
+            ...pdfFiles(e.dataTransfer.files),
+            ...markdownFiles(e.dataTransfer.files),
+          ];
           const r = e.currentTarget.getBoundingClientRect();
           if (files.length)
             void insertFiles(files, { x: e.clientX - r.left, y: e.clientY - r.top });
@@ -969,6 +1060,14 @@ export function App() {
           boards={settings.recentBoards}
           onRename={(n) => session.rename(n)}
           onOpenBoard={(id, frame, title) => findElement(id, frame ?? '', title)}
+        />
+      )}
+      {mode === 'artifact' && session && (
+        <ArtifactView
+          key={session.board}
+          session={session}
+          name={boardName}
+          onRename={(n) => session.rename(n)}
         />
       )}
       {mode === 'table' && session && (

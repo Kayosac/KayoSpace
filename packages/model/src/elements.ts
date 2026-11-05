@@ -133,6 +133,22 @@ export interface DocProps {
   thumb?: AssetId;
 }
 
+/** Подпись карточки по id: документ «pg_», таблица «tb_», артефакт «ar_» (решения 0021, 0023). */
+export interface DocCardLabel {
+  /** Метка в углу карточки. */
+  label: string;
+  /** Название, если своего нет. */
+  name: string;
+  /** Цвет полоски и метки (null — акцент темы). */
+  accent: string | null;
+}
+
+export function docCardLabel(docId: string): DocCardLabel {
+  if (docId.startsWith('tb_')) return { label: 'ТАБЛИЦА', name: 'Таблица', accent: '#2f9e66' };
+  if (docId.startsWith('ar_')) return { label: 'АРТЕФАКТ', name: 'Артефакт', accent: '#8e4ec6' };
+  return { label: 'ДОКУМЕНТ', name: 'Документ', accent: null };
+}
+
 export type StrokeElement = BaseElement<'stroke', StrokeProps>;
 export type TextElement = BaseElement<'text', TextProps>;
 export type StickyElement = BaseElement<'sticky', StickyProps>;

@@ -154,4 +154,103 @@ describe('документы (решение 0020)', () => {
     expect(png.status).toBe(200);
     expect((await call('add_sticky', { board: 'tb_buy', text: 'x' })).isError).toBe(true);
   });
+
+  it('правка раздела и экспорт в .md', async () => {
+    await call('write_page', {
+      page: 'pg_sec',
+      name: 'Смета',
+      markdown: '## Плитка\n\nСтарое\n\n## Клей\n\n| Что | Цена |\n| --- | --- |\n| Клей | 350 |',
+    });
+    const r = await call('write_page', {
+      page: 'pg_sec',
+      mode: 'section',
+      section: 'Плитка',
+      markdown: '- Керамика — 1200',
+    });
+    expect(r.content[0]!.text).toContain('Раздел «Плитка» заменён');
+    const md = await (await fetch(`http://127.0.0.1:${hub.port}/api/export/pg_sec.md`)).text();
+    expect(md).toBe(
+      '# Смета\n\n## Плитка\n\n- Керамика — 1200\n\n## Клей\n\n| Что | Цена |\n| --- | --- |\n| Клей | 350 |\n',
+    );
+  });
+
+  it('формула от агента — значения считаются', async () => {
+    await call('write_table', {
+      table: 'tb_f',
+      name: 'Смета',
+      columns: [
+        { name: 'Цена', type: 'number' },
+        { name: 'Кол', type: 'number' },
+        { name: 'Сумма', type: 'formula', formula: '[Цена] * [Кол]' },
+      ],
+      rows: [{ values: { Цена: 100, Кол: 3 } }, { values: { Цена: 50, Кол: 2 } }],
+    });
+    const json = JSON.parse(
+      (await call('read_table', { table: 'tb_f', format: 'json' })).content[0]!.text,
+    ) as { rows: { values: Record<string, unknown> }[] };
+    expect(json.rows.map((r) => r.values.Сумма)).toEqual([300, 100]);
+    expect((await call('read_table', { table: 'tb_f' })).content[0]!.text).toContain(
+      'Сумма — Формула = [Цена] * [Кол]',
+    );
+  });
+
+  it('артефакт из чата: на доску, обновить, забрать, миниатюра и исходник', async () => {
+    expect(
+      (await call('save_artifact', { artifact: 'ar_calc', kind: 'html', source: '<p>x</p>' }))
+        .isError,
+    ).toBe(true);
+    const made = await call('save_artifact', {
+      artifact: 'ar_calc',
+      name: 'Калькулятор плитки',
+      kind: 'html',
+      source: '<h1>Плитка</h1><p>Площадь × цена</p><script>1</script>',
+      board: 'inbox',
+    });
+    expect(made.content[0]!.text).toContain('Артефакт сохранён: ar_calc');
+    expect(made.content[0]!.text).toContain('Карточка на доске inbox');
+    const again = await call('save_artifact', {
+      artifact: 'ar_calc',
+      kind: 'html',
+      source: '<h1>Плитка 2</h1>',
+      board: 'inbox',
+    });
+    expect(again.content[0]!.text).toContain('уже есть');
+    const inbox = JSON.parse(
+      (await call('read_board', { board: 'inbox', format: 'json' })).content[0]!.text,
+    ) as { name: string; elements: { type: string }[] };
+    expect(inbox.name).toBe('Входящие');
+    expect(inbox.elements.filter((e) => e.type === 'doc')).toHaveLength(1);
+    const read = JSON.parse(
+      (await call('read_artifact', { artifact: 'ar_calc' })).content[0]!.text,
+    );
+    expect(read).toMatchObject({
+      name: 'Калькулятор плитки',
+      kind: 'html',
+      source: '<h1>Плитка 2</h1>',
+    });
+    const list = (await call('list_boards', {})).content[0]!.text;
+    expect(list).toContain('"artifact"');
+    expect((await call('search', { query: 'Плитка 2' })).content[0]!.text).toContain('ar_calc');
+    expect((await call('add_sticky', { board: 'ar_calc', text: 'x' })).isError).toBe(true);
+
+    await call('save_artifact', {
+      artifact: 'ar_pic',
+      name: 'Круг',
+      kind: 'svg',
+      source:
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="red"/></svg>',
+    });
+    const docs = (await (
+      await fetch(`http://127.0.0.1:${hub.port}/api/docs?ids=ar_calc,ar_pic`)
+    ).json()) as { docs: { kind: string; thumb: string | null }[] };
+    expect(docs.docs.map((d) => d.kind)).toEqual(['artifact', 'artifact']);
+    expect(docs.docs.every((d) => /^[0-9a-f]{64}$/.test(d.thumb ?? ''))).toBe(true);
+    const src = await fetch(`http://127.0.0.1:${hub.port}/api/export/ar_pic.src`);
+    expect(src.headers.get('content-disposition')).toContain('.svg');
+    expect(await src.text()).toContain('<circle');
+    const pdf = await fetch(`http://127.0.0.1:${hub.port}/api/export/ar_calc.pdf`);
+    expect(pdf.status).toBe(200);
+    const png = await fetch(`http://127.0.0.1:${hub.port}/api/render/inbox.png`);
+    expect(png.status).toBe(200);
+  });
 });

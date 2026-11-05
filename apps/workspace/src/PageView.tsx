@@ -7,6 +7,7 @@ import { hubHttpUrl } from '@kayospace/sync';
 import type { BoardSession } from './session';
 import type { Hub } from './devices';
 import { CommitInput } from './CommitInput';
+import { openInClaude } from './claude';
 import { finePointer } from './touch';
 import { CloseIcon } from './icons';
 
@@ -290,6 +291,21 @@ const TOOLS: Tool[] = [
     active: (e) => e.isActive('blockquote'),
     run: (c) => c.toggleBlockquote(),
   },
+  {
+    label: '▦',
+    title: 'Таблица',
+    active: (e) => e.isActive('table'),
+    run: (c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }),
+  },
+];
+
+/** Правка таблицы в документе (решение 0023) — кнопками, пока курсор в таблице. */
+const TABLE_TOOLS: Tool[] = [
+  { label: '+ строка', title: 'Добавить строку', run: (c) => c.addRowAfter() },
+  { label: '+ колонка', title: 'Добавить колонку', run: (c) => c.addColumnAfter() },
+  { label: '− строка', title: 'Удалить строку', run: (c) => c.deleteRow() },
+  { label: '− колонка', title: 'Удалить колонку', run: (c) => c.deleteColumn() },
+  { label: 'Убрать таблицу', title: 'Удалить таблицу', run: (c) => c.deleteTable() },
 ];
 
 /**
@@ -381,7 +397,30 @@ export function PageView({
             {t.label}
           </button>
         ))}
+        {editor?.isActive('table') &&
+          TABLE_TOOLS.map((t) => (
+            <button
+              key={t.title}
+              className="page-tool wide"
+              title={t.title}
+              onMouseDown={keep}
+              onClick={() => {
+                const c = chain();
+                if (c) t.run(c).run();
+              }}
+              data-testid="table-tool"
+            >
+              {t.label}
+            </button>
+          ))}
         <span className="page-tool-gap" />
+        <button
+          className="page-tool wide"
+          onClick={() => void openInClaude(session.board, name)}
+          data-testid="to-claude"
+        >
+          В Claude
+        </button>
         <button
           className="page-tool wide"
           onMouseDown={keep}

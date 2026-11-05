@@ -43,7 +43,7 @@ describe('фильтры активности Android', () => {
     expect(patchManifest(once, { buildRs, conf })).toBe(once);
     expect(once.match(/SHARE TARGET PLUGIN/g)).toHaveLength(2);
     expect(once.match(/RECORD_AUDIO/g)).toHaveLength(1);
-    expect(shareFilters(buildRs).match(/<intent-filter>/g)).toHaveLength(4);
+    expect(shareFilters(buildRs).match(/<intent-filter>/g)).toHaveLength(6);
   });
 
   it('без активности — понятная ошибка', () => {

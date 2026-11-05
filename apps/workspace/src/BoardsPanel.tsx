@@ -13,6 +13,7 @@ const BACKGROUNDS: { value: BoardBackground; name: string }[] = [
 import type { RecentBoard } from './settings';
 import { matchesQuery, mergeBoards } from './boards';
 import { inProject } from './projects';
+import { KIND_WORDS } from './DocOverlay';
 import { CommitInput } from './CommitInput';
 import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
@@ -20,6 +21,7 @@ import {
   CloseIcon,
   DocIcon,
   TableIcon,
+  ArtifactIcon,
   ExportIcon,
   HistoryIcon,
   PlayIcon,
@@ -28,7 +30,7 @@ import {
   TrashIcon,
 } from './icons';
 
-type ExportFormat = 'png' | 'pdf';
+type ExportFormat = 'png' | 'pdf' | 'md' | 'src';
 
 /** Правка №6, №8 (решение 0022): у каждого пункта списка — экспорт и удаление маленькими иконками. */
 function ItemActions({
@@ -48,7 +50,14 @@ function ItemActions({
     const t = setTimeout(() => setOpen(null), 5000);
     return () => clearTimeout(t);
   }, [open]);
-  const formats: ExportFormat[] = isDocId(id) ? ['pdf'] : ['png', 'pdf'];
+  // Документ — ещё и в .md (решение 0023).
+  const formats: ExportFormat[] = isPageId(id)
+    ? ['pdf', 'md']
+    : docKind(id) === 'artifact'
+      ? ['src', 'pdf']
+      : isDocId(id)
+        ? ['pdf']
+        : ['png', 'pdf'];
   return (
     <>
       <span className="item-icons">
@@ -84,7 +93,7 @@ function ItemActions({
                 onExport(id, name, f);
               }}
             >
-              {f.toUpperCase()}
+              {f === 'src' ? 'Исходник' : f.toUpperCase()}
             </button>
           ))}
         </div>
@@ -292,7 +301,13 @@ export function BoardsPanel({
   const kind = docKind(current);
   const isDoc = kind !== null;
   const what =
-    kind === 'page' ? 'этого документа' : kind === 'table' ? 'этой таблицы' : 'этой доски';
+    kind === 'page'
+      ? 'этого документа'
+      : kind === 'table'
+        ? 'этой таблицы'
+        : kind === 'artifact'
+          ? 'этого артефакта'
+          : 'этой доски';
   const trashEmpty = trashBoards === 0 && (trashGroups ?? 0) === 0;
 
   return (
@@ -557,14 +572,13 @@ export function BoardsPanel({
               >
                 {isPageId(b.id) && <DocIcon />}
                 {docKind(b.id) === 'table' && <TableIcon />}
+                {docKind(b.id) === 'artifact' && <ArtifactIcon />}
                 <span className="board-title">{b.name ?? b.id}</span>
                 <span className="board-meta">
                   {isDocId(b.id)
                     ? b.id === current
                       ? 'открыт'
-                      : isPageId(b.id)
-                        ? 'документ'
-                        : 'таблица'
+                      : KIND_WORDS[docKind(b.id) ?? 'page'].meta
                     : b.id === current
                       ? 'открыта'
                       : b.elements !== undefined

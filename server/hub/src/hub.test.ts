@@ -212,12 +212,14 @@ describe('MCP', () => {
       'move_board',
       'move_elements',
       'place_doc',
+      'read_artifact',
       'read_board',
       'read_page',
       'read_table',
       'restore_board',
       'restore_elements',
       'restore_version',
+      'save_artifact',
       'search',
       'update_element',
       'update_task',
@@ -617,7 +619,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(37);
+    expect(tools.length).toBe(39);
     await client.close();
   });
 

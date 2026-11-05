@@ -17,6 +17,16 @@ const INTENT_FILTERS: &str = r#"<intent-filter>
     <data android:mimeType="application/pdf" />
 </intent-filter>
 <intent-filter>
+    <action android:name="android.intent.action.SEND" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <data android:mimeType="text/markdown" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.SEND" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <data android:mimeType="text/x-markdown" />
+</intent-filter>
+<intent-filter>
     <action android:name="android.intent.action.SEND_MULTIPLE" />
     <category android:name="android.intent.category.DEFAULT" />
     <data android:mimeType="image/*" />

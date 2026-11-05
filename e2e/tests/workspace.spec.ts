@@ -2071,6 +2071,8 @@ async function tabletPage(browser: Browser, board: string): Promise<Page> {
   });
   await context.addInitScript(
     ([key, value]) => {
+      // Не в песочнице артефакта: там localStorage нет.
+      if (window !== window.top) return;
       if (!localStorage.getItem(key)) localStorage.setItem(key, value);
     },
     [SETTINGS_KEY, JSON.stringify({ ...synced, board })] as const,
@@ -2348,5 +2350,203 @@ test('надпись рамкой и свободный размер; фигур
   });
   await page.waitForTimeout(300);
   await page.screenshot({ path: shot('far-text.png') });
+  await page.context().close();
+});
+
+test('планшет: колонка-формула касаниями — значения считаются, ошибка с причиной', async ({
+  browser,
+}) => {
+  const page = await tabletPage(browser, `e2e-formula-start-${Date.now()}`);
+  const { client, call } = await mcpClient('e2e-formula');
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('create-table').tap();
+  const view = page.getByTestId('table-view');
+  await page.getByTestId('page-title').fill('Смета с НДС');
+  const menu = page.getByTestId('column-menu');
+  await view.getByTestId('table-add-column').tap();
+  await menu.getByTestId('column-name').fill('Цена');
+  await menu.getByRole('radio', { name: /Число/ }).tap();
+  await menu.getByRole('button', { name: 'Закрыть' }).tap();
+  await view.getByTestId('table-add-row').tap();
+  await view.getByTestId('table-add-row').tap();
+  const rows = view.getByTestId('table-row');
+  await rows.nth(0).locator('[data-col="Цена"] input').fill('1200');
+  await rows.nth(1).locator('[data-col="Цена"] input').fill('500');
+  await page.getByTestId('page-title').tap();
+
+  // Колонка «С НДС» — формулой: колонку вставляет кнопка, остальное — в поле.
+  await view.getByTestId('table-add-column').tap();
+  await menu.getByTestId('column-name').fill('С НДС');
+  await menu.getByRole('radio', { name: /Формула/ }).tap();
+  await menu.getByRole('button', { name: '[Цена]' }).tap();
+  await expect(menu.getByTestId('column-formula')).toHaveValue('[Цена]');
+  await menu.getByTestId('column-formula').fill('ОКРУГЛ([Цена] * 1.2; 0)');
+  await menu.getByRole('button', { name: 'Закрыть' }).tap();
+  const nds = (i: number) => rows.nth(i).locator('[data-col="С НДС"]');
+  await expect(nds(0)).toHaveText(/1\s440/);
+  await expect(nds(1)).toHaveText('600');
+  // Правка цены — формула пересчитывается сразу.
+  await rows.nth(1).locator('[data-col="Цена"] input').fill('1000');
+  await page.getByTestId('page-title').tap();
+  await expect(nds(1)).toHaveText(/1\s200/);
+  await page.screenshot({ path: shot('table-formula.png') });
+
+  // Агент видит посчитанное и саму формулу.
+  const table = (JSON.parse(await call('list_boards', {})) as { id: string; name: string }[]).find(
+    (b) => b.name === 'Смета с НДС',
+  )!;
+  await expect
+    .poll(() => call('read_table', { table: table.id }))
+    .toContain('С НДС — Формула = ОКРУГЛ([Цена] * 1.2; 0)');
+
+  // Ошибка в формуле — «#ОШИБКА», касание показывает причину.
+  await view.getByTestId('column-head').nth(3).tap();
+  await menu.getByTestId('column-formula').fill('[Цена] * [Нет такой]');
+  await menu.getByRole('button', { name: 'Закрыть' }).tap();
+  await expect(nds(0)).toHaveText('#ОШИБКА');
+  await nds(0).getByRole('button').tap();
+  await expect(nds(0)).toContainText('Нет такой');
+  await client.close();
+  await page.context().close();
+});
+
+test('планшет: таблица в документе касаниями; .md — документом на доске, агент правит раздел', async ({
+  browser,
+}) => {
+  const board = `e2e-md-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-md');
+  await call('create_board', { board, name: 'Ремонт' });
+  const page = await tabletPage(browser, board);
+
+  // .md с телефона или компьютера — файлом через «Картинка, PDF или .md».
+  const md =
+    '---\ntitle: Смета ванной\n---\n\n## Плитка\n\n| Что | Цена |\n| --- | ---: |\n| Керамика | 1200 |\n\n' +
+    '## Работы\n\n1. Демонтаж\n   - старая плитка\n2. Укладка\n\n```js\nconst a = 1;\n```\n';
+  await page.getByTestId('image-input').setInputFiles({
+    name: 'smeta.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(md, 'utf8'),
+  });
+  await expect
+    .poll(async () => (await docCards(page)).map((c) => c.title))
+    .toEqual(['Смета ванной']);
+  const docId = (await docCards(page))[0]!.doc;
+  expect(docId).toMatch(/^pg_/);
+  await expect.poll(() => call('read_page', { page: docId })).toContain('| Керамика | 1200 |');
+  expect(await call('read_page', { page: docId })).toContain('1. Демонтаж\n   - старая плитка');
+  expect(await call('read_page', { page: docId })).toContain('```js');
+
+  // Агент меняет один раздел — остальное не трогает.
+  await call('write_page', {
+    page: docId,
+    mode: 'section',
+    section: 'Работы',
+    markdown: '- [ ] Демонтаж\n- [ ] Укладка\n- [ ] Затирка',
+  });
+
+  // Открыть касанием: таблица из .md — настоящая таблица, её правят кнопками.
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+  await page.getByTestId('stage').tap({ position: { x: 590, y: 410 } });
+  const overlay = page.getByTestId('doc-overlay');
+  await expect(overlay).toBeVisible();
+  const editor = overlay.getByTestId('page-editor');
+  await expect(editor.locator('table tr')).toHaveCount(2);
+  await expect(editor.locator('ul[data-type="taskList"] li')).toHaveCount(3);
+  await expect(editor).toContainText('Керамика');
+  await editor.locator('table td').first().tap();
+  await overlay.getByTestId('table-tool').filter({ hasText: '+ строка' }).tap();
+  await expect(editor.locator('table tr')).toHaveCount(3);
+  await overlay.getByTestId('table-tool').filter({ hasText: '+ колонка' }).tap();
+  await expect(editor.locator('table tr').first().locator('th, td')).toHaveCount(3);
+
+  // Новая таблица кнопкой «▦» в конце документа.
+  await editor.locator('ul[data-type="taskList"] li').last().tap();
+  await overlay.getByRole('button', { name: 'Таблица', exact: true }).tap();
+  await expect(editor.locator('table')).toHaveCount(2);
+  await page.screenshot({ path: shot('doc-md-table.png') });
+  await overlay.getByTestId('doc-close').tap();
+  await expect
+    .poll(() => call('read_page', { page: docId }))
+    .toMatch(/\| Керамика \| {2}\| 1200 \|\n\| {2}\| {2}\| {2}\|/);
+  await client.close();
+  await page.context().close();
+});
+
+test('планшет: артефакт из Claude — на доску карточкой, открывается живым; «В Claude» забирает обратно', async ({
+  browser,
+}) => {
+  const board = `e2e-artifact-${Date.now()}`;
+  const artifact = `ar_e2e-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-artifact');
+  await call('create_board', { board, name: 'Ремонт' });
+  const page = await tabletPage(browser, board);
+  await page.evaluate(() => {
+    (window as unknown as { __opened: string[] }).__opened = [];
+    window.open = ((url: string) => {
+      (window as unknown as { __opened: string[] }).__opened.push(url);
+      return null;
+    }) as typeof window.open;
+  });
+
+  // Claude сохраняет артефакт «на доску» — у устройства появляется карточка.
+  const saved = await call('save_artifact', {
+    artifact,
+    name: 'Калькулятор плитки',
+    kind: 'html',
+    source:
+      '<h1>Калькулятор плитки</h1><p>Площадь: <b id="s">0</b> м²</p>' +
+      '<script>document.getElementById("s").textContent = String(3 * 4);</script>',
+    board,
+  });
+  expect(saved).toContain('Карточка на доске');
+  await expect
+    .poll(async () => (await docCards(page)).map((c) => [c.doc, c.title]))
+    .toEqual([[artifact, 'Калькулятор плитки']]);
+  await expect
+    .poll(async () => (await docCards(page))[0]?.thumb, { timeout: 15_000 })
+    .toMatch(/^[0-9a-f]{64}$/);
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+  await page.screenshot({ path: shot('artifact-card.png') });
+
+  // Касание — артефакт поверх доски, живым: скрипт посчитал площадь.
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+  await page.getByTestId('stage').tap({ position: { x: 590, y: 410 } });
+  const overlay = page.getByTestId('doc-overlay');
+  await expect(overlay.getByTestId('artifact-view')).toBeVisible();
+  const frame = overlay.frameLocator('[data-testid="artifact-frame"]');
+  await expect(frame.locator('#s')).toHaveText('12');
+  await expect(overlay.getByTestId('artifact-frame')).toHaveAttribute('sandbox', /allow-scripts/);
+  await page.screenshot({ path: shot('artifact.png') });
+
+  // «обнови на доске» — новая версия сразу на экране.
+  await call('save_artifact', {
+    artifact,
+    kind: 'html',
+    source: '<h1>Калькулятор плитки</h1><p>Площадь: <b id="s">20</b> м²</p>',
+  });
+  await expect(frame.locator('#s')).toHaveText('20');
+  await overlay.getByTestId('artifact-source').tap();
+  await expect(overlay.getByTestId('artifact-code')).toContainText('<b id="s">20</b>');
+
+  // «В Claude» — новый чат с просьбой забрать артефакт.
+  await overlay.getByTestId('to-claude').tap();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened.length))
+    .toBe(1);
+  const opened = await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened);
+  expect(decodeURIComponent(opened[0]!)).toContain(
+    `https://claude.ai/new?q=Возьми с доски Kayospace артефакт «Калькулятор плитки» (${artifact}) — read_artifact`,
+  );
+  await overlay.getByTestId('doc-close').tap();
+  expect(
+    await call('read_board', { board, region: { x: -5000, y: -5000, w: 10000, h: 10000 } }),
+  ).toContain('Артефакт «Калькулятор плитки»');
+  await client.close();
   await page.context().close();
 });

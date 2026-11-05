@@ -6,6 +6,8 @@
 
 import { Node, getSchema, mergeAttributes, type AnyExtension } from '@tiptap/core';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
+import { TableKit } from '@tiptap/extension-table';
+import { Image } from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
 
 /** Фрагмент доски в документе: фрейм (или вся доска) картинкой; касание — открыть доску. */
@@ -58,6 +60,9 @@ export function pageExtensions(
     StarterKit.configure({ undoRedo: false, link: { openOnClick: false, autolink: true } }),
     TaskList,
     TaskItem.configure({ nested: true }),
+    // Markdown без потерь (решение 0023): таблицы и картинки как в .md.
+    TableKit.configure({ table: { resizable: false } }),
+    Image.configure({ inline: false, allowBase64: true }),
     opts.embed ?? BoardEmbed,
     ...(opts.extra ?? []),
   ];

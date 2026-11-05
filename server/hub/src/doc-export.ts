@@ -2,7 +2,9 @@
  * Миниатюры карточек и экспорт в PDF (решение 0022).
  *
  *   GET /api/docs?ids=pg_a,tb_b   — название, начало текста и миниатюра (id картинки) документов для карточек
- *   GET /api/export/<id>.pdf       — документ, таблица или доска (по странице на фрейм) в PDF
+ *   GET /api/export/<id>.pdf       — документ, таблица, артефакт или доска (по странице на фрейм) в PDF
+ *   GET /api/export/pg_<id>.md     — документ в markdown
+ *   GET /api/export/ar_<id>.src    — исходник артефакта (.html, .svg, .mmd, .txt)
  *
  * Миниатюра — верх первой страницы, картинкой в хранилище (как картинки досок): её рисуют холст,
  * PDF и картинка доски для агентов, на устройстве она сохраняется и без связи. Пересчитывается,
@@ -12,10 +14,26 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as Y from 'yjs';
 import { getBoardName, getElement, listElements } from '@kayospace/board';
-import { docExcerpt, docKind, isDocId } from '@kayospace/page';
+import {
+  ARTIFACT_KINDS,
+  artifactExt,
+  docExcerpt,
+  docKind,
+  isDocId,
+  pageFileMarkdown,
+  readArtifact,
+} from '@kayospace/page';
 import { sha256 } from './assets';
 import { json } from './devices-api';
-import { embedLoader, pagePages, tablePages, thumbnailPng } from './doc-render';
+import {
+  artifactPages,
+  embedLoader,
+  pagePages,
+  svgPage,
+  tablePages,
+  thumbnailPng,
+} from './doc-render';
+import { renderPng } from './render';
 import { buildRasterPdf, rasterize } from './pdf';
 import { boardSvg, contentArea, loadImages } from './render';
 
@@ -46,12 +64,20 @@ export class DocThumbs {
     if (hit?.sv === sv) return hit.thumb;
     let thumb: string | null = null;
     try {
+      const kind = docKind(id);
+      const art = kind === 'artifact' ? readArtifact(doc) : null;
       const first =
-        docKind(id) === 'table'
+        kind === 'table'
           ? tablePages(doc, 1, true)[0]
-          : (await pagePages(doc, embedLoader(this.store, this.assets), 1, true))[0];
+          : kind === 'artifact'
+            ? artifactPages(doc, 1, true)[0]
+            : (await pagePages(doc, embedLoader(this.store, this.assets), 1, true))[0];
       if (first) {
-        const png = thumbnailPng(first);
+        // Рисунок — целиком в карточку, остальное — верх первой страницы.
+        const png =
+          art?.kind === 'svg'
+            ? renderPng(svgPage(art.source, 1, 480, 300, 12))
+            : thumbnailPng(first);
         thumb = sha256(png);
         if (!(await this.assets.put(thumb, png))) thumb = null;
       }
@@ -79,7 +105,10 @@ export async function exportPdf(
   const kind = docKind(id);
   let svgs: string[];
   if (kind === 'table') svgs = tablePages(doc);
-  else if (kind === 'page') svgs = await pagePages(doc, embedLoader(store, assets));
+  else if (kind === 'artifact') {
+    svgs = artifactPages(doc);
+    if (!svgs.length) return null;
+  } else if (kind === 'page') svgs = await pagePages(doc, embedLoader(store, assets));
   else {
     // Доска: по странице на фрейм (сверху вниз, слева направо), без фреймов — вся доска.
     const all = listElements(doc);
@@ -129,7 +158,7 @@ export async function handleDocExport(
   if (url.pathname === '/api/docs') {
     const ids = (url.searchParams.get('ids') ?? '')
       .split(',')
-      .filter((id) => isDocId(id) && /^(pg|tb)_[A-Za-z0-9_-]{1,61}$/.test(id))
+      .filter((id) => isDocId(id) && /^(pg|tb|ar)_[A-Za-z0-9_-]{1,61}$/.test(id))
       .slice(0, 100);
     const docs = [];
     for (const id of ids) {
@@ -144,6 +173,48 @@ export async function handleDocExport(
       });
     }
     json(res, 200, { docs });
+    return true;
+  }
+  // Документ в .md (решение 0023).
+  const md = /^\/api\/export\/(pg_[A-Za-z0-9_-]{1,61})\.md$/.exec(url.pathname);
+  if (md) {
+    const id = md[1]!;
+    if ((await store.isDeleted(id)) || !(await store.has(id))) {
+      json(res, 404, { error: 'Документа нет' });
+      return true;
+    }
+    const doc = await store.get(id);
+    const title = getBoardName(doc) ?? id;
+    const body = Buffer.from(pageFileMarkdown(doc, title), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Length': body.length,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(title)}.md`,
+    });
+    res.end(body);
+    return true;
+  }
+  // Исходник артефакта — файлом своего вида (решение 0023).
+  const src = /^\/api\/export\/(ar_[A-Za-z0-9_-]{1,61})\.src$/.exec(url.pathname);
+  if (src) {
+    const id = src[1]!;
+    const a =
+      (await store.isDeleted(id)) || !(await store.has(id))
+        ? null
+        : readArtifact(await store.get(id));
+    if (!a) {
+      json(res, 404, { error: 'Артефакта нет' });
+      return true;
+    }
+    const title = getBoardName(await store.get(id)) ?? id;
+    const k = ARTIFACT_KINDS.find((x) => x.kind === a.kind)!;
+    const body = Buffer.from(a.source, 'utf8');
+    res.writeHead(200, {
+      'Content-Type': `${k.mime}; charset=utf-8`,
+      'Content-Length': body.length,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(title)}.${artifactExt(a)}`,
+    });
+    res.end(body);
     return true;
   }
   const m = /^\/api\/export\/([A-Za-z0-9-][A-Za-z0-9_-]{0,63})\.pdf$/.exec(url.pathname);
