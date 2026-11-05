@@ -28,6 +28,9 @@ import {
 import type { ArrowEnd, CanvasElement } from '@kayospace/model';
 import { searchBoards } from './search';
 import { registerLayoutTools } from './mcp-layout';
+import { registerExtraTools } from './mcp-extra';
+import { registerImageTools } from './mcp-images';
+import type { Trash } from './trash';
 import { AGENT_GUIDE } from './agent-guide';
 import { boardSvg, contentArea, loadImages, renderPng, type Area } from './render';
 import type { BoardInfo } from './store';
@@ -86,15 +89,17 @@ const boardId = z
 export interface AssetSource {
   get(id: string): Promise<Buffer | null>;
   head(id: string): Promise<{ type: string } | null>;
+  /** Сохранить файл (картинки от агентов); у черновиков ИИ записи нет. */
+  put?(id: string, data: Buffer): Promise<boolean>;
 }
 
 export function createMcp(
   store: BoardSource,
-  opts: { actorName?: string; assets?: AssetSource | null } = {},
+  opts: { actorName?: string; assets?: AssetSource | null; trash?: Trash | null } = {},
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.2.0' },
+      { name: 'kayospace', version: '0.3.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -346,7 +351,8 @@ export function createMcp(
       {
         annotations: { destructiveHint: true },
         description:
-          'Удалить элементы с доски по id. Отменить это с устройства нельзя (отмена там — только своих правок), удаляйте осознанно.',
+          'Удалить элементы с доски по id. Удалённое 7 дней лежит в корзине (list_trash, restore_elements), ' +
+          'а человек может отменить удаление на устройстве одним нажатием. Удаляйте только то, о чём просили.',
         inputSchema: z.object({ board: boardId, ids: z.array(z.string()).min(1).max(500) }),
       },
       async ({ board, ids }) => {
@@ -359,6 +365,17 @@ export function createMcp(
     );
 
     registerLayoutTools(server, store, who, MCP_ORIGIN);
+    // Корзина, изменения и проекты — только у настоящих досок хаба (у черновиков ИИ их нет).
+    if (opts.trash) registerExtraTools(server, store, opts.trash, MCP_ORIGIN);
+    const assets = opts.assets;
+    if (opts.trash && assets?.put)
+      registerImageTools(
+        server,
+        store,
+        { get: (id) => assets.get(id), put: (id, d) => assets.put!(id, d) },
+        who,
+        MCP_ORIGIN,
+      );
 
     server.registerTool(
       'view_board',

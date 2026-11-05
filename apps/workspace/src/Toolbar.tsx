@@ -13,7 +13,6 @@ import {
   FrameIcon,
   HandIcon,
   HighlighterIcon,
-  MarkerIcon,
   ImageIcon,
   LineIcon,
   PasteIcon,
@@ -66,7 +65,6 @@ const TOOLS: { value: Tool; name: string; key: string; Icon: ComponentType }[] =
 
 const PEN_KINDS: { value: StrokeTool; name: string; key: string; Icon: ComponentType }[] = [
   { value: 'pen', name: 'Ручка', key: 'P', Icon: PenIcon },
-  { value: 'marker', name: 'Маркер', key: 'M', Icon: MarkerIcon },
   { value: 'highlighter', name: 'Выделитель', key: 'I', Icon: HighlighterIcon },
 ];
 

@@ -190,15 +190,27 @@ describe('MCP', () => {
       'add_arrow',
       'add_elements',
       'add_frame',
+      'add_images',
       'add_shape',
       'add_sticky',
       'add_text',
       'arrange_elements',
+      'create_board',
+      'create_project',
+      'delete_board',
       'delete_elements',
       'fetch',
+      'get_changes',
+      'get_image',
       'list_boards',
+      'list_deleted_boards',
+      'list_projects',
+      'list_trash',
+      'move_board',
       'move_elements',
       'read_board',
+      'restore_board',
+      'restore_elements',
       'search',
       'update_element',
       'view_board',
@@ -485,7 +497,7 @@ describe('доступ по токену', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(15);
+    expect(tools.length).toBe(27);
     await client.close();
   });
 

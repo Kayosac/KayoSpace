@@ -2180,7 +2180,6 @@ export class CanvasEngine {
     else if (e.code === 'KeyN') this.setTool('sticky');
     else if (e.code === 'KeyT') this.setTool('text');
     else if (e.code === 'KeyF') this.setTool('frame');
-    else if (e.code === 'KeyM') this.setPenKind('marker');
     else if (e.code === 'KeyI') this.setPenKind('highlighter');
     else if (e.code === 'KeyR') this.setShapeKind('rect');
     else if (e.code === 'KeyO') this.setShapeKind('ellipse');

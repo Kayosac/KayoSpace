@@ -10,6 +10,13 @@ import {
   renameProject,
   setBoardProject,
   WORKSPACE_ID,
+  DELETED_BOARD_KEEP_MS,
+  deletedBoards,
+  isBoardDeleted,
+  markBoardDeleted,
+  markBoardPurged,
+  restorableBoards,
+  restoreDeletedBoard,
 } from './workspace';
 
 describe('проекты', () => {
@@ -56,5 +63,31 @@ describe('проекты', () => {
   it('служебные документы — не доски', () => {
     expect(isServiceDoc(WORKSPACE_ID)).toBe(true);
     expect(isServiceDoc('plan')).toBe(false);
+  });
+});
+
+describe('удалённые доски', () => {
+  it('отметка, возврат и стирание', () => {
+    const doc = new Y.Doc();
+    markBoardDeleted(doc, 'plan-1', 'План', undefined, 1000);
+    expect(isBoardDeleted(doc, 'plan-1')).toBe(true);
+    expect(restorableBoards(doc, 2000)).toEqual([{ id: 'plan-1', at: 1000, name: 'План' }]);
+    expect(restoreDeletedBoard(doc, 'plan-1')).toBe(true);
+    expect(isBoardDeleted(doc, 'plan-1')).toBe(false);
+    expect(restoreDeletedBoard(doc, 'plan-1')).toBe(false);
+
+    markBoardDeleted(doc, 'old', null, undefined, 1000);
+    markBoardPurged(doc, 'old');
+    expect(deletedBoards(doc).get('old')?.purged).toBe(true);
+    expect(restoreDeletedBoard(doc, 'old')).toBe(false);
+    expect(restorableBoards(doc, 2000)).toEqual([]);
+  });
+
+  it('через 7 дней доску вернуть нельзя; служебные документы не удаляются', () => {
+    const doc = new Y.Doc();
+    markBoardDeleted(doc, 'a', null, undefined, 0);
+    expect(restorableBoards(doc, DELETED_BOARD_KEEP_MS + 1)).toEqual([]);
+    markBoardDeleted(doc, WORKSPACE_ID, null);
+    expect(isBoardDeleted(doc, WORKSPACE_ID)).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CanvasEngine, type EngineState } from '@kayospace/canvas';
 import type { Actor } from '@kayospace/model';
-import { BoardSession, type SessionState } from './session';
+import { BoardSession, forgetLocalBoard, type SessionState } from './session';
+import { boardsToForget, pruneDeleted } from './boards';
 import {
   loadCamera,
   loadSettings,
@@ -23,7 +24,16 @@ import { SyncChip, ZoomControls } from './Chips';
 import { Minimap } from './Minimap';
 import { fileName, saveFile } from './save';
 import { useWorkspace } from './projects';
-import { addProject, removeProject, renameProject, setBoardProject } from '@kayospace/board';
+import {
+  addProject,
+  markBoardDeleted,
+  removeProject,
+  renameProject,
+  restorableBoards,
+  restoreDeletedBoard,
+  setBoardProject,
+} from '@kayospace/board';
+import { boardIdFromName } from '@kayospace/sync';
 import type { ExportTarget } from '@kayospace/canvas';
 import { SelectionMenu } from './SelectionMenu';
 import { AiController, type AiAction, type AiState } from './ai';
@@ -326,6 +336,35 @@ export function App() {
     },
     [engine, update, wsDoc],
   );
+
+  // Удалённые доски (решение 0016): пропадают из недавних; открытую — закрываем и открываем другую.
+  // Стёртые насовсем — стираем и локальную копию.
+  const deleted = workspace.deleted;
+  const forgotten = useRef(new Set<string>());
+  useEffect(() => {
+    if (deleted.size === 0) return;
+    for (const id of boardsToForget(deleted)) {
+      if (forgotten.current.has(id) || id === settingsRef.current.board) continue;
+      forgotten.current.add(id);
+      forgetLocalBoard(id);
+    }
+    const s = settingsRef.current;
+    const recent = pruneDeleted(s.recentBoards, deleted);
+    if (deleted.has(s.board)) {
+      engine?.finishEditing(null);
+      const next = recent[0];
+      if (next) {
+        update({ board: next.id, recentBoards: touchRecent(recent, next.id, next.name) });
+      } else {
+        const name = 'Новая доска';
+        const id = boardIdFromName(name);
+        pendingName.current = { id, name };
+        update({ board: id, recentBoards: touchRecent(recent, id, name) });
+      }
+    } else if (recent.length !== s.recentBoards.length) {
+      update({ recentBoards: recent });
+    }
+  }, [deleted, engine, update]);
 
   // Ctrl/⌘ K — список досок.
   useEffect(() => {
@@ -756,6 +795,12 @@ export function App() {
             update({ project: null });
           }}
           onMoveBoard={(project) => wsDoc && setBoardProject(wsDoc, board, project)}
+          deleted={deleted}
+          restorable={wsDoc ? restorableBoards(wsDoc) : []}
+          onDeleteBoard={() => wsDoc && markBoardDeleted(wsDoc, board, boardName)}
+          onRestoreBoard={(id, name) => {
+            if (wsDoc && restoreDeletedBoard(wsDoc, id)) openBoard(id, name, false);
+          }}
           background={engineState?.background ?? 'dots'}
           onBackground={(bg) => engine?.setBackground(bg)}
           searchLocal={searchLocal}

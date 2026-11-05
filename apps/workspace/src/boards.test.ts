@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, mergeBoards } from './boards';
+import { boardsToForget, matchesQuery, mergeBoards, pruneDeleted } from './boards';
 
 describe('список досок', () => {
   it('недавние первыми, доски с хаба добавляются, название с хаба важнее', () => {
@@ -24,5 +24,25 @@ describe('список досок', () => {
     expect(matchesQuery(b, 'PLAN')).toBe(true);
     expect(matchesQuery(b, 'идеи')).toBe(false);
     expect(matchesQuery(b, '  ')).toBe(true);
+  });
+});
+
+describe('удалённые доски на устройстве', () => {
+  it('убираются из недавних; стёртые и старые — стираются локально', () => {
+    const deleted = new Map([
+      ['a', { at: 1000, name: null }],
+      ['b', { at: 0, name: null, purged: true }],
+      ['c', { at: 0, name: null }],
+    ]);
+    expect(
+      pruneDeleted(
+        [
+          { id: 'a', name: 'А' },
+          { id: 'x', name: 'Икс' },
+        ],
+        deleted,
+      ),
+    ).toEqual([{ id: 'x', name: 'Икс' }]);
+    expect(boardsToForget(deleted, 3500, 3000)).toEqual(['b', 'c']);
   });
 });

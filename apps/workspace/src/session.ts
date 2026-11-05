@@ -109,3 +109,12 @@ export class BoardSession {
     for (const cb of [...this.listeners]) cb();
   }
 }
+
+/** Стереть локальную копию доски (её стёрли насовсем на хабе или удалили больше 7 дней назад). */
+export function forgetLocalBoard(board: string): void {
+  try {
+    indexedDB.deleteDatabase(`${DB_PREFIX}:${board}`);
+  } catch {
+    /* IndexedDB нет — и стирать нечего */
+  }
+}

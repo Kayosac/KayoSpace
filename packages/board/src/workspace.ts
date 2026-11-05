@@ -106,3 +106,66 @@ export function setBoardProject(
     else boardsMap(doc).delete(boardId);
   }, origin);
 }
+
+/**
+ * Удалённые доски (решение 0016). Доска не стирается сразу: в воркспейсе остаётся отметка, доска
+ * пропадает из списков на всех устройствах и у агентов, а хаб хранит её файл 7 дней — пока можно
+ * «Вернуть». Потом хаб стирает файл и ставит purged; устройства тогда стирают и свою копию.
+ */
+export interface DeletedBoard {
+  at: number;
+  /** Название на момент удаления — чтобы показать в списке, не открывая доску. */
+  name: string | null;
+  purged?: boolean;
+}
+
+/** Сколько удалённая доска ждёт, прежде чем её сотрут насовсем. */
+export const DELETED_BOARD_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+const deletedMap = (doc: Y.Doc) => doc.getMap<DeletedBoard>('deletedBoards');
+
+export function markBoardDeleted(
+  doc: Y.Doc,
+  boardId: string,
+  name: string | null,
+  origin?: Origin,
+  now: number = Date.now(),
+): void {
+  if (isServiceDoc(boardId)) return;
+  doc.transact(() => deletedMap(doc).set(boardId, { at: now, name }), origin);
+}
+
+/** Вернуть доску. false — её нет среди удалённых или она уже стёрта. */
+export function restoreDeletedBoard(doc: Y.Doc, boardId: string, origin?: Origin): boolean {
+  const d = deletedMap(doc).get(boardId);
+  if (!d || d.purged) return false;
+  doc.transact(() => deletedMap(doc).delete(boardId), origin);
+  return true;
+}
+
+/** Хаб стёр доску насовсем. */
+export function markBoardPurged(doc: Y.Doc, boardId: string, origin?: Origin): void {
+  const d = deletedMap(doc).get(boardId);
+  if (!d || d.purged) return;
+  doc.transact(() => deletedMap(doc).set(boardId, { ...d, purged: true }), origin);
+}
+
+/** Все отметки об удалении, включая стёртые. */
+export function deletedBoards(doc: Y.Doc): Map<string, DeletedBoard> {
+  return new Map(deletedMap(doc).entries());
+}
+
+export function isBoardDeleted(doc: Y.Doc, boardId: string): boolean {
+  return deletedMap(doc).has(boardId);
+}
+
+/** Удалённые доски, которые ещё можно вернуть, — свежие сверху. */
+export function restorableBoards(
+  doc: Y.Doc,
+  now: number = Date.now(),
+): ({ id: string } & DeletedBoard)[] {
+  return [...deletedMap(doc).entries()]
+    .filter(([, d]) => !d.purged && now - d.at < DELETED_BOARD_KEEP_MS)
+    .map(([id, d]) => ({ id, ...d }))
+    .sort((a, b) => b.at - a.at);
+}

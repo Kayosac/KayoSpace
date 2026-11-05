@@ -16,6 +16,8 @@ import { CommitInput } from './CommitInput';
 import { searchHub, snippet, type SearchHit } from './search';
 import { finePointer } from './touch';
 import { CloseIcon, ExportIcon, PlusIcon, SearchIcon } from './icons';
+import { TrashSection } from './TrashSection';
+import { trashTime } from './trash';
 
 export function BoardsPanel({
   current,
@@ -35,6 +37,10 @@ export function BoardsPanel({
   onRenameProject,
   onDeleteProject,
   onMoveBoard,
+  deleted,
+  restorable,
+  onDeleteBoard,
+  onRestoreBoard,
   background,
   onBackground,
   searchLocal,
@@ -64,6 +70,13 @@ export function BoardsPanel({
   onDeleteProject: (id: string) => void;
   /** Переложить открытую доску в проект (null — без проекта). */
   onMoveBoard: (project: string | null) => void;
+  /** Удалённые доски (их нет в списке). */
+  deleted: ReadonlyMap<string, unknown>;
+  /** Удалённые доски, которые ещё можно вернуть. */
+  restorable: readonly { id: string; name: string | null; at: number }[];
+  /** Удалить открытую доску (7 дней её можно вернуть). */
+  onDeleteBoard: () => void;
+  onRestoreBoard: (id: string, name: string | null) => void;
   background: BoardBackground;
   onBackground: (bg: BoardBackground) => void;
   /** Поиск по открытой доске (когда хаба нет). */
@@ -79,6 +92,14 @@ export function BoardsPanel({
   const [hubError, setHubError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const [newProject, setNewProject] = useState<string | null>(null);
+  // Удаление — в два касания: первое спрашивает «Точно?», через 4 секунды вопрос снимается.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const t = setTimeout(() => setConfirmDelete(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmDelete]);
+  useEffect(() => setConfirmDelete(false), [current]);
   const searchRef = useRef<HTMLInputElement>(null);
   const shown = projects.find((p) => p.id === project) ?? null;
   // Сразу ставить курсор в поиск — только при мыши: на планшете это открыло бы клавиатуру на пол-экрана.
@@ -109,10 +130,10 @@ export function BoardsPanel({
 
   const list = useMemo(
     () =>
-      inProject(mergeBoards(recent, hubBoards), membership, shown ? shown.id : null).filter((b) =>
-        matchesQuery(b, query),
+      inProject(mergeBoards(recent, hubBoards), membership, shown ? shown.id : null).filter(
+        (b) => !deleted.has(b.id) && matchesQuery(b, query),
       ),
-    [recent, hubBoards, query, membership, shown],
+    [recent, hubBoards, query, membership, shown, deleted],
   );
   useEffect(() => setActive(0), [query]);
 
@@ -402,6 +423,39 @@ export function BoardsPanel({
           PDF{frames.length > 0 ? ` (${frames.length} стр.)` : ''}
         </button>
       </div>
+      <div className="row board-danger">
+        <button
+          className={confirmDelete ? 'danger-btn confirm' : 'danger-btn'}
+          onClick={() => {
+            if (!confirmDelete) return setConfirmDelete(true);
+            setConfirmDelete(false);
+            onDeleteBoard();
+          }}
+          data-testid="delete-board"
+        >
+          {confirmDelete ? 'Точно удалить доску?' : 'Удалить эту доску'}
+        </button>
+        {confirmDelete && <small>Её можно будет вернуть 7 дней.</small>}
+      </div>
+      {hub && <TrashSection hub={hub} board={current} />}
+      {restorable.length > 0 && (
+        <>
+          <h3 className="section-title">Удалённые доски</h3>
+          <ul className="device-list deleted-boards" data-testid="deleted-boards">
+            {restorable.map((d) => (
+              <li key={d.id}>
+                <div>
+                  <b>{d.name ?? d.id}</b>
+                  <small>удалена {trashTime(d.at)}</small>
+                </div>
+                <button className="danger-btn neutral" onClick={() => onRestoreBoard(d.id, d.name)}>
+                  Вернуть
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {hub && hubError && <p className="muted">Список с хаба недоступен: {hubError}</p>}
       {!hub && <p className="muted">Включите синхронизацию — появятся доски с хаба.</p>}
       {finePointer() && <p className="muted">Ctrl/⌘ K — открыть этот список с клавиатуры.</p>}

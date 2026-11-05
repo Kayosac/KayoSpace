@@ -3,13 +3,15 @@
  * Документы держатся в памяти, на диск пишутся с задержкой после изменений (и при остановке).
  */
 
-import { mkdir, readFile, readdir, rename, writeFile, access } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import {
   WORKSPACE_ID,
   boardProjects,
+  deletedBoards,
   getBoardName,
+  isBoardDeleted,
   isServiceDoc,
   listElements,
   listProjects,
@@ -81,7 +83,16 @@ export class BoardStore {
     }
     doc.on('update', () => this.scheduleSave(id));
     this.docs.set(id, doc);
+    for (const cb of this.loadListeners) cb(id, doc);
     return doc;
+  }
+
+  private readonly loadListeners: ((id: string, doc: Y.Doc) => void)[] = [];
+
+  /** Вызывается для каждого документа, когда он загружен в память (корзина следит за удалениями). */
+  onLoad(cb: (id: string, doc: Y.Doc) => void): void {
+    this.loadListeners.push(cb);
+    for (const [id, doc] of this.docs) cb(id, doc);
   }
 
   async list(): Promise<BoardInfo[]> {
@@ -98,7 +109,7 @@ export class BoardStore {
     const membership = boardProjects(ws);
     const out: BoardInfo[] = [];
     for (const id of [...ids].sort()) {
-      if (isServiceDoc(id)) continue;
+      if (isServiceDoc(id) || isBoardDeleted(ws, id)) continue;
       const doc = await this.get(id);
       const pid = membership.get(id);
       out.push({
@@ -109,6 +120,47 @@ export class BoardStore {
       });
     }
     return out;
+  }
+
+  /** Удалена ли доска (отметка в воркспейсе, решение 0016). */
+  async isDeleted(id: string): Promise<boolean> {
+    if (isServiceDoc(id) || !isValidBoardId(id)) return false;
+    return isBoardDeleted(await this.get(WORKSPACE_ID), id);
+  }
+
+  /** Стёрта ли доска насовсем (удалена больше 7 дней назад). */
+  async isPurged(id: string): Promise<boolean> {
+    if (isServiceDoc(id) || !isValidBoardId(id)) return false;
+    return deletedBoards(await this.get(WORKSPACE_ID)).get(id)?.purged === true;
+  }
+
+  /**
+   * Хранилище для агентов: удалённых досок для них нет — has() их не видит, а get() отказывает,
+   * чтобы агент не писал в доску, которую человек убрал.
+   */
+  live(): Pick<BoardStore, 'get' | 'has' | 'list'> {
+    return {
+      has: async (id) => !(await this.isDeleted(id)) && (await this.has(id)),
+      get: async (id) => {
+        if (await this.isDeleted(id))
+          throw new Error(`Доска «${id}» удалена. Вернуть — restore_board.`);
+        return this.get(id);
+      },
+      list: () => this.list(),
+    };
+  }
+
+  /** Стереть доску насовсем: из памяти и с диска. */
+  async purge(id: string): Promise<void> {
+    this.assertId(id);
+    clearTimeout(this.timers.get(id));
+    this.timers.delete(id);
+    await this.saving.get(id)?.catch(() => {});
+    await this.loading.get(id)?.catch(() => {});
+    const doc = this.docs.get(id);
+    this.docs.delete(id);
+    doc?.destroy();
+    await rm(this.file(id), { force: true });
   }
 
   private scheduleSave(id: string): void {

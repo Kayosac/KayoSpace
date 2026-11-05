@@ -7,7 +7,13 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import type * as Y from 'yjs';
-import { handleMessage, isValidBoardId, step1Message, updateMessage } from '@kayospace/sync';
+import {
+  CLOSE_BOARD_GONE,
+  handleMessage,
+  isValidBoardId,
+  step1Message,
+  updateMessage,
+} from '@kayospace/sync';
 import { CLOSE_UNAUTHORIZED, requestToken } from './auth';
 import type { BoardStore } from './store';
 
@@ -16,6 +22,8 @@ export interface SyncServer {
   clients(id: string): number;
   /** Закрыть все соединения устройства (его отключили). */
   dropDevice(deviceId: string): void;
+  /** Закрыть все соединения доски (её стёрли насовсем). */
+  dropBoard(id: string): void;
   close(): Promise<void>;
 }
 
@@ -25,6 +33,8 @@ export function attachSync(
   opts: {
     /** Проверка токена: null — отказ, иначе — какое устройство подключилось (null — не устройство). */
     authorize?: (token: string | undefined) => { device: string | null } | null;
+    /** Доску стёрли насовсем: соединение закрывается, а доска не создаётся заново. */
+    gone?: (id: string) => Promise<boolean>;
   } = {},
 ): SyncServer {
   const wss = new WebSocketServer({ noServer: true });
@@ -72,9 +82,16 @@ export function attachSync(
       if (room.size === 0) rooms.delete(id);
     });
 
-    store
-      .get(id)
+    (opts.gone ? opts.gone(id) : Promise.resolve(false))
+      .then((gone) => {
+        if (gone) {
+          ws.close(CLOSE_BOARD_GONE, 'board deleted');
+          return null;
+        }
+        return store.get(id);
+      })
       .then((d) => {
+        if (!d) return;
         doc = d;
         watch(id, d);
         if (ws.readyState === WebSocket.OPEN) ws.send(step1Message(d));
@@ -111,6 +128,10 @@ export function attachSync(
       for (const [ws, d] of byDevice) {
         if (d === deviceId) ws.close(CLOSE_UNAUTHORIZED, 'device revoked');
       }
+    },
+    dropBoard: (id) => {
+      for (const ws of rooms.get(id) ?? []) ws.close(CLOSE_BOARD_GONE, 'board deleted');
+      rooms.delete(id);
     },
     close: () =>
       new Promise<void>((resolve) => {

@@ -896,7 +896,7 @@ const allElements = (page: Page): Promise<El[]> =>
     ].map((i) => i.element),
   );
 
-test('фреймы, маркер и выделитель, порядок слоёв, выравнивание, экспорт, мини-карта', async ({
+test('фреймы, выделитель, порядок слоёв, выравнивание, экспорт, мини-карта', async ({
   browser,
   request,
 }) => {
@@ -941,9 +941,8 @@ test('фреймы, маркер и выделитель, порядок сло�
   }
   await page.screenshot({ path: shot('frames.png') });
 
-  // Маркер и выделитель.
+  // Выделитель (маркера больше нет: M ничего не выбирает).
   await page.keyboard.press('m');
-  await drawWave(page, 760, 680, 200);
   await page.keyboard.press('i');
   await drawWave(page, 760, 720, 200);
   await expect
@@ -952,10 +951,8 @@ test('фреймы, маркер и выделитель, порядок сло�
         .filter((e) => e.type === 'stroke')
         .map((e) => [e.props.tool, e.style.color ?? null]),
     )
-    .toEqual([
-      ['marker', null],
-      ['highlighter', '#f5d90a'],
-    ]);
+    .toEqual([['highlighter', '#f5d90a']]);
+  await expect(page.getByRole('radio', { name: 'Маркер' })).toHaveCount(0);
 
   // Порядок слоёв: Альфа под Бету, но над фреймом; Ctrl+] — обратно наверх.
   const z = async (text: string) =>
@@ -982,7 +979,7 @@ test('фреймы, маркер и выделитель, порядок сло�
       return Math.round(notes[0]!.x) === Math.round(notes[1]!.x);
     })
     .toBe(true);
-  await expect.poll(() => hubElements(request, board)).toBe(5);
+  await expect.poll(() => hubElements(request, board)).toBe(4);
 
   // Мини-карта: нажатие переносит вид.
   const cam0 = await camera(page);
@@ -1203,7 +1200,7 @@ test('обновление на компьютере: «Проверить об�
   await context.close();
 });
 
-test('палитра и толщина касанием: круг, ползунок, недавние; у маркера свой цвет', async ({
+test('палитра и толщина касанием: круг, ползунок, недавние; у выделителя свой цвет', async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -1261,11 +1258,11 @@ test('палитра и толщина касанием: круг, ползун�
   await sizePop.getByRole('radio', { name: 'Среднее' }).tap();
   expect((await st()).size).toBe(3);
 
-  // У маркера свои цвет и толщина; ручка свои помнит.
-  await page.getByRole('radio', { name: 'Маркер' }).tap();
+  // У выделителя свои цвет и толщина; ручка свои помнит.
+  await page.getByRole('radio', { name: 'Выделитель' }).tap();
   await page.getByTestId('color-button').tap();
   await pop.getByRole('radio', { name: 'Зелёный' }).tap();
-  expect(await st()).toEqual({ color: '#30a46c', size: 3, penKind: 'marker' });
+  expect(await st()).toEqual({ color: '#30a46c', size: 3, penKind: 'highlighter' });
   await page.getByRole('radio', { name: 'Ручка' }).tap();
   expect(await st()).toEqual({ color: '#3e63dd', size: 3, penKind: 'pen' });
   await context.close();
@@ -1369,4 +1366,96 @@ test('агент через MCP раскладывает стикеры — на
   // Отмену можно отменить: агентские правки возвращаются.
   await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
   await expect.poll(() => elements(page)).toBe(5);
+});
+
+test('планшет: корзина, удаление и возврат доски — касаниями; агент кладёт картинку', async ({
+  browser,
+  request,
+}) => {
+  const a = 'e2e-del-a';
+  const b = 'e2e-del-b';
+  const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+  const client = new Client({ name: 'e2e-images', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://${HUB_ADDRESS}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${HUB_TOKEN}` } },
+    }),
+  );
+  type Result = { isError?: boolean; content: { text?: string }[] };
+  const call = async (name: string, args: Record<string, unknown>) =>
+    (await client.callTool({ name, arguments: args })) as Result;
+  await call('create_board', { board: a, name: 'Первая' });
+  await call('create_board', { board: b, name: 'Вторая' });
+  const added = await call('add_elements', {
+    board: a,
+    items: [{ text: 'Оставить' }, { text: 'Выбросить' }],
+  });
+  const ids = (JSON.parse(added.content[0]!.text!) as { added: { id: string }[] }).added;
+
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [
+      SETTINGS_KEY,
+      JSON.stringify({ ...synced, board: a, recentBoards: [{ id: b, name: 'Вторая' }] }),
+    ] as const,
+  );
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  await page.waitForFunction(() => window.__kayospace?.engine);
+  await expect.poll(() => elements(page)).toBe(2);
+
+  // Агент выбросил стикер — человек видит его в корзине доски и возвращает.
+  await call('delete_elements', { board: a, ids: [ids[1]!.id] });
+  await expect.poll(() => elements(page)).toBe(1);
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('trash-open').tap();
+  const trash = page.getByTestId('trash-list');
+  await expect(trash).toContainText('Выбросить');
+  await expect(trash).toContainText('удалил агент');
+  await trash.getByRole('button', { name: 'Вернуть' }).tap();
+  await expect.poll(() => elements(page)).toBe(2);
+  await expect(page.getByTestId('trash')).toContainText('Пусто');
+
+  // Удалить доску — в два касания; открывается другая, удалённую можно вернуть.
+  const del = page.getByTestId('delete-board');
+  await del.tap();
+  await expect(del).toHaveText('Точно удалить доску?');
+  await del.tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Вторая');
+  const gone = page.getByTestId('deleted-boards');
+  await expect(gone).toContainText('Первая');
+  await expect(page.getByRole('option', { name: /Первая/ })).toHaveCount(0);
+  await expect.poll(async () => (await call('list_boards', {})).content[0]!.text).not.toContain(a);
+  await page.screenshot({ path: shot('deleted-boards.png') });
+  await gone.getByRole('button', { name: 'Вернуть' }).tap();
+  await expect(page.getByTestId('board-title')).toHaveText('Первая');
+  await expect.poll(() => elements(page)).toBe(2);
+  await expect(page.getByTestId('deleted-boards')).toHaveCount(0);
+  // Возврат открывает доску — панель закрывается сама.
+  await expect(page.getByTestId('boards-panel')).toHaveCount(0);
+
+  // Агент кладёт картинку файлом — устройство показывает её.
+  const png = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 320;
+    c.height = 200;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#3e63dd';
+    ctx.fillRect(0, 0, 320, 200);
+    return c.toDataURL('image/png');
+  });
+  const img = await call('add_images', { board: a, images: [{ data: png, alt: 'Синий' }] });
+  expect(img.isError).toBeFalsy();
+  await expect.poll(() => elements(page)).toBe(3);
+  await expect.poll(() => hubElements(request, a)).toBe(3);
+  await page.screenshot({ path: shot('agent-image.png') });
+  await client.close();
+  await context.close();
 });

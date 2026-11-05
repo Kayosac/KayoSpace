@@ -217,13 +217,6 @@ export const FrameIcon = () => (
   </Svg>
 );
 
-export const MarkerIcon = () => (
-  <Svg>
-    <path d="M15 4l5 5-9.5 9.5H6v-4.5z" />
-    <path d="M4 21h7" />
-  </Svg>
-);
-
 export const HighlighterIcon = () => (
   <Svg>
     <path d="M9 14l-2 2v3h3l2-2" />

@@ -4,7 +4,13 @@
  */
 
 import { useEffect, useState } from 'react';
-import { WORKSPACE_ID, boardProjects, listProjects } from '@kayospace/board';
+import {
+  WORKSPACE_ID,
+  boardProjects,
+  deletedBoards,
+  listProjects,
+  type DeletedBoard,
+} from '@kayospace/board';
 import type { Project } from '@kayospace/model';
 import { BoardSession } from './session';
 import type { BoardEntry } from './boards';
@@ -14,6 +20,8 @@ export interface WorkspaceView {
   projects: Project[];
   /** id доски → id проекта. */
   membership: Map<string, string>;
+  /** Удалённые доски (решение 0016): id → когда удалена и стёрта ли насовсем. */
+  deleted: Map<string, DeletedBoard>;
 }
 
 /** Открыть воркспейс для хаба (null — только на устройстве) и следить за проектами. */
@@ -22,6 +30,7 @@ export function useWorkspace(hub: { url: string; token: string } | null): Worksp
     session: null,
     projects: [],
     membership: new Map(),
+    deleted: new Map(),
   });
   const url = hub?.url ?? '';
   const token = hub?.token ?? '';
@@ -32,6 +41,7 @@ export function useWorkspace(hub: { url: string; token: string } | null): Worksp
         session,
         projects: listProjects(session.doc),
         membership: boardProjects(session.doc),
+        deleted: deletedBoards(session.doc),
       });
     read();
     session.doc.on('update', read);

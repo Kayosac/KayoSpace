@@ -1281,6 +1281,41 @@ p.bad {
   color: var(--accent);
 }
 
+/* Удаление доски и корзина (решение 0016). */
+.board-danger {
+  margin-top: 12px;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.trash {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  margin-top: 12px;
+}
+
+.trash .device-list,
+.deleted-boards {
+  width: 100%;
+}
+
+.trash .device-list li > div,
+.deleted-boards li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.trash .device-list b,
+.deleted-boards b {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .backups .field {
   margin: 10px 0 6px;
 }
@@ -1601,7 +1636,8 @@ p.bad {
   .project-input,
   .project-edit input,
   .danger-btn,
-  .add-btn {
+  .add-btn,
+  .trash .secondary {
     height: 40px;
   }
 
