@@ -115,15 +115,17 @@ HUB_URL=https://<домен>:<порт> HUB_TOKEN=<токен хаба> pnpm ai-
 
 ## Обслуживание
 
-| Что                           | Команда на сервере                                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Обновить хаб до свежей версии | повторить команду установки                                                                                            |
-| Логи                          | `cd /opt/kayospace/deploy && docker compose logs -f hub` (исполнитель ИИ — `logs -f ai-worker`)                        |
-| Перезапуск                    | `cd /opt/kayospace/deploy && docker compose restart`                                                                   |
-| Остановить                    | `cd /opt/kayospace/deploy && docker compose down`                                                                      |
-| Копия всех данных хаба        | `docker run --rm -v kayospace_hub-data:/data -v "$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .` |
-| Подключить устройство         | `cd /opt/kayospace/deploy && docker compose exec hub pnpm pair` — QR и код в терминале                                 |
-| Сменить ключ администратора   | изменить `HUB_TOKEN` в `/opt/kayospace/deploy/.env`, затем `docker compose up -d` (токены устройств остаются)          |
+| Что                         | Команда на сервере                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Обновления                  | сами: хаб переходит на новый релиз в течение 10 минут, при сбое откатывается (`journalctl -u kayospace-update`)        |
+| Обновить прямо сейчас       | `systemctl start kayospace-update` (или повторить команду установки)                                                   |
+| Выключить автообновление    | `systemctl disable --now kayospace-update.timer`                                                                       |
+| Логи                        | `cd /opt/kayospace/deploy && docker compose logs -f hub` (исполнитель ИИ — `logs -f ai-worker`)                        |
+| Перезапуск                  | `cd /opt/kayospace/deploy && docker compose restart`                                                                   |
+| Остановить                  | `cd /opt/kayospace/deploy && docker compose down`                                                                      |
+| Копия всех данных хаба      | `docker run --rm -v kayospace_hub-data:/data -v "$PWD":/backup alpine tar czf /backup/kayospace-boards.tgz -C /data .` |
+| Подключить устройство       | `cd /opt/kayospace/deploy && docker compose exec hub pnpm pair` — QR и код в терминале                                 |
+| Сменить ключ администратора | изменить `HUB_TOKEN` в `/opt/kayospace/deploy/.env`, затем `docker compose up -d` (токены устройств остаются)          |
 
 ## Резервные копии
 

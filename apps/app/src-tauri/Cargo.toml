@@ -1,6 +1,6 @@
 [package]
 name = "kayospace"
-version = "0.11.0"
+version = "0.11.1"
 description = "Kayospace — личный воркспейс с бесконечным холстом"
 authors = ["kayos"]
 edition = "2021"

@@ -30,7 +30,7 @@ import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.5.0';
+export const HUB_VERSION = '0.5.1';
 
 export interface HubOptions {
   dataDir: string;
