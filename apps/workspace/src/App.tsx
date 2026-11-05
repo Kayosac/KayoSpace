@@ -16,6 +16,7 @@ import { AssetStore, imageFiles } from './assets';
 import { NoteEditor } from './NoteEditor';
 import { lowLatencyInk, releaseFieldFocus } from './touch';
 import { UpdateBanner, useUpdates } from './UpdateBanner';
+import { AgentBar } from './AgentBar';
 import { Toolbar } from './Toolbar';
 import { SettingsPanel } from './SettingsPanel';
 import { SyncChip, ZoomControls } from './Chips';
@@ -29,7 +30,7 @@ import { AiController, type AiAction, type AiState } from './ai';
 import { AiBar } from './AiBar';
 import { Connection, type ConnectionState } from './connection';
 import { ConnectScreen, type ConnectReason } from './ConnectScreen';
-import { parseConnectLink } from './devices';
+import { parseBoardLink, parseConnectLink } from './devices';
 import { DEFAULT_HUB } from './config';
 import { createSecretStore } from './secrets';
 import {
@@ -145,13 +146,21 @@ export function App() {
     if (conn.revoked) setConnectUi({ reason: 'revoked' });
   }, [conn.revoked]);
 
+  /** Открыть доску по ссылке kayospace://board/… (задаётся ниже, когда готов openBoard). */
+  const openLinkRef = useRef<((board: string, element: string | null) => void) | null>(null);
   // Ссылка kayospace://connect?hub=…&code=… — из QR системной камерой или из другого приложения.
+  // Ссылка kayospace://board/<id> — от агента: открыть доску.
   useEffect(() => {
     if (!isTauri) return;
     let off: (() => void) | undefined;
     let cancelled = false;
     const handle = (urls: string[] | null): void => {
       for (const u of urls ?? []) {
+        const target = parseBoardLink(u);
+        if (target) {
+          openLinkRef.current?.(target.board, target.element);
+          return;
+        }
         const link = parseConnectLink(u);
         if (!link) continue;
         // Уже подключено — не переподключаем молча, а показываем экран с подставленным кодом.
@@ -524,6 +533,12 @@ export function App() {
     if (engine.focusElement(p.id)) pendingFocus.current = null;
   }, [engine, board, sessionState, focusTick]);
   const searchLocal = useCallback((q: string) => engine?.searchText(q) ?? [], [engine]);
+  openLinkRef.current = (id, element) => {
+    setPanel(null);
+    if (element) pendingFocus.current = { board: id, id: element };
+    if (id !== settingsRef.current.board) openBoard(id, null, false);
+    else setFocusTick((t) => t + 1);
+  };
 
   // «Поделиться» → Kayospace (Android): присланное ложится на доску «Входящие».
   const pendingShare = useRef<SharedPayload | null>(null);
@@ -637,7 +652,10 @@ export function App() {
       />
       {dropping && <div className="drop-hint">Отпустите — картинка встанет сюда</div>}
       {toast && <div className="toast">{toast}</div>}
-      <UpdateBanner updates={updates} />
+      <div className="top-center">
+        <UpdateBanner updates={updates} />
+        {engine && <AgentBar engine={engine} onToast={(t) => showToast(t, 6000)} />}
+      </div>
       <header className="top top-left">
         <SyncChip
           board={board}

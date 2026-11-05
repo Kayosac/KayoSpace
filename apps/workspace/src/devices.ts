@@ -57,6 +57,27 @@ export function parseConnectLink(link: string): { hub: string; code: string | nu
   return { hub, code };
 }
 
+/**
+ * Ссылка на доску kayospace://board/<id>?element=<id> — её дают агенты (MCP search, fetch):
+ * приложение открывает доску и показывает элемент.
+ */
+export function parseBoardLink(link: string): { board: string; element: string | null } | null {
+  let url: URL;
+  try {
+    url = new URL(link.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'kayospace:') return null;
+  const parts = (url.host ? `${url.host}${url.pathname}` : url.pathname.replace(/^\/+/, '')).split(
+    '/',
+  );
+  if (parts[0] !== 'board' || !parts[1]) return null;
+  const board = decodeURIComponent(parts[1]);
+  if (!/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/.test(board)) return null;
+  return { board, element: url.searchParams.get('element') || null };
+}
+
 /** 6 цифр из того, что ввёл человек («123 456», «123-456»); иначе null. */
 export function normalizeCode(input: string): string | null {
   const digits = input.replace(/[\s-]/g, '');

@@ -18,7 +18,7 @@ import {
   toNodeHandler,
 } from '@modelcontextprotocol/node';
 import { bearerToken, hostAllowed, originAllowed, requestToken, tokenMatches } from './auth';
-import { createMcp } from './mcp';
+import { agentContext, agentNameFor, createMcp } from './mcp';
 import { DeviceRegistry, isDeviceToken } from './devices';
 import { handleClaim, handleDevices, type Access } from './devices-api';
 import { join } from 'node:path';
@@ -30,7 +30,7 @@ import { AiQueue, handleAi } from './ai';
 import { BoardStore } from './store';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.5.1';
+export const HUB_VERSION = '0.6.0';
 
 export interface HubOptions {
   dataDir: string;
@@ -79,7 +79,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   /** MCP черновиков ИИ: по обработчику на задачу. */
   const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
 
-  const mcp = createMcp(store);
+  const mcp = createMcp(store, { assets });
   const mcpNode = toNodeHandler(mcp);
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
@@ -142,7 +142,10 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         await handler(req, res);
         return;
       }
-      await mcpNode(req, res);
+      // Кто пишет — для подписи правок: приложение по OAuth («Claude», «ChatGPT»), иначе клиент по User-Agent.
+      await agentContext.run(agentNameFor(req, oauth?.clientName(bearerToken(req)) ?? null), () =>
+        mcpNode(req, res),
+      );
       return;
     }
     // Остальное API читают клиенты с других адресов (дев-сервер Pen Lab) — разрешаем CORS.

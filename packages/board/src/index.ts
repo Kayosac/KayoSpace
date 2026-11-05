@@ -7,3 +7,4 @@ export * from './wire';
 export * from './align';
 export * from './order';
 export * from './workspace';
+export * from './layout';
