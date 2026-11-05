@@ -178,3 +178,17 @@ describe('кто из агентов пишет', () => {
     expect(agentNameFor(h('x'), '<script>Claude</script>')).toBe('scriptClaudescript');
   });
 });
+
+describe('подсказки для клиентов', () => {
+  it('чтение помечено readOnlyHint (ChatGPT не спрашивает подтверждения), удаление — destructiveHint', async () => {
+    const { tools } = await client.listTools();
+    const ro = tools
+      .filter((t) => t.annotations?.readOnlyHint)
+      .map((t) => t.name)
+      .sort();
+    expect(ro).toEqual(['fetch', 'list_boards', 'read_board', 'search', 'view_board']);
+    expect(tools.find((t) => t.name === 'delete_elements')!.annotations?.destructiveHint).toBe(
+      true,
+    );
+  });
+});

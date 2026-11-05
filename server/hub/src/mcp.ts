@@ -111,6 +111,7 @@ export function createMcp(
     server.registerTool(
       'list_boards',
       {
+        annotations: { readOnlyHint: true },
         description:
           'Список досок Kayospace: id, название, число элементов и проект, в котором доска лежит.',
       },
@@ -120,6 +121,7 @@ export function createMcp(
     server.registerTool(
       'read_board',
       {
+        annotations: { readOnlyHint: true },
         description:
           'Прочитать доску. markdown — для чтения (элементы в порядке чтения, сводка рукописного), ' +
           'json — все поля элементов для точных правок (точки штрихов опущены).',
@@ -342,6 +344,7 @@ export function createMcp(
     server.registerTool(
       'delete_elements',
       {
+        annotations: { destructiveHint: true },
         description:
           'Удалить элементы с доски по id. Отменить это с устройства нельзя (отмена там — только своих правок), удаляйте осознанно.',
         inputSchema: z.object({ board: boardId, ids: z.array(z.string()).min(1).max(500) }),
@@ -360,6 +363,7 @@ export function createMcp(
     server.registerTool(
       'view_board',
       {
+        annotations: { readOnlyHint: true },
         description:
           'Посмотреть на доску картинкой (PNG): рукописные заметки, рисунки, схемы, картинки — то, ' +
           'чего нет в тексте read_board. Можно всю доску, один фрейм (frame) или область (region). ' +
@@ -427,6 +431,7 @@ export function createMcp(
     server.registerTool(
       'search',
       {
+        annotations: { readOnlyHint: true },
         description:
           'Найти текст на всех досках: стикеры, надписи, подписи фигур и стрелок, названия фреймов. ' +
           'Регистр не важен. Результат — { results: [{ id, title, url, text, board, type }] }; ' +
@@ -452,6 +457,7 @@ export function createMcp(
     server.registerTool(
       'fetch',
       {
+        annotations: { readOnlyHint: true },
         description:
           'Получить доску целиком по id из search (вида «доска#элемент») или по id доски: ' +
           'текст доски в markdown и ссылка на неё. Для рукописного и рисунков — view_board.',
