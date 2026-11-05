@@ -15,8 +15,9 @@ export const AGENT_GUIDE = `Kayospace — личный бесконечный х
   во фрейм или создать новый. Координаты не считай вручную — не налезай на чужое.
 - Наводи порядок: arrange_elements (разложить существующие), move_elements (сдвинуть; фрейм — с содержимым).
 - Связи — add_arrow между id элементов: стрелка тянется за ними.
-- Картинки: add_images — по ссылке или файлом (base64), с подписью alt; get_image — посмотреть картинку
-  с доски в полном разрешении (на view_board она мелкая).
+- Картинки: add_images — по ссылке или файлом (base64), с подписью alt; add_image_file — картинка из чата
+  (присланная человеком или нарисованная тобой; в ChatGPT файл подставляется сам); get_image — посмотреть
+  картинку с доски в полном разрешении (на view_board она мелкая).
 - Структура: list_projects, create_board, create_project, move_board. Что нового — get_changes.
 - Удалённое лежит в корзине 7 дней: list_trash и restore_elements; доски — list_deleted_boards и restore_board.
   delete_board — только когда человек прямо попросил удалить доску.

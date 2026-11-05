@@ -95,7 +95,13 @@ export interface AssetSource {
 
 export function createMcp(
   store: BoardSource,
-  opts: { actorName?: string; assets?: AssetSource | null; trash?: Trash | null } = {},
+  opts: {
+    actorName?: string;
+    assets?: AssetSource | null;
+    trash?: Trash | null;
+    /** Только для тестов: картинки по ссылкам с этого компьютера. */
+    allowPrivateImageUrls?: boolean;
+  } = {},
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
@@ -375,6 +381,7 @@ export function createMcp(
         { get: (id) => assets.get(id), put: (id, d) => assets.put!(id, d) },
         who,
         MCP_ORIGIN,
+        { allowPrivateUrls: opts.allowPrivateImageUrls },
       );
 
     server.registerTool(

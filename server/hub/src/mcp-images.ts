@@ -49,6 +49,13 @@ const MAX_SEND_BYTES = 3.5 * 1024 * 1024;
 
 const boardId = z.string().regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/);
 
+interface Loaded {
+  id: string;
+  info: ImageInfo;
+  alt?: string;
+  width?: number;
+}
+
 export function registerImageTools(
   server: McpServer,
   store: Source,
@@ -57,6 +64,92 @@ export function registerImageTools(
   origin: unknown,
   opts: { allowPrivateUrls?: boolean } = {},
 ): void {
+  /** Скачать или раскодировать картинку и положить файл в хранилище; строка — понятная ошибка. */
+  const load = async (
+    src: { url: string } | { data: string },
+  ): Promise<{ id: string; info: ImageInfo } | string> => {
+    let bytes: Buffer | null;
+    try {
+      bytes =
+        'url' in src
+          ? await fetchImage(src.url, { allowPrivate: opts.allowPrivateUrls })
+          : decodeImageData(src.data);
+    } catch (err) {
+      if (err instanceof ImageFetchError) return err.message;
+      throw err;
+    }
+    if (!bytes) return 'data — не base64.';
+    if (bytes.length > MAX_AGENT_IMAGE_BYTES) return 'больше 15 МБ.';
+    const info = imageInfo(bytes);
+    if (!info || !(IMAGE_TYPES as readonly string[]).includes(info.mime))
+      return 'это не картинка PNG, JPEG, GIF или WebP.';
+    const id = sha256(bytes);
+    await assets.put(id, bytes);
+    return { id, info };
+  };
+
+  /** Разложить картинки на доске одной транзакцией. */
+  const place = async (
+    board: string,
+    loaded: readonly Loaded[],
+    o: {
+      layout?: Layout;
+      columns?: number;
+      gap?: number;
+      at?: { x: number; y: number };
+      frame?: string;
+    },
+  ) => {
+    const agent = agentOf();
+    const doc = await store.get(board);
+    let target: FrameElement | null = null;
+    if (o.frame) {
+      const f = getElement(doc, o.frame);
+      if (!f || f.type !== 'frame') return fail(`Фрейма ${o.frame} на доске нет.`);
+      target = f;
+    }
+    const els = loaded.map((l) => {
+      const w = l.width ?? Math.min(l.info.width, DEFAULT_WIDTH);
+      const h = Math.round((w * l.info.height) / l.info.width);
+      return makeImage(
+        l.id,
+        { x: 0, y: 0, w, h },
+        { naturalW: l.info.width, naturalH: l.info.height, alt: l.alt, actor: agent },
+      );
+    });
+    const start = o.at ?? (target ? frameOrigin(target, listElements(doc)) : freeSpot(doc, 40));
+    const placed = layoutBoxes(els, {
+      layout: o.layout ?? 'grid',
+      columns: o.columns,
+      gap: o.gap,
+      origin: start,
+    });
+    const out = els.map((el, i) => ({ ...el, ...placed.positions[i]! }));
+    doc.transact(() => {
+      const map = elementsMap(doc);
+      if (target)
+        map.set(target.id, grown(target, start.x + placed.width, start.y + placed.height, agent));
+      for (const el of out) map.set(el.id, el);
+    }, origin);
+    return text(
+      JSON.stringify(
+        {
+          added: out.map((el) => ({
+            id: el.id,
+            x: Math.round(el.x),
+            y: Math.round(el.y),
+            w: Math.round(el.w),
+            h: Math.round(el.h),
+            natural: `${el.props.naturalW}×${el.props.naturalH}`,
+          })),
+          frame: target?.id ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+  };
+
   server.registerTool(
     'add_images',
     {
@@ -86,78 +179,55 @@ export function registerImageTools(
       }),
     },
     async ({ board, images, layout, columns, gap, at, frame }) => {
-      const agent = agentOf();
       // Сначала все файлы: если хоть один не получился, на доске ничего не меняется.
-      const loaded: { id: string; info: ImageInfo; alt?: string; width?: number }[] = [];
+      const loaded: Loaded[] = [];
       for (const [i, img] of images.entries()) {
         const n = images.length > 1 ? `Картинка ${i + 1}: ` : '';
         if (!img.url === !img.data) return fail(`${n}нужно что-то одно — url или data.`);
-        let bytes: Buffer | null;
-        try {
-          bytes = img.url
-            ? await fetchImage(img.url, { allowPrivate: opts.allowPrivateUrls })
-            : decodeImageData(img.data!);
-        } catch (err) {
-          if (err instanceof ImageFetchError) return fail(n + err.message);
-          throw err;
-        }
-        if (!bytes) return fail(`${n}data — не base64.`);
-        if (bytes.length > MAX_AGENT_IMAGE_BYTES) return fail(`${n}больше 15 МБ.`);
-        const info = imageInfo(bytes);
-        if (!info || !(IMAGE_TYPES as readonly string[]).includes(info.mime))
-          return fail(`${n}это не картинка PNG, JPEG, GIF или WebP.`);
-        const id = sha256(bytes);
-        await assets.put(id, bytes);
-        loaded.push({ id, info, alt: img.alt, width: img.width });
+        const r = await load(img.url ? { url: img.url } : { data: img.data! });
+        if (typeof r === 'string') return fail(n + r);
+        loaded.push({ ...r, alt: img.alt, width: img.width });
       }
+      return place(board, loaded, { layout, columns, gap, at, frame });
+    },
+  );
 
-      const doc = await store.get(board);
-      let target: FrameElement | null = null;
-      if (frame) {
-        const f = getElement(doc, frame);
-        if (!f || f.type !== 'frame') return fail(`Фрейма ${frame} на доске нет.`);
-        target = f;
-      }
-      const els = loaded.map((l) => {
-        const w = l.width ?? Math.min(l.info.width, DEFAULT_WIDTH);
-        const h = Math.round((w * l.info.height) / l.info.width);
-        return makeImage(
-          l.id,
-          { x: 0, y: 0, w, h },
-          { naturalW: l.info.width, naturalH: l.info.height, alt: l.alt, actor: agent },
-        );
-      });
-      const start = at ?? (target ? frameOrigin(target, listElements(doc)) : freeSpot(doc, 40));
-      const placed = layoutBoxes(els, {
-        layout: (layout ?? 'grid') as Layout,
-        columns,
-        gap,
-        origin: start,
-      });
-      const out = els.map((el, i) => ({ ...el, ...placed.positions[i]! }));
-      doc.transact(() => {
-        const map = elementsMap(doc);
-        if (target)
-          map.set(target.id, grown(target, start.x + placed.width, start.y + placed.height, agent));
-        for (const el of out) map.set(el.id, el);
-      }, origin);
-      return text(
-        JSON.stringify(
-          {
-            added: out.map((el) => ({
-              id: el.id,
-              x: Math.round(el.x),
-              y: Math.round(el.y),
-              w: Math.round(el.w),
-              h: Math.round(el.h),
-              natural: `${el.props.naturalW}×${el.props.naturalH}`,
-            })),
-            frame: target?.id ?? null,
-          },
-          null,
-          2,
-        ),
-      );
+  server.registerTool(
+    'add_image_file',
+    {
+      description:
+        'Положить на доску картинку-файл из чата: ту, что человек прислал, или ту, что ты ' +
+        'нарисовал (сгенерировал). Файл передаётся в поле file — ChatGPT подставляет его сам. ' +
+        'Картинка по ссылке из интернета — add_images с url.',
+      inputSchema: z.object({
+        board: boardId,
+        file: z
+          .object({
+            download_url: z.string(),
+            file_id: z.string(),
+            mime_type: z.string().optional(),
+            file_name: z.string().optional(),
+          })
+          .strict()
+          .describe('файл из чата'),
+        alt: z.string().max(500).optional().describe('что на картинке'),
+        width: z
+          .number()
+          .positive()
+          .max(4000)
+          .optional()
+          .describe('ширина на доске, по умолчанию 480'),
+        at: z.object({ x: z.number(), y: z.number() }).optional(),
+        frame: z.string().optional().describe('id фрейма, в который положить'),
+      }),
+      // ChatGPT (Apps SDK): это поле принимает файл из чата — загруженный или сгенерированный.
+      _meta: { 'openai/fileParams': ['file'] },
+    },
+    async ({ board, file, alt, width, at, frame }) => {
+      // download_url — временная ссылка-ключ: не пишем её ни в ответ, ни в журнал.
+      const r = await load({ url: file.download_url });
+      if (typeof r === 'string') return fail(r);
+      return place(board, [{ ...r, alt: alt ?? file.file_name, width }], { at, frame });
     },
   );
 

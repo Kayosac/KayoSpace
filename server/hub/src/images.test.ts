@@ -222,3 +222,86 @@ describe('картинки через MCP', () => {
     expect(listElements(await hub.store.get('pics'))).toEqual([]);
   });
 });
+
+describe('картинка-файл из чата ChatGPT (openai/fileParams)', () => {
+  let dir: string;
+  let hub: Hub;
+  let client: Client;
+  let files: Server;
+  let base: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'kayospace-files-'));
+    hub = await startHub({
+      dataDir: dir,
+      port: 0,
+      host: '127.0.0.1',
+      saveDelayMs: 10,
+      allowPrivateImageUrls: true,
+    });
+    client = new Client({ name: 'openai-mcp', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${hub.port}/mcp`)),
+    );
+    // Так ChatGPT отдаёт файл: временная ссылка на свой сервер.
+    files = createServer((req, res) => {
+      if (req.url === '/files/abc?sig=secret') {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(png(800, 400));
+      } else {
+        res.writeHead(403);
+        res.end();
+      }
+    });
+    await new Promise<void>((r) => files.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${(files.address() as AddressInfo).port}`;
+  });
+  afterEach(async () => {
+    await client.close();
+    await hub.close();
+    await new Promise<void>((r) => files.close(() => r()));
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  it('инструмент помечен для ChatGPT; файл скачивается и ложится на доску, ссылка не утекает', async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'add_image_file')!;
+    expect(tool._meta?.['openai/fileParams']).toEqual(['file']);
+    const schema = tool.inputSchema as unknown as {
+      properties: { file: { required: string[]; additionalProperties: boolean } };
+    };
+    expect(schema.properties.file.required.sort()).toEqual(['download_url', 'file_id']);
+    expect(schema.properties.file.additionalProperties).toBe(false);
+
+    await hub.store.get('pics');
+    const url = `${base}/files/abc?sig=secret`;
+    const r = (await client.callTool({
+      name: 'add_image_file',
+      arguments: {
+        board: 'pics',
+        file: {
+          download_url: url,
+          file_id: 'file-abc',
+          mime_type: 'image/png',
+          file_name: 'кот.png',
+        },
+      },
+    })) as { isError?: boolean; content: { text?: string }[] };
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0]!.text).not.toContain('secret');
+    const [img] = listElements(await hub.store.get('pics'));
+    expect(img?.type === 'image' && img.props).toMatchObject({
+      naturalW: 800,
+      naturalH: 400,
+      alt: 'кот.png',
+    });
+    expect([img!.w, img!.h]).toEqual([480, 240]);
+
+    const bad = (await client.callTool({
+      name: 'add_image_file',
+      arguments: { board: 'pics', file: { download_url: `${base}/expired`, file_id: 'x' } },
+    })) as { isError?: boolean; content: { text?: string }[] };
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0]!.text).toContain('403');
+    expect(bad.content[0]!.text).not.toContain(base);
+  });
+});

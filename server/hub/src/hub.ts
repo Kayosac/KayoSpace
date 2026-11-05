@@ -32,7 +32,7 @@ import { BoardStore } from './store';
 import { reapDeletedBoards } from './deleted-boards';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.7.0';
+export const HUB_VERSION = '0.7.1';
 
 export interface HubOptions {
   dataDir: string;
@@ -53,6 +53,8 @@ export interface HubOptions {
   publicUrl?: string;
   /** Как часто снимать резервную копию досок, мс (0 — не снимать). По умолчанию — 6 часов. */
   backupIntervalMs?: number;
+  /** Только для тестов: агенты могут класть картинки по ссылкам на этот компьютер. */
+  allowPrivateImageUrls?: boolean;
 }
 
 export interface Hub {
@@ -86,7 +88,11 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   /** MCP черновиков ИИ: по обработчику на задачу. */
   const draftMcp = new Map<string, ReturnType<typeof toNodeHandler>>();
 
-  const mcp = createMcp(store.live(), { assets, trash });
+  const mcp = createMcp(store.live(), {
+    assets,
+    trash,
+    allowPrivateImageUrls: opts.allowPrivateImageUrls,
+  });
   const mcpNode = toNodeHandler(mcp);
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
