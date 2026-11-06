@@ -550,6 +550,38 @@ describe('MCP: схемы для агентов', () => {
     const f = listElements(doc).find((e) => e.id === frame)!;
     expect(f.type === 'frame' && f.props.name).toBe('Процесс');
     expect(listElements(doc).every((e) => e.id === frame || e.z > f.z)).toBe(true);
+
+    // Подложка фрейма своим цветом — одна в обеих темах; null возвращает цвет темы.
+    const tinted = idOf(
+      await client.callTool({
+        name: 'add_frame',
+        arguments: {
+          board: 'flow',
+          name: 'Светлый',
+          x: 900,
+          y: 0,
+          w: 300,
+          h: 200,
+          fill: '#fff4c2',
+        },
+      }),
+    );
+    expect(listElements(doc).find((e) => e.id === tinted)!.style.fill).toBe('#fff4c2');
+    await client.callTool({
+      name: 'update_element',
+      arguments: { board: 'flow', id: frame, fill: '#1c1f25' },
+    });
+    expect(listElements(doc).find((e) => e.id === frame)!.style.fill).toBe('#1c1f25');
+    await client.callTool({
+      name: 'update_element',
+      arguments: { board: 'flow', id: tinted, fill: null },
+    });
+    expect(listElements(doc).find((e) => e.id === tinted)!.style.fill).toBeUndefined();
+    const noFill = await client.callTool({
+      name: 'update_element',
+      arguments: { board: 'flow', id: a, fill: '#ffffff' },
+    });
+    expect((noFill as { isError?: boolean }).isError).toBe(true);
     await client.close();
     await hub.store.flush(); // дождаться записи на диск, пока папка теста ещё на месте
   });

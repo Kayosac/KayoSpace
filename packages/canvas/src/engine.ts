@@ -121,6 +121,8 @@ export interface EngineState {
   fill: string | null;
   /** Выделены фигуры или стрелки: их цвет, заливка и толщина в экранных пикселях. */
   selectionShapes: { color: string | null; fill: string | null; size: number } | null;
+  /** Выделены фрейма — цвет подложки первого (null — по теме); не выделены — null. */
+  selectionFrames: { fill: string | null } | null;
   /** Вид пера: перо, маркер, выделитель. */
   penKind: StrokeTool;
   stickyColor: string;
@@ -677,6 +679,29 @@ export class CanvasEngine {
     this.fill = fill;
     if (this.tool !== 'shape') this.setTool('shape');
     this.emit();
+  }
+
+  /** Цвет подложки выделенных фреймов (null — цвет темы): не зависит от темы, текст на нём читается всегда. */
+  setFrameFill(fill: string | null): void {
+    if (this.tool !== 'select' || this.selectionFrameIds().length === 0) return;
+    this.restyleSelection((el) => {
+      if (el.type !== 'frame') return null;
+      const style = { ...el.style };
+      if (fill) style.fill = fill;
+      else delete style.fill;
+      return style;
+    });
+  }
+
+  private selectionFrameIds(): string[] {
+    return [...this.selection].filter((id) => this.scene.items.get(id)?.element.type === 'frame');
+  }
+
+  private selectionFrameStyle(): EngineState['selectionFrames'] {
+    if (this.tool !== 'select') return null;
+    const id = this.selectionFrameIds()[0];
+    const el = id ? this.scene.items.get(id)?.element : undefined;
+    return el ? { fill: el.style.fill ?? null } : null;
   }
 
   /** Стиль первой выделенной фигуры или стрелки — чтобы панель показала, что сейчас выбрано. */
@@ -2405,6 +2430,7 @@ export class CanvasEngine {
       shapeKind: this.shapeKind,
       fill: this.fill,
       selectionShapes: this.selectionShapeStyle(),
+      selectionFrames: this.selectionFrameStyle(),
       penKind: this.penKind,
       stickyColor: this.stickyColor,
       background: this.renderer.background,

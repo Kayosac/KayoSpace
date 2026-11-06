@@ -82,6 +82,11 @@ export function boardLink(board: string, element?: string): string {
   return `kayospace://board/${encodeURIComponent(board)}${element ? `?element=${encodeURIComponent(element)}` : ''}`;
 }
 
+const hexColor = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/)
+  .describe('цвет #rrggbb');
+
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 
 /** Распознанное рукописное — разделом в конце markdown доски. */
@@ -309,7 +314,8 @@ export function createMcp(
         description:
           'Добавить фрейм — именованную область (например, «Неделя 1», «Идеи»). Фрейм лежит под ' +
           'элементами; всё, что внутри него, человек переносит и экспортирует вместе с фреймом. ' +
-          'Удобно раскладывать схемы и группы стикеров по фреймам.',
+          'Удобно раскладывать схемы и группы стикеров по фреймам. fill — цвет подложки (#rrggbb), ' +
+          'одинаковый в светлой и тёмной теме; без него подложка меняется вместе с темой.',
         inputSchema: z.object({
           board: boardId,
           name: z.string().min(1).max(100),
@@ -317,11 +323,13 @@ export function createMcp(
           y: z.number(),
           w: z.number().positive(),
           h: z.number().positive(),
+          fill: hexColor.optional(),
         }),
       },
-      async ({ board, name, x, y, w, h }) => {
+      async ({ board, name, x, y, w, h, fill }) => {
         const doc = await store.get(board);
-        const el = makeFrame(name, { x, y, w, h }, { actor: who() });
+        const made = makeFrame(name, { x, y, w, h }, { actor: who() });
+        const el = fill ? { ...made, style: { ...made.style, fill } } : made;
         addElement(doc, el, MCP_ORIGIN);
         return text(`Фрейм добавлен: ${el.id}.`);
       },
@@ -374,7 +382,8 @@ export function createMcp(
       'update_element',
       {
         description:
-          'Изменить элемент: текст стикера или надписи (у фрейма — его название), положение (x, y), цвет. ' +
+          'Изменить элемент: текст стикера или надписи (у фрейма — его название), положение (x, y), цвет, ' +
+          'fill — подложка фрейма или заливка фигуры (null — убрать: у фрейма станет цвет темы). ' +
           'id — из read_board в формате json.',
         inputSchema: z.object({
           board: boardId,
@@ -383,9 +392,10 @@ export function createMcp(
           x: z.number().optional(),
           y: z.number().optional(),
           color: z.string().optional(),
+          fill: hexColor.nullable().optional(),
         }),
       },
-      async ({ board, id, text: content, x, y, color }) => {
+      async ({ board, id, text: content, x, y, color, fill }) => {
         if (!(await store.has(board))) return fail(`Доски «${board}» нет.`);
         const doc = await store.get(board);
         const el = getElement(doc, id);
@@ -405,6 +415,14 @@ export function createMcp(
           }
         }
         if (color !== undefined) next = { ...next, style: { ...next.style, color } };
+        if (fill !== undefined) {
+          if (next.type !== 'frame' && next.type !== 'shape')
+            return fail('Заливка есть только у фреймов и фигур.');
+          const style = { ...next.style };
+          if (fill) style.fill = fill;
+          else delete style.fill;
+          next = { ...next, style };
+        }
         if (content !== undefined && next.type === 'frame') {
           next = { ...next, props: { ...next.props, name: content.slice(0, 100) } };
         } else if (content !== undefined) {

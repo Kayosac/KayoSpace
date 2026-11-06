@@ -2550,3 +2550,54 @@ test('планшет: артефакт из Claude — на доску карт�
   await client.close();
   await page.context().close();
 });
+
+test('планшет: цвет фрейма касанием — в тёмной теме тёмный текст на нём читается', async ({
+  browser,
+}) => {
+  const board = `e2e-frame-color-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-frame-color');
+  await call('create_board', { board, name: 'Фреймы' });
+  await call('add_frame', { board, name: 'Идеи', x: 0, y: 0, w: 600, h: 360 });
+  await call('add_text', { board, text: 'Тёмный текст', x: 40, y: 40, color: '#1c1f26' });
+  const page = await tabletPage(browser, board);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const frameFill = async () =>
+    (
+      JSON.parse(await call('read_board', { board, format: 'json' })) as {
+        elements: { type: string; style: { fill?: string } }[];
+      }
+    ).elements.find((e) => e.type === 'frame')!.style.fill;
+  await expect.poll(() => elements(page)).toBe(2);
+  await page.evaluate(() =>
+    (window.__kayospace!.engine as unknown as { zoomToFit(): void }).zoomToFit(),
+  );
+
+  // Без выделенного фрейма кнопки нет.
+  await expect(page.getByTestId('frame-color-button')).toHaveCount(0);
+  await page.getByRole('radio', { name: 'Выделение' }).tap();
+  // На планшете выделяют пером; здесь — выделяем фрейм напрямую, дальше всё касаниями.
+  await page.evaluate(() => {
+    const e = window.__kayospace!.engine as unknown as {
+      select(ids: string[]): void;
+      scene: { items: Map<string, { element: { type: string } }> };
+    };
+    e.select([...e.scene.items].filter(([, v]) => v.element.type === 'frame').map(([k]) => k));
+  });
+  await expect(page.getByTestId('frame-color-button')).toBeVisible();
+  await page.getByTestId('frame-color-button').tap();
+  const pop = page.getByTestId('frame-color-popover');
+  await expect(pop.getByRole('radio', { name: 'По теме' })).toHaveAttribute('aria-checked', 'true');
+  await pop.getByRole('radio', { name: 'Белый' }).tap();
+  await expect(pop).toHaveCount(0);
+  await expect.poll(frameFill).toBe('#ffffff');
+  await page.screenshot({ path: shot('frame-color-dark.png') });
+
+  // «По теме» — снова как было; отменяется одним шагом.
+  await page.getByTestId('frame-color-button').tap();
+  await page.getByTestId('frame-color-popover').getByRole('radio', { name: 'По теме' }).tap();
+  await expect.poll(frameFill).toBeUndefined();
+  await page.locator('.toolbar').getByRole('button', { name: 'Отменить', exact: true }).tap();
+  await expect.poll(frameFill).toBe('#ffffff');
+  await client.close();
+  await page.context().close();
+});
