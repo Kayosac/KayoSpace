@@ -21,7 +21,7 @@ export interface Actor {
 
 export interface Style {
   color?: string;
-  /** Заливка замкнутой фигуры (решение 0022); нет — прозрачная. */
+  /** Заливка замкнутой фигуры (решение 0022; нет — прозрачная) или подложка фрейма (нет — цвет темы). */
   fill?: string;
   size?: number;
   opacity?: number;

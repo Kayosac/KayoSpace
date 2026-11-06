@@ -134,7 +134,7 @@ function elementSvg(
     case 'frame': {
       const title = el.style.size ?? 14;
       return (
-        `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="8" fill="#ffffff" stroke="rgba(28,31,38,0.2)" stroke-width="1.5"/>` +
+        `<rect x="${n(el.x)}" y="${n(el.y)}" width="${n(el.w)}" height="${n(el.h)}" rx="8" fill="${color(el.style.fill, '#ffffff')}" stroke="rgba(28,31,38,0.2)" stroke-width="1.5"/>` +
         textBlock([el.props.name], el.x + 2, el.y - title * 1.6, title, '#555a66', { weight: 600 })
       );
     }

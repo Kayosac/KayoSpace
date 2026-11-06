@@ -28,6 +28,7 @@ export function ColorPicker({
   recent,
   pastel = false,
   transparentNull = false,
+  nullColor = 'var(--canvas-ink)',
   onPick,
 }: {
   value: string | null;
@@ -36,6 +37,8 @@ export function ColorPicker({
   pastel?: boolean;
   /** null — «Прозрачный» (заливка фигур, решение 0022), а не цвет чернил. */
   transparentNull?: boolean;
+  /** Чем показать null, если он не «Прозрачный»: по умолчанию — чернила темы. */
+  nullColor?: string;
   /** custom — свой цвет из круга или поля (попадает в недавние); close — выбор окончен. */
   onPick: (color: string | null, opts: { custom: boolean; close: boolean }) => void;
 }) {
@@ -110,9 +113,7 @@ export function ColorPicker({
           >
             <span
               className={v === null && transparentNull ? 'transparent' : undefined}
-              style={
-                v === null && transparentNull ? undefined : { background: v ?? 'var(--canvas-ink)' }
-              }
+              style={v === null && transparentNull ? undefined : { background: v ?? nullColor }}
             />
           </button>
         ))}

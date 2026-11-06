@@ -1151,10 +1151,13 @@ export class Renderer {
     ctx.stroke();
   }
 
-  /** Фрейм: светлая подложка, тонкий край (1 пиксель экрана) и название над верхней стороной. */
+  /**
+   * Фрейм: подложка — свой цвет (`style.fill`) или цвет темы, тонкий край (1 пиксель экрана)
+   * и название над верхней стороной.
+   */
   private drawFrame(el: FrameElement, zoom: number): void {
     const ctx = this.ctx;
-    ctx.fillStyle = this.colors.frame;
+    ctx.fillStyle = el.style.fill ?? this.colors.frame;
     ctx.fillRect(el.x, el.y, el.w, el.h);
     ctx.strokeStyle = this.colors.frameLine;
     ctx.lineWidth = 1 / zoom;
