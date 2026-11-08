@@ -124,6 +124,18 @@ const FILL_COLORS: { value: string | null; name: string }[] = [
   { value: '#ffffff', name: 'Белый' },
 ];
 
+/** Подложка фрейма: «По теме» меняется со светлой и тёмной темой, остальные — одни в обеих. */
+const FRAME_COLORS: { value: string | null; name: string }[] = [
+  { value: null, name: 'По теме' },
+  { value: '#ffffff', name: 'Белый' },
+  { value: '#eef0f3', name: 'Светло-серый' },
+  { value: '#fff4c2', name: 'Жёлтый' },
+  { value: '#ffe1e8', name: 'Розовый' },
+  { value: '#ddf3e5', name: 'Мятный' },
+  { value: '#deebff', name: 'Голубой' },
+  { value: '#1c1f25', name: 'Тёмный' },
+];
+
 const STICKY_NAMES = ['Жёлтый', 'Розовый', 'Мятный', 'Голубой', 'Лавандовый', 'Персиковый'];
 
 /** Можно ли прочитать системный буфер кнопкой (без клавиатуры). */
@@ -173,7 +185,11 @@ export function Toolbar({
   // Цвет и толщина «чернил» относятся к перу, тексту и фигурам.
   const inkTool = tool === 'pen' || tool === 'text' || tool === 'shape';
   const showSizes = !stickyPalette && tool !== 'text' && tool !== 'frame';
-  const [open, setOpen] = useState<'color' | 'size' | 'doc' | 'shapes' | 'fill' | null>(null);
+  const [open, setOpen] = useState<'color' | 'size' | 'doc' | 'shapes' | 'fill' | 'frame' | null>(
+    null,
+  );
+  const frameBtn = useRef<HTMLButtonElement>(null);
+  const selFrames = tool === 'select' ? state.selectionFrames : null;
   const shapeBtn = useRef<HTMLButtonElement>(null);
   const fillBtn = useRef<HTMLButtonElement>(null);
   // Выделены фигуры — цвет контура, заливка и толщина относятся к ним (решение 0022).
@@ -329,6 +345,23 @@ export function Toolbar({
             />
           </button>
         )}
+        {selFrames && (
+          <button
+            ref={frameBtn}
+            className="tool picker-btn"
+            aria-label="Цвет фрейма"
+            title="Цвет фрейма"
+            aria-haspopup="dialog"
+            aria-expanded={open === 'frame'}
+            data-testid="frame-color-button"
+            onClick={() => setOpen((o) => (o === 'frame' ? null : 'frame'))}
+          >
+            <span
+              className="current-swatch filled"
+              style={{ background: selFrames.fill ?? 'var(--canvas-frame)' }}
+            />
+          </button>
+        )}
         {showSizes && (
           <button
             ref={sizeBtn}
@@ -408,6 +441,21 @@ export function Toolbar({
             transparentNull
             onPick={(c, o) => {
               engine.setFill(c);
+              if (o.custom && c) onRecentColor(c);
+              if (o.close) close();
+            }}
+          />
+        </Popover>
+      )}
+      {open === 'frame' && selFrames && (
+        <Popover anchor={frameBtn} label="Цвет фрейма" onClose={close} testId="frame-color-popover">
+          <ColorPicker
+            value={selFrames.fill}
+            presets={FRAME_COLORS}
+            recent={recentColors}
+            nullColor="var(--canvas-frame)"
+            onPick={(c, o) => {
+              engine.setFrameFill(c);
               if (o.custom && c) onRecentColor(c);
               if (o.close) close();
             }}
