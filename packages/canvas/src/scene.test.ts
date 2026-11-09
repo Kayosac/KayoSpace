@@ -116,6 +116,34 @@ describe('стрелки в сцене', () => {
     expect(dirty).toBeGreaterThanOrEqual(4); // стикер (было/стало) + стрелка (было/стало)
     expect(scene.pick(500, 100, 3)).toBe(arrow.id);
   });
+  it('элемент с несколькими стрелками сдвинули — сцена не зависает (доска Hakaton)', () => {
+    const doc = createBoardDoc();
+    const hub = makeSticky('центр', { x: 0, y: 0, actor: me });
+    const others = [1, 2, 3].map((i) => makeSticky(`${i}`, { x: 400 * i, y: 300, actor: me }));
+    addElement(doc, hub);
+    const arrows = others.map((o) => {
+      addElement(doc, o);
+      const arrow = makeArrow({ x: 0, y: 0 }, { x: 1, y: 1 }, { size: 2, actor: me });
+      arrow.props.start = { kind: 'element', id: hub.id };
+      arrow.props.end = { kind: 'element', id: o.id };
+      addElement(doc, arrow);
+      return arrow;
+    });
+    const scene = new Scene(doc);
+    let calls = 0;
+    scene.onChange(() => calls++);
+    // Раньше обход живого набора стрелок крутился бесконечно, если их у элемента две и больше.
+    updateElement(doc, hub.id, { x: -500 }, me);
+    expect(calls).toBe(1);
+    for (const a of arrows) expect(scene.items.get(a.id)!.ends![0].x).toBeLessThan(-200);
+    // Сдвинули оба конца одной транзакцией — стрелку пересчитали один раз, и ещё раз сдвиг работает.
+    doc.transact(() => {
+      updateElement(doc, hub.id, { y: 900 }, me);
+      updateElement(doc, others[0]!.id, { y: 900 }, me);
+    });
+    expect(calls).toBe(2);
+    expect(scene.items.get(arrows[0]!.id)!.ends![0].y).toBeCloseTo(1000, 0);
+  });
 });
 
 describe('рисунок на стикере', () => {

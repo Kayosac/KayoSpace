@@ -130,9 +130,14 @@ export class Scene {
         else if (old) this.remove(id);
       }
       // Элемент сдвинули или удалили — привязанные к нему стрелки тянутся следом.
+      // Набор стрелок копируем: upsert стрелки заново вписывает её в dependents, и обход живого
+      // Set с двумя и больше стрелками никогда не кончался (доска зависала намертво).
+      // Каждую стрелку пересчитываем один раз, даже если сдвинулись оба её конца.
+      const redrawn = new Set<string>();
       for (const id of changed) {
-        for (const arrowId of this.dependents.get(id) ?? []) {
-          if (changed.has(arrowId)) continue;
+        for (const arrowId of [...(this.dependents.get(id) ?? [])]) {
+          if (changed.has(arrowId) || redrawn.has(arrowId)) continue;
+          redrawn.add(arrowId);
           const old = this.items.get(arrowId);
           const el = getElement(doc, arrowId);
           if (!old || !el) continue;
