@@ -51,8 +51,11 @@ export function SelectionMenu({
   onAi,
   onAiPrompt,
   onExport,
+  onCopy,
 }: {
   engine: CanvasEngine;
+  /** «Копировать»: картинку — файлом в системный буфер, остальное — элементами Kayospace. */
+  onCopy: () => void;
   state: EngineState;
   /** null — ИИ доступен; строка — почему нет. */
   ai: string | null;
@@ -184,7 +187,7 @@ export function SelectionMenu({
         <DuplicateIcon />
         <span>Дублировать</span>
       </button>
-      <button title="Копировать (Ctrl/⌘ C)" onClick={() => engine.copySelection()}>
+      <button title="Копировать (Ctrl/⌘ C)" onClick={onCopy} data-testid="copy-selection">
         <CopyIcon />
         <span>Копировать</span>
       </button>

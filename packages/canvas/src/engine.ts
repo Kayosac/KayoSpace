@@ -47,6 +47,7 @@ import {
   decodeStroke,
   type Actor,
   type CanvasElement,
+  type ImageElement,
   type StrokePoint,
   type StrokeTool,
 } from '@kayospace/model';
@@ -835,6 +836,16 @@ export class CanvasEngine {
     clipboardText = texts.length ? texts.join('\n\n') : `Kayospace: элементов — ${els.length}`;
     this.emit();
     return clipboardText;
+  }
+
+  /**
+   * Выделена ровно одна картинка — её (медиафайл копируется в системный буфер самим файлом);
+   * иначе null — копируем как элементы Kayospace.
+   */
+  selectedImage(): ImageElement | null {
+    const els = this.selectedElements(true);
+    const el = els.length === 1 ? els[0]! : null;
+    return el?.type === 'image' ? el : null;
   }
 
   /** Текст в системном буфере — это наши скопированные элементы? */
