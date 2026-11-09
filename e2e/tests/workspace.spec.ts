@@ -2601,3 +2601,97 @@ test('планшет: цвет фрейма касанием — в тёмной
   await client.close();
   await page.context().close();
 });
+
+test('картинка с доски — в системный буфер файлом: Ctrl/⌘ C и «Копировать»; остальное — как раньше', async ({
+  browser,
+}) => {
+  const board = `e2e-copy-media-${Date.now()}`;
+  const { client, call } = await mcpClient('e2e-copy-media');
+  await call('create_board', { board, name: 'Медиа' });
+  const page = await openDevice(browser, { ...synced, board });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  // JPEG — в буфер попадёт PNG (другого буфер не принимает).
+  const jpeg = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 320;
+    c.height = 200;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#e5484d';
+    ctx.fillRect(0, 0, 320, 200);
+    return c.toDataURL('image/jpeg');
+  });
+  await call('add_images', { board, images: [{ data: jpeg, alt: 'Красный' }] });
+  await call('add_sticky', { board, text: 'Просто стикер', x: 900, y: 0 });
+  await expect.poll(() => elements(page)).toBe(2);
+  const idOf = (type: string) =>
+    page.evaluate(
+      (t) =>
+        [
+          ...(
+            window.__kayospace!.engine as unknown as {
+              scene: { items: Map<string, { element: { type: string } }> };
+            }
+          ).scene.items,
+        ].find(([, v]) => v.element.type === t)![0],
+      type,
+    );
+  const select = (id: string) =>
+    page.evaluate(
+      (i) => (window.__kayospace!.engine as unknown as { select(ids: string[]): void }).select([i]),
+      id,
+    );
+  const clip = () =>
+    page.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const item = items[0];
+      if (!item) return { types: [] as readonly string[] };
+      if (item.types.includes('image/png')) {
+        const bmp = await createImageBitmap(await item.getType('image/png'));
+        return { image: `${bmp.width}x${bmp.height}`, types: item.types };
+      }
+      if (item.types.includes('text/plain'))
+        return { text: await (await item.getType('text/plain')).text(), types: item.types };
+      return { types: item.types };
+    });
+  const imageId = await idOf('image');
+
+  // Ctrl/⌘ C на картинке — в буфере сама картинка.
+  await select(imageId);
+  await page.keyboard.press('ControlOrMeta+c');
+  await expect.poll(clip).toEqual({ image: '320x200', types: ['image/png'] });
+  await expect(page.getByText('Картинка в буфере обмена')).toBeVisible();
+
+  // Вставка здесь же — тот же элемент (размер и подпись), а не новая картинка на пол-экрана.
+  await page.mouse.move(640, 600);
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect.poll(() => elements(page)).toBe(3);
+  const images = () =>
+    page.evaluate(() =>
+      [
+        ...(
+          window.__kayospace!.engine as unknown as {
+            scene: {
+              items: Map<string, { element: { type: string; w: number; props: { alt?: string } } }>;
+            };
+          }
+        ).scene.items.values(),
+      ]
+        .filter((i) => i.element.type === 'image')
+        .map((i) => `${Math.round(i.element.w)} ${i.element.props.alt}`),
+    );
+  const [first, second] = await images();
+  expect(second).toBe(first);
+
+  // Стикер — как раньше: в системном буфере его текст.
+  await select(await idOf('sticky'));
+  await page.keyboard.press('ControlOrMeta+c');
+  await expect.poll(clip).toEqual({ text: 'Просто стикер', types: ['text/plain'] });
+
+  // Кнопка «Копировать» на картинке — тоже в системный буфер.
+  await page.evaluate(() => navigator.clipboard.writeText('что-то другое'));
+  await select(imageId);
+  await page.getByTestId('copy-selection').click();
+  await expect.poll(clip).toEqual({ image: '320x200', types: ['image/png'] });
+  await client.close();
+  await page.context().close();
+});

@@ -33,6 +33,7 @@ import {
 import { TableView } from './TableView';
 import { ArtifactView } from './ArtifactView';
 import { onNotify } from './notify';
+import { forgetMedia, isOwnMedia, writeImage } from './media-clipboard';
 import { importMarkdown, isMarkdown, markdownFiles, markdownOf } from './md-import';
 import { DocOverlay, DocMenu, useDocCards, type DocSummary } from './DocOverlay';
 import { useHubFeatures } from './voice';
@@ -740,6 +741,28 @@ export function App() {
     [insertImages, importPdf, engine, hubForPanels, showToast, refreshDocCards],
   );
 
+  /**
+   * Скопировать выделенное: картинку — самим файлом в системный буфер (и элементом — для вставки
+   * здесь же), остальное — элементами Kayospace, текст — для других программ (через setText).
+   */
+  const copySelected = useCallback(
+    (setText: ((text: string) => void) | null): void => {
+      if (!engine) return;
+      const image = engine.selectedImage();
+      const text = engine.copySelection();
+      if (image) {
+        writeImage(image, (id) => assets.load(id)).then(
+          () => showToast('Картинка в буфере обмена', 2000),
+          () => showToast('Картинку не получилось положить в буфер обмена', 3000),
+        );
+        return;
+      }
+      forgetMedia();
+      if (text && setText) setText(text);
+    },
+    [engine, showToast],
+  );
+
   // Буфер обмена (Ctrl/⌘ C, X, V): элементы доски, текст и картинки из других программ.
   useEffect(() => {
     const typing = (t: EventTarget | null): boolean => {
@@ -749,8 +772,7 @@ export function App() {
     const onCopy = (e: ClipboardEvent, cut: boolean): void => {
       if (!engine || typing(e.target) || engine.getState().selected === 0) return;
       e.preventDefault();
-      const text = engine.copySelection();
-      if (text) e.clipboardData?.setData('text/plain', text);
+      copySelected((text) => e.clipboardData?.setData('text/plain', text));
       if (cut) engine.deleteSelection();
     };
     const copy = (e: ClipboardEvent): void => onCopy(e, false);
@@ -760,7 +782,12 @@ export function App() {
       e.preventDefault();
       const files = [...imageFiles(e.clipboardData?.files), ...pdfFiles(e.clipboardData?.files)];
       if (files.length > 0) {
-        void insertFiles(files);
+        void (async () => {
+          // Картинка, которую скопировали с этой же доски, — вставляем элемент (размер, подпись).
+          if (files.length === 1 && engine.getState().canPaste && (await isOwnMedia(files[0]!)))
+            engine.paste();
+          else await insertFiles(files);
+        })();
         return;
       }
       const text = e.clipboardData?.getData('text/plain') ?? '';
@@ -779,7 +806,7 @@ export function App() {
       window.removeEventListener('cut', cut);
       window.removeEventListener('paste', onPaste);
     };
-  }, [engine, insertFiles]);
+  }, [engine, insertFiles, copySelected]);
 
   // Переход к найденному на другой доске: элемент показываем, когда доска откроется
   // (или придёт с хаба, если на этом устройстве её ещё не было).
@@ -899,7 +926,9 @@ export function App() {
         const type = item.types.find((t) => t.startsWith('image/') && t !== 'image/svg+xml');
         if (type) {
           const blob = await item.getType(type);
-          await insertImages([new File([blob], 'Картинка из буфера', { type })]);
+          const file = new File([blob], 'Картинка из буфера', { type });
+          if (engine.getState().canPaste && (await isOwnMedia(file))) engine.paste();
+          else await insertImages([file]);
           return;
         }
       }
@@ -992,6 +1021,7 @@ export function App() {
           onAi={(a) => void runAi(a)}
           onAiPrompt={() => setAiPrompt(true)}
           onExport={(t) => void exportTo(t)}
+          onCopy={() => copySelected(null)}
         />
       )}
       {aiState && (
