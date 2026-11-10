@@ -26,13 +26,25 @@ const escapeText = (t: string): string =>
  * куска: «**жирный [ссылка](…)**» остаётся одним жирным отрезком со ссылкой внутри.
  */
 function inlineToMd(nodes: readonly JSONContent[] = [], opts: { cell?: boolean } = {}): string {
-  const ORDER = ['link', 'bold', 'italic', 'strike'];
+  const ORDER = ['link', 'bold', 'italic', 'strike', 'underline'];
   const open: Mark[] = [];
   let out = '';
   const opener = (m: Mark): string =>
-    m.type === 'link' ? '[' : m.type === 'bold' ? '**' : m.type === 'italic' ? '*' : '~~';
+    m.type === 'link'
+      ? '['
+      : m.type === 'bold'
+        ? '**'
+        : m.type === 'italic'
+          ? '*'
+          : m.type === 'underline'
+            ? '<u>'
+            : '~~';
   const closer = (m: Mark): string =>
-    m.type === 'link' ? `](${String(m.attrs?.href ?? '')})` : opener(m);
+    m.type === 'link'
+      ? `](${String(m.attrs?.href ?? '')})`
+      : m.type === 'underline'
+        ? '</u>'
+        : opener(m);
   const same = (a: Mark, b: Mark): boolean =>
     a.type === b.type && (a.type !== 'link' || a.attrs?.href === b.attrs?.href);
   const closeFrom = (k: number): void => {
@@ -176,7 +188,7 @@ export function pageToMarkdown(doc: JSONContent): string {
 // ---------- из markdown ----------
 
 const INLINE_RE =
-  /(\\([\\*_`~[\]|]))|(`([^`]+)`)|(\*\*([^*]+?)\*\*|(?<![\p{L}\p{N}])__([^_]+?)__(?![\p{L}\p{N}]))|(~~([^~]+?)~~)|(\*([^*\s][^*]*?)\*|(?<![\p{L}\p{N}])_([^_\s][^_]*?)_(?![\p{L}\p{N}]))|(!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\))|(\[([^\]]+)\]\(([^)\s]+)\))|(<br\s*\/?>)/gu;
+  /(\\([\\*_`~[\]|]))|(`([^`]+)`)|(\*\*([^*]+?)\*\*|(?<![\p{L}\p{N}])__([^_]+?)__(?![\p{L}\p{N}]))|(~~([^~]+?)~~)|(\*([^*\s][^*]*?)\*|(?<![\p{L}\p{N}])_([^_\s][^_]*?)_(?![\p{L}\p{N}]))|(!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\))|(\[([^\]]+)\]\(([^)\s]+)\))|(<br\s*\/?>)|(<u>(.+?)<\/u>)/gu;
 
 /** Строка с разметкой → текстовые узлы с марками (марки вкладываются: **[ссылка](…)** и т. п.). */
 export function inlineFromMd(src: string, marks: Mark[] = []): JSONContent[] {
@@ -207,6 +219,7 @@ export function inlineFromMd(src: string, marks: Mark[] = []): JSONContent[] {
         out.push(...inlineFromMd(m[17]!, [...marks, { type: 'link', attrs: { href: m[18] } }]));
       else push(m[0]);
     } else if (m[19]) out.push({ type: 'hardBreak' });
+    else if (m[20]) out.push(...inlineFromMd(m[21]!, [...marks, { type: 'underline' }]));
   }
   push(src.slice(last));
   return out;

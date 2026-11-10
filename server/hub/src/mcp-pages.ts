@@ -148,13 +148,21 @@ export function registerPageTools(
         'Создать или изменить документ. mode "append" (по умолчанию) — дописать в конец, ' +
         '"section" — заменить один раздел: section — текст его заголовка, markdown — новое тело раздела ' +
         '(начни с заголовка, чтобы переименовать; раздела нет — допишется в конец), ' +
+        '"edit" — точечная правка: find — кусок текста документа в markdown, как его вернул read_page ' +
+        '(должен встречаться ровно один раз), markdown — чем заменить (пусто — удалить); ' +
         '"replace" — заменить содержимое целиком (меняется только отличающееся; используй, только когда правишь сам текст — сначала read_page). ' +
         'Новый документ: дай id «pg_…» и name. ' +
         PAGE_SYNTAX,
       inputSchema: z.object({
         page: pageId,
         markdown: z.string().max(200_000),
-        mode: z.enum(['append', 'replace', 'section']).optional(),
+        mode: z.enum(['append', 'replace', 'section', 'edit']).optional(),
+        find: z
+          .string()
+          .min(1)
+          .max(20_000)
+          .optional()
+          .describe('для mode "edit": что заменить (markdown из read_page)'),
         section: z
           .string()
           .min(1)
@@ -165,11 +173,15 @@ export function registerPageTools(
         project: z.string().optional().describe('id или название проекта для нового документа'),
       }),
     },
-    async ({ page, markdown, mode, section, name, project }) => {
+    async ({ page, markdown, mode, section, find, name, project }) => {
       const existed = await store.has(page);
       if (!existed && !name) return fail('Новому документу нужно название (name).');
       if (mode === 'section' && !section)
         return fail('Для mode "section" нужен section — заголовок раздела.');
+      if (mode === 'edit') {
+        if (!find) return fail('Для mode "edit" нужен find — что заменить.');
+        if (!existed) return fail(`Документа «${page}» нет — точечно править нечего.`);
+      }
       let pid: string | undefined;
       if (project && !existed) {
         const ws = await store.get(WORKSPACE_ID);
@@ -181,7 +193,25 @@ export function registerPageTools(
       const doc = await store.get(page);
       if (name) setBoardName(doc, name, origin);
       let note = '';
-      if (mode === 'section') {
+      if (mode === 'edit') {
+        // Markdown документа без потерь (решение 0023): правим текст и записываем обратно —
+        // меняется только отличающееся.
+        const current = pageMarkdown(doc);
+        const at = current.indexOf(find!);
+        if (at < 0)
+          return fail(
+            'Такого куска в документе нет. Возьми его точно из read_page (это markdown).',
+          );
+        if (current.indexOf(find!, at + 1) >= 0)
+          return fail('Этот кусок встречается несколько раз — добавь в find соседний текст.');
+        writePage(
+          doc,
+          current.slice(0, at) + markdown + current.slice(at + find!.length),
+          'replace',
+          origin,
+        );
+        note = ' Кусок заменён.';
+      } else if (mode === 'section') {
         const found = writeSection(doc, section!, markdown, origin);
         note = found
           ? ` Раздел «${section}» заменён.`
