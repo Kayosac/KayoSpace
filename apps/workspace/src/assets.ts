@@ -148,3 +148,25 @@ export function imageFiles(list: FileList | DataTransferItemList | null | undefi
   }
   return out;
 }
+
+/** Картинки — одно хранилище на всё приложение (общее для досок и таблиц). */
+export const assets = new AssetStore();
+
+/** Адреса картинок для <img>: один на файл, пока приложение открыто. */
+const urls = new Map<string, Promise<string | null>>();
+
+export function assetUrl(assetId: string): Promise<string | null> {
+  let p = urls.get(assetId);
+  if (!p) {
+    p = assets
+      .load(assetId)
+      .then((b) => (b ? URL.createObjectURL(b) : null))
+      .catch(() => null);
+    urls.set(assetId, p);
+    // Не нашлось (нет связи) — в другой раз попробуем снова.
+    void p.then((u) => {
+      if (!u) urls.delete(assetId);
+    });
+  }
+  return p;
+}

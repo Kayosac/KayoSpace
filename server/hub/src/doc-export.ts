@@ -30,6 +30,7 @@ import {
   embedLoader,
   pagePages,
   svgPage,
+  tableImages,
   tablePages,
   thumbnailPng,
 } from './doc-render';
@@ -68,7 +69,7 @@ export class DocThumbs {
       const art = kind === 'artifact' ? readArtifact(doc) : null;
       const first =
         kind === 'table'
-          ? tablePages(doc, 1, true)[0]
+          ? tablePages(doc, 1, true, await tableImages(doc, this.assets))[0]
           : kind === 'artifact'
             ? artifactPages(doc, 1, true)[0]
             : (await pagePages(doc, embedLoader(this.store, this.assets), 1, true))[0];
@@ -104,7 +105,7 @@ export async function exportPdf(
   const title = getBoardName(doc) ?? id;
   const kind = docKind(id);
   let svgs: string[];
-  if (kind === 'table') svgs = tablePages(doc);
+  if (kind === 'table') svgs = tablePages(doc, 1, false, await tableImages(doc, assets));
   else if (kind === 'artifact') {
     svgs = artifactPages(doc);
     if (!svgs.length) return null;

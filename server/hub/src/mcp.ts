@@ -149,7 +149,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.8.0' },
+      { name: 'kayospace', version: '0.9.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,
@@ -472,9 +472,20 @@ export function createMcp(
     // Документы (решение 0020) — тоже только у настоящих досок.
     // Документы и таблицы; в черновике ИИ — только чтение (решение 0022).
     registerPageTools(server, store, MCP_ORIGIN, who, !opts.trash);
-    registerTableTools(server, store, MCP_ORIGIN, !opts.trash);
-    registerArtifactTools(server, store, MCP_ORIGIN, who, !opts.trash);
     const assets = opts.assets;
+    registerTableTools(
+      server,
+      store,
+      MCP_ORIGIN,
+      !opts.trash,
+      assets?.put
+        ? {
+            assets: { get: (id) => assets.get(id), put: (id, d) => assets.put!(id, d) },
+            allowPrivateUrls: opts.allowPrivateImageUrls,
+          }
+        : null,
+    );
+    registerArtifactTools(server, store, MCP_ORIGIN, who, !opts.trash);
     // Картинки — и у настоящих досок, и у черновиков ИИ в приложении (файлы — в общем хранилище хаба).
     if (assets?.put)
       registerImageTools(
