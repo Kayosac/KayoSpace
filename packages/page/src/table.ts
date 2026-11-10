@@ -54,8 +54,23 @@ export interface CellImage {
   asset: string;
   w: number;
   h: number;
+  /** Описание (не показывается): для агентов и поиска. */
   alt?: string;
+  /** Подпись под картинкой (решение 0026), например «80 монет / Обычный». */
+  caption?: string;
+  /** Высота картинки на экране в пикселях; нет — вписывается в высоту строки. */
+  size?: number;
 }
+
+/** Размер картинки в ячейке: в разумных пределах. */
+export const IMAGE_MIN_SIZE = 16;
+export const IMAGE_MAX_SIZE = 512;
+export const clampImageSize = (s: number): number =>
+  Math.round(Math.min(IMAGE_MAX_SIZE, Math.max(IMAGE_MIN_SIZE, s)));
+
+/** Высота картинки на экране: своя или по высоте строки. */
+export const imageDisplayHeight = (img: CellImage, rowHeight: number | undefined): number =>
+  img.size ?? cellImageHeight(rowHeight);
 
 /** Высота строки: не ниже обычной и не выше разумного (картинки вписываются в неё). */
 export const ROW_MIN_HEIGHT = 40;
@@ -82,6 +97,20 @@ const validImage = (x: unknown): x is CellImage =>
   /^[0-9a-f]{64}$/.test((x as CellImage).asset) &&
   (x as CellImage).w > 0 &&
   (x as CellImage).h > 0;
+
+/** Картинка ячейки в хранимом виде: целые размеры, пустое — убрано. */
+function normalImage(i: CellImage): CellImage {
+  const caption = typeof i.caption === 'string' ? i.caption.trim().slice(0, 300) : '';
+  const size = typeof i.size === 'number' && Number.isFinite(i.size) ? clampImageSize(i.size) : 0;
+  return {
+    asset: i.asset,
+    w: Math.round(i.w),
+    h: Math.round(i.h),
+    ...(i.alt ? { alt: i.alt } : {}),
+    ...(caption ? { caption } : {}),
+    ...(size ? { size } : {}),
+  };
+}
 
 /** Высота строки в допустимых пределах (целые пиксели). */
 export const clampRowHeight = (h: number): number =>
@@ -196,7 +225,7 @@ export function readTable(doc: Y.Doc): TableData {
       if (v !== undefined && v !== null) cells[c.id] = v as Cell;
       const imgs = m.get(imgKey(c.id));
       if (Array.isArray(imgs)) {
-        const ok = imgs.filter(validImage);
+        const ok = imgs.filter(validImage).map(normalImage);
         if (ok.length) (images ??= {})[c.id] = ok;
       }
     }
@@ -388,12 +417,7 @@ export function setCellImages(
 ): boolean {
   const found = rowMap(doc, rowId);
   if (!found || !columnMap(doc, colId)) return false;
-  const list = images.filter(validImage).map((i) => ({
-    asset: i.asset,
-    w: Math.round(i.w),
-    h: Math.round(i.h),
-    ...(i.alt ? { alt: i.alt } : {}),
-  }));
+  const list = images.filter(validImage).map(normalImage);
   doc.transact(() => {
     if (list.length) found.m.set(imgKey(colId), list);
     else found.m.delete(imgKey(colId));
@@ -532,8 +556,12 @@ export function tableToMarkdown(doc: Y.Doc): string {
   const sep = `| ${columns.map(() => '---').join(' | ')} |`;
   const cell = (r: Row, c: Column): string => {
     const text = cellText(c, r.cells[c.id]);
-    const n = r.images?.[c.id]?.length ?? 0;
-    const pics = n ? `[картинок: ${n}]` : '';
+    const imgs = r.images?.[c.id] ?? [];
+    const pics = imgs.some((i) => i.caption)
+      ? imgs.map((i) => (i.caption ? `[🖼 ${i.caption}]` : '[🖼]')).join(' ')
+      : imgs.length
+        ? `[картинок: ${imgs.length}]`
+        : '';
     return [text, pics].filter(Boolean).join(' ');
   };
   const body = rows.map((r) => `| ${columns.map((c) => esc(cell(r, c))).join(' | ')} |`);

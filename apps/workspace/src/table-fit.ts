@@ -7,6 +7,7 @@
 import {
   CELL_PAD,
   ROW_MIN_HEIGHT,
+  imageDisplayHeight,
   cellText,
   clampColWidth,
   type Column,
@@ -37,13 +38,16 @@ export type Measure = (text: string, kind: 'cell' | 'head') => number;
 /** Отступы ячейки и шапки (как в стилях .kt-input, .kt-head). */
 const CELL_X = 20;
 const HEAD_X = 20 + 28 + 18; // поля, значок типа, место под стрелку сортировки
-const IMG_GAP = 4;
+const TILE_GAP = 6;
 
-/** Высота строки под содержимое: текст — обычная; с картинками — чтобы они были видны, но в меру. */
+/**
+ * Высота строки под содержимое: текст — обычная; картинки «по строке» — чтобы были видны, но в меру.
+ * Картинки своего размера (решение 0026) строку растят сами — задавать высоту им не нужно.
+ */
 export function fitRowHeight(r: Row): number | null {
   let tallest = 0;
   for (const list of Object.values(r.images ?? {}))
-    for (const img of list) tallest = Math.max(tallest, img.h);
+    for (const img of list) if (!img.size) tallest = Math.max(tallest, img.h);
   if (!tallest) return null;
   return Math.max(ROW_MIN_HEIGHT, Math.min(tallest, FIT_IMAGE_HEIGHT) + CELL_PAD * 2);
 }
@@ -69,8 +73,11 @@ function valueWidth(c: Column, r: Row, measure: Measure): number {
 function imagesWidth(r: Row, colId: string, rowHeight: number | undefined): number {
   const list = r.images?.[colId];
   if (!list?.length) return 0;
-  const h = (rowHeight ?? ROW_MIN_HEIGHT) - CELL_PAD * 2;
-  return list.reduce((s, img) => s + (h * img.w) / img.h, 0) + IMG_GAP * list.length + CELL_PAD;
+  const tile = (img: (typeof list)[number]): number => {
+    const w = (imageDisplayHeight(img, rowHeight) * img.w) / img.h;
+    return img.caption ? Math.max(w, 56) : w;
+  };
+  return list.reduce((s, img) => s + tile(img), 0) + TILE_GAP * list.length + CELL_PAD;
 }
 
 /** Ширина колонки под содержимое (при данных высотах строк). */

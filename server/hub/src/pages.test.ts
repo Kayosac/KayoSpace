@@ -333,7 +333,7 @@ describe('документы (решение 0020)', () => {
       ],
     });
     t = await read();
-    expect(t.rows[0]!.images!.Что!.map((i) => i.alt)).toEqual([undefined, 'Ещё']);
+    expect(t.rows[0]!.images!.Что!.map((i) => i.alt)).toEqual(['Образец', 'Ещё']);
     expect(t.rows[0]!.images!.Цена).toBeUndefined();
     expect(t.rows[0]!.height).toBeUndefined();
     const bad = await call('write_table', {
@@ -348,6 +348,68 @@ describe('документы (решение 0020)', () => {
     expect(docs.docs[0]!.thumb).toMatch(/^[0-9a-f]{64}$/);
     const pdf = await fetch(`http://127.0.0.1:${hub.port}/api/export/tb_pics.pdf`);
     expect(pdf.status).toBe(200);
+  });
+
+  it('подпись и размер картинки в ячейке (решение 0026)', async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="18" fill="#f5a524"/></svg>';
+    await call('write_table', {
+      table: 'tb_loot',
+      name: 'Добыча',
+      columns: [{ name: 'Враг' }, { name: 'Добыча' }],
+      rows: [
+        {
+          values: { Враг: 'Гоблин' },
+          images: {
+            Добыча: [
+              { svg, caption: '80 монет / Обычный', size: 48, alt: 'Монеты' },
+              { svg, caption: 'Клык / Редкий', size: 48 },
+            ],
+          },
+        },
+      ],
+    });
+    const read = async () =>
+      JSON.parse(
+        (await call('read_table', { table: 'tb_loot', format: 'json' })).content[0]!.text,
+      ) as {
+        rows: {
+          id: string;
+          images?: Record<string, { asset: string; caption?: string; size?: number }[]>;
+        }[];
+      };
+    let t = await read();
+    const loot = t.rows[0]!.images!.Добыча!;
+    expect(loot.map((i) => [i.caption, i.size])).toEqual([
+      ['80 монет / Обычный', 48],
+      ['Клык / Редкий', 48],
+    ]);
+    expect((await call('read_table', { table: 'tb_loot' })).content[0]!.text).toContain(
+      '| Гоблин | [🖼 80 монет / Обычный] [🖼 Клык / Редкий] |',
+    );
+    // {asset} без подписи — подпись и размер остаются; null — убрать; новое значение — заменить.
+    await call('write_table', {
+      table: 'tb_loot',
+      rows: [
+        {
+          id: t.rows[0]!.id,
+          images: {
+            Добыча: [{ asset: loot[0]!.asset }, { asset: loot[1]!.asset, caption: null, size: 64 }],
+          },
+        },
+      ],
+    });
+    t = await read();
+    expect(t.rows[0]!.images!.Добыча!.map((i) => [i.caption, i.size])).toEqual([
+      ['80 монет / Обычный', 48],
+      [undefined, 64],
+    ]);
+    // Миниатюра и PDF — с плитками и подписями.
+    const docs = (await (
+      await fetch(`http://127.0.0.1:${hub.port}/api/docs?ids=tb_loot`)
+    ).json()) as { docs: { thumb: string | null }[] };
+    expect(docs.docs[0]!.thumb).toMatch(/^[0-9a-f]{64}$/);
+    expect((await fetch(`http://127.0.0.1:${hub.port}/api/export/tb_loot.pdf`)).status).toBe(200);
   });
 
   it('артефакт из чата: на доску, обновить, забрать, миниатюра и исходник', async () => {

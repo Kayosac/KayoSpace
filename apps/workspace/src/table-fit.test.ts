@@ -31,11 +31,27 @@ describe('подгонка размеров таблицы', () => {
     const fit = fitSizes([name, done], rows, measure);
     expect(fit.rows).toEqual({ r1: null, r2: 172 });
     // Картинка 160 в высоту → 320 в ширину, плюс отступы и «Клей».
-    expect(fit.columns.n).toBe(Math.ceil(320 + 4 + 6 + 4 * 8 + 20));
+    expect(fit.columns.n).toBe(Math.ceil(320 + 6 + 6 + 4 * 8 + 20));
     expect(fit.columns.d).toBe(Math.ceil(6 * 8 + 66));
     const long: Row = { id: 'l', cells: { n: 'x'.repeat(500) } };
     expect(fitColumnWidth(name, [long], measure)).toBe(480);
     expect(fitColumnWidth({ id: 'e', name: '', type: 'text' }, [], measure)).toBe(66);
+  });
+
+  it('картинки своего размера и с подписями (решение 0026): строку растят сами, плитка не уже подписи', () => {
+    const row: Row = {
+      id: 'z',
+      cells: {},
+      images: {
+        n: [
+          { asset: A, w: 100, h: 100, size: 48, caption: '80 монет / Обычный' },
+          { asset: A, w: 200, h: 100, size: 48 },
+        ],
+      },
+    };
+    expect(fitRowHeight(row)).toBeNull();
+    // Плитки: max(48, 56) + 96, по 6 между, и отступ.
+    expect(fitColumnWidth(name, [row], measure)).toBe(Math.ceil(56 + 96 + 6 * 2 + 6));
   });
 
   it('масштаб: шаги и пределы', () => {
