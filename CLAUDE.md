@@ -43,7 +43,8 @@
   чат (`ChatPanel.tsx`), Настройки → OpenAI (`OpenAiSection.tsx`) — решение 0019; канбан (`KanbanView.tsx`),
   документ (`PageView.tsx`, TipTap) — решение 0020; таблица (`TableView.tsx`), документ поверх доски
   и карточки (`DocOverlay.tsx`) — решение 0021; артефакт (`ArtifactView.tsx`), «В Claude» (`claude.ts`),
-  импорт `.md` (`md-import.ts`) — решение 0023; картинки в ячейках таблицы (`TableImages.tsx`) — решение 0024.
+  импорт `.md` (`md-import.ts`) — решение 0023; картинки в ячейках таблицы (`TableImages.tsx`) — решение 0024;
+  таблица на весь экран, масштаб и подгонка размеров (`table-fit.ts`) — решение 0025.
 - `apps/app` — Tauri-оболочка; фронтенд берёт из `apps/workspace/dist`. Плагины: deep-link (`kayospace://`),
   single-instance, barcode-scanner (Android), свои `plugins/secure-store` (токен устройства в хранилище ОС)
   и `plugins/share-target` («Поделиться» в Android → доска «Входящие»).
@@ -129,6 +130,8 @@
 - Картинки в ячейках — в строке под `img:<id колонки>` (`setCellImages`), рядом со значением; высота строки —
   `height` (`setRowHeight`), картинка — высота строки минус отступы (`cellImageHeight`). Файлы — общее
   хранилище картинок (`assets`), как у картинок доски (решение 0024).
+- Ширина колонки — `Column.width` (`setColumnWidth`), без неё — по типу (`DEFAULT_WIDTH`); «Подогнать» —
+  `fitSizes` + `fitTable` одной правкой. Масштаб таблицы — CSS `zoom`, только вид на устройстве (решение 0025).
 - Артефакт — Yjs-документ с id `ar_` (`isArtifactId`), Map «artifact»; показываем только в `iframe` с `sandbox`
   без `allow-same-origin`. Правит его Claude (`save_artifact`), приложение — смотрит.
 - Markdown документа — без потерь: новое в схеме страницы — сразу в `markdown.ts` и в круговой тест.

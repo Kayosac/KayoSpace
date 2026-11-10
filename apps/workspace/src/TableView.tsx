@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
   COLUMN_TYPES,
@@ -18,7 +18,10 @@ import {
   addCellImages,
   clampRowHeight,
   setCellImages,
+  setColumnWidth,
   setRowHeight,
+  clampColWidth,
+  fitTable,
   type Cell,
   type Column,
   type ColumnType,
@@ -31,6 +34,16 @@ import { CloseIcon } from './icons';
 import { CellImageViewer, CellImages, storeCellImages, useImagePicker } from './TableImages';
 import { imageFiles } from './assets';
 import { notify } from './notify';
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  canvasMeasure,
+  clampZoom,
+  columnWidth,
+  fitColumnWidth,
+  fitSizes,
+  zoomStep,
+} from './table-fit';
 
 /** Свои правки таблицы — только их отменяет «Отменить» (правки агентов и других устройств — нет). */
 export const TABLE_ORIGIN = 'kayospace:table';
@@ -182,9 +195,12 @@ function ColumnMenu({
   doc,
   columns,
   formulaError,
+  onFitWidth,
   onClose,
 }: {
   column: Column;
+  /** Ширина колонки под содержимое. */
+  onFitWidth: () => void;
   /** Все колонки — для вставки ссылок в формулу. */
   columns: readonly Column[];
   /** Первая ошибка формулы этой колонки (если есть). */
@@ -320,6 +336,9 @@ function ColumnMenu({
         >
           Правее →
         </button>
+        <button className="secondary" onClick={onFitWidth} data-testid="column-fit">
+          Ширина по содержимому
+        </button>
         <button
           className={confirm ? 'danger-btn confirm' : 'danger-btn'}
           onClick={() => {
@@ -452,6 +471,156 @@ export function TableView({
   };
   const viewerImages = viewer && data.rows.find((r) => r.id === viewer.row)?.images?.[viewer.col];
 
+  // На весь экран, листается в обе стороны, масштаб — как в Google Таблицах (решение 0025).
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const zoomKey = `kayospace.table-zoom.${session.board}`;
+  const [zoom, setZoomState] = useState(() => {
+    try {
+      const z = Number(localStorage.getItem(zoomKey));
+      return z ? clampZoom(z) : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  /** Точка таблицы под (x, y) окна остаётся на месте после смены масштаба. */
+  const anchor = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+  const setZoom = (next: number, at?: { x: number; y: number }): void => {
+    const z = clampZoom(next);
+    const wrap = wrapRef.current;
+    if (wrap && z !== zoomRef.current) {
+      const x = at?.x ?? wrap.clientWidth / 2;
+      const y = at?.y ?? wrap.clientHeight / 2;
+      anchor.current = {
+        px: (wrap.scrollLeft + x) / zoomRef.current,
+        py: (wrap.scrollTop + y) / zoomRef.current,
+        x,
+        y,
+      };
+    }
+    zoomRef.current = z;
+    setZoomState(z);
+    try {
+      localStorage.setItem(zoomKey, String(z));
+    } catch {
+      // Только удобство: без хранилища масштаб просто не запомнится.
+    }
+  };
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    const wrap = wrapRef.current;
+    if (!a || !wrap) return;
+    anchor.current = null;
+    wrap.scrollLeft = a.px * zoom - a.x;
+    wrap.scrollTop = a.py * zoom - a.y;
+  }, [zoom]);
+  // Ctrl/⌘ + колёсико (и щипок на тачпаде) — масштаб; два пальца на экране — тоже.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const local = (cx: number, cy: number) => {
+      const r = wrap.getBoundingClientRect();
+      return { x: cx - r.left, y: cy - r.top };
+    };
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(zoomRef.current * Math.exp(-e.deltaY * 0.0025), local(e.clientX, e.clientY));
+    };
+    let pinch: { d: number; z: number } | null = null;
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0]!.clientX - t[1]!.clientX, t[0]!.clientY - t[1]!.clientY);
+    const mid = (t: TouchList) =>
+      local((t[0]!.clientX + t[1]!.clientX) / 2, (t[0]!.clientY + t[1]!.clientY) / 2);
+    const onStart = (e: TouchEvent): void => {
+      if (e.touches.length === 2) pinch = { d: dist(e.touches), z: zoomRef.current };
+    };
+    const onMove = (e: TouchEvent): void => {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      setZoom((pinch.z * dist(e.touches)) / pinch.d, mid(e.touches));
+    };
+    const onEnd = (e: TouchEvent): void => {
+      if (e.touches.length < 2) pinch = null;
+    };
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    wrap.addEventListener('touchstart', onStart, { passive: true });
+    wrap.addEventListener('touchmove', onMove, { passive: false });
+    wrap.addEventListener('touchend', onEnd);
+    wrap.addEventListener('touchcancel', onEnd);
+    return () => {
+      wrap.removeEventListener('wheel', onWheel);
+      wrap.removeEventListener('touchstart', onStart);
+      wrap.removeEventListener('touchmove', onMove);
+      wrap.removeEventListener('touchend', onEnd);
+      wrap.removeEventListener('touchcancel', onEnd);
+    };
+    // setZoom читает всё из ref — подписываемся один раз на таблицу.
+  }, [session.board]);
+
+  // Ширина колонки: тянуть правый край заголовка; двойной щелчок по краю — по содержимому.
+  const [colDrag, setColDrag] = useState<{ col: string; w: number } | null>(null);
+  const startColResize = (e: React.PointerEvent<HTMLElement>, c: Column): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = columnWidth(c);
+    let moved = false;
+    const width = (ev: PointerEvent) => clampColWidth(w0 + (ev.clientX - x0) / zoomRef.current);
+    const move = (ev: PointerEvent): void => {
+      if (!moved && Math.abs(ev.clientX - x0) < 3) return;
+      moved = true;
+      setColDrag({ col: c.id, w: width(ev) });
+    };
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      setColDrag(null);
+      if (moved && ev.type === 'pointerup') setColumnWidth(doc, c.id, width(ev), TABLE_ORIGIN);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  };
+  const fitColumn = (c: Column): void => {
+    setColumnWidth(doc, c.id, fitColumnWidth(c, data.rows, canvasMeasure()), TABLE_ORIGIN);
+  };
+  const fitAll = (): void => {
+    fitTable(doc, fitSizes(data.columns, data.rows, canvasMeasure()), TABLE_ORIGIN);
+    notify('Размеры подогнаны под содержимое', 2000);
+  };
+
+  /** Enter и ↑↓ в ячейке — к соседней по колонке (как в таблицах); Tab — как обычно. */
+  const moveFocus = (e: React.KeyboardEvent<HTMLTableCellElement>): void => {
+    const t = e.target as HTMLElement;
+    if (t.tagName !== 'INPUT' || (t as HTMLInputElement).type === 'date') return;
+    const dir =
+      e.key === 'Enter'
+        ? e.shiftKey
+          ? -1
+          : 1
+        : e.key === 'ArrowDown'
+          ? 1
+          : e.key === 'ArrowUp'
+            ? -1
+            : 0;
+    if (!dir || e.altKey || e.ctrlKey || e.metaKey) return;
+    const td = e.currentTarget;
+    const r = Number(td.dataset.r) + dir;
+    const next = wrapRef.current?.querySelector<HTMLElement>(
+      `td[data-r="${r}"][data-c="${td.dataset.c}"] input, td[data-r="${r}"][data-c="${td.dataset.c}"] select`,
+    );
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+    if (next instanceof HTMLInputElement && next.type !== 'checkbox') next.select();
+  };
+  const tableWidth =
+    44 + data.columns.reduce((s, c) => s + (colDrag?.col === c.id ? colDrag.w : columnWidth(c)), 0);
+
   const menuCol = data.columns.find((c) => c.id === menu) ?? null;
   const menuIndex = menuCol ? data.columns.indexOf(menuCol) : -1;
 
@@ -492,6 +661,44 @@ export function TableView({
           aria-label="Найти в таблице"
           onChange={(e) => setQuery(e.target.value)}
         />
+        <button
+          className="page-tool wide"
+          title="Ширины колонок и высоты строк — под содержимое"
+          onClick={fitAll}
+          data-testid="table-fit"
+        >
+          ⤢ Подогнать
+        </button>
+        <span className="kt-zoom" role="group" aria-label="Масштаб">
+          <button
+            className="page-tool"
+            aria-label="Мельче"
+            title="Мельче (Ctrl/⌘ + колёсико, щипок)"
+            disabled={zoom <= ZOOM_MIN}
+            onClick={() => setZoom(zoomStep(zoom, -1))}
+            data-testid="table-zoom-out"
+          >
+            −
+          </button>
+          <button
+            className="page-tool kt-zoom-value"
+            title="Масштаб 100%"
+            onClick={() => setZoom(1)}
+            data-testid="table-zoom"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            className="page-tool"
+            aria-label="Крупнее"
+            title="Крупнее (Ctrl/⌘ + колёсико, щипок)"
+            disabled={zoom >= ZOOM_MAX}
+            onClick={() => setZoom(zoomStep(zoom, 1))}
+            data-testid="table-zoom-in"
+          >
+            +
+          </button>
+        </span>
         <span className="page-tool-gap" />
         <button
           className="page-tool wide"
@@ -519,190 +726,206 @@ export function TableView({
           ↷
         </button>
       </div>
-      <div className="page-scroll">
-        <article className="page-sheet table-sheet">
-          <CommitInput
-            className="page-title"
-            value={name ?? ''}
-            placeholder="Без названия"
-            aria-label="Название таблицы"
-            onCommit={(v) => v.trim() && onRename(v)}
-            data-testid="page-title"
-          />
-          <div className="kt-wrap">
-            <table className="kt" data-testid="table">
-              <thead>
-                <tr>
-                  <th className="kt-num" aria-label="Строка" />
-                  {data.columns.map((c) => (
-                    <th key={c.id}>
-                      <button
-                        className={menu === c.id ? 'kt-head open' : 'kt-head'}
-                        onClick={() => setMenu((m) => (m === c.id ? null : c.id))}
-                        data-testid="column-head"
-                      >
-                        <span className="kt-type">{TYPE_ICON[c.type]}</span>
-                        <span className="kt-name">{c.name}</span>
-                        {sort?.col === c.id && <span>{sort.dir === 'asc' ? '↑' : '↓'}</span>}
-                      </button>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const n = order.get(r.id) ?? 0;
-                  const height = resize?.row === r.id ? resize.h : r.height;
-                  return (
-                    <tr
-                      key={r.id}
-                      data-testid="table-row"
-                      className={rowMenu === r.id ? 'picked' : undefined}
-                      style={height ? { height } : undefined}
+      <div className="kt-titlebar">
+        <CommitInput
+          className="page-title"
+          value={name ?? ''}
+          placeholder="Без названия"
+          aria-label="Название таблицы"
+          onCommit={(v) => v.trim() && onRename(v)}
+          data-testid="page-title"
+        />
+      </div>
+      <div className="kt-wrap" ref={wrapRef} data-testid="table-scroll">
+        <table className="kt" data-testid="table" style={{ zoom, width: tableWidth }}>
+          <colgroup>
+            <col style={{ width: 44 }} />
+            {data.columns.map((c) => (
+              <col
+                key={c.id}
+                style={{ width: colDrag?.col === c.id ? colDrag.w : columnWidth(c) }}
+              />
+            ))}
+          </colgroup>
+          <thead>
+            <tr>
+              <th className="kt-num" aria-label="Строка" />
+              {data.columns.map((c) => (
+                <th key={c.id}>
+                  <button
+                    className={menu === c.id ? 'kt-head open' : 'kt-head'}
+                    onClick={() => setMenu((m) => (m === c.id ? null : c.id))}
+                    data-testid="column-head"
+                  >
+                    <span className="kt-type">{TYPE_ICON[c.type]}</span>
+                    <span className="kt-name">{c.name}</span>
+                    {sort?.col === c.id && <span>{sort.dir === 'asc' ? '↑' : '↓'}</span>}
+                  </button>
+                  <span
+                    className="kt-col-grip"
+                    aria-hidden
+                    title="Тяните — ширина колонки; двойной щелчок — по содержимому"
+                    onPointerDown={(e) => startColResize(e, c)}
+                    onDoubleClick={() => fitColumn(c)}
+                    data-testid="column-resize"
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, ri) => {
+              const n = order.get(r.id) ?? 0;
+              const height = resize?.row === r.id ? resize.h : r.height;
+              return (
+                <tr
+                  key={r.id}
+                  data-testid="table-row"
+                  className={rowMenu === r.id ? 'picked' : undefined}
+                  style={height ? { height } : undefined}
+                >
+                  <td className="kt-num" onPointerDown={(e) => startResize(e, r.id)}>
+                    <button
+                      aria-label={`Строка ${n}`}
+                      onClick={() => {
+                        if (skipClick.current) {
+                          skipClick.current = false;
+                          return;
+                        }
+                        setRowMenu((m) => (m === r.id ? null : r.id));
+                      }}
+                      data-testid="row-number"
                     >
-                      <td className="kt-num" onPointerDown={(e) => startResize(e, r.id)}>
-                        <button
-                          aria-label={`Строка ${n}`}
-                          onClick={() => {
-                            if (skipClick.current) {
-                              skipClick.current = false;
-                              return;
-                            }
-                            setRowMenu((m) => (m === r.id ? null : r.id));
-                          }}
-                          data-testid="row-number"
-                        >
-                          {n}
-                        </button>
-                        {rowMenu === r.id && r.height !== undefined && (
-                          <button
-                            className="kt-row-action"
-                            onClick={() => setRowHeight(doc, r.id, null, TABLE_ORIGIN)}
-                            data-testid="row-height-reset"
-                          >
-                            По тексту
-                          </button>
-                        )}
-                        {rowMenu === r.id && (
-                          <button
-                            className="kt-row-delete"
-                            onClick={() => {
-                              removeRows(doc, [r.id], TABLE_ORIGIN);
-                              setRowMenu(null);
-                            }}
-                            data-testid="row-delete"
-                          >
-                            Удалить
-                          </button>
-                        )}
-                        <span
-                          className="kt-row-grip"
-                          aria-hidden
-                          title="Тяните — высота строки"
-                          data-testid="row-resize"
-                        />
+                      {n}
+                    </button>
+                    {rowMenu === r.id && r.height !== undefined && (
+                      <button
+                        className="kt-row-action"
+                        onClick={() => setRowHeight(doc, r.id, null, TABLE_ORIGIN)}
+                        data-testid="row-height-reset"
+                      >
+                        По тексту
+                      </button>
+                    )}
+                    {rowMenu === r.id && (
+                      <button
+                        className="kt-row-delete"
+                        onClick={() => {
+                          removeRows(doc, [r.id], TABLE_ORIGIN);
+                          setRowMenu(null);
+                        }}
+                        data-testid="row-delete"
+                      >
+                        Удалить
+                      </button>
+                    )}
+                    <span
+                      className="kt-row-grip"
+                      aria-hidden
+                      title="Тяните — высота строки"
+                      data-testid="row-resize"
+                    />
+                  </td>
+                  {data.columns.map((c, ci) => {
+                    const imgs = r.images?.[c.id];
+                    const on = active?.row === r.id && active.col === c.id;
+                    return (
+                      <td
+                        key={c.id}
+                        className={`kt-cell kt-${c.type}${on ? ' active' : ''}`}
+                        data-testid="cell"
+                        data-col={c.name}
+                        data-r={ri}
+                        data-c={ci}
+                        onKeyDown={moveFocus}
+                        // После касания (а не до): иначе кнопка «+ 🖼» сдвинет флажок под пальцем.
+                        onClick={() => setActive({ row: r.id, col: c.id })}
+                        onFocus={() => setActive({ row: r.id, col: c.id })}
+                        onPaste={(e) => {
+                          const files = imageFiles(e.clipboardData.files);
+                          if (!files.length) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void addImages(r.id, c.id, files);
+                        }}
+                        onDragOver={(e) => {
+                          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+                        }}
+                        onDrop={(e) => {
+                          const files = imageFiles(e.dataTransfer.files);
+                          if (!files.length) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void addImages(r.id, c.id, files);
+                        }}
+                      >
+                        <div className="kt-cellbox">
+                          {imgs && (
+                            <CellImages
+                              images={imgs}
+                              rowHeight={height}
+                              onOpen={(index) => setViewer({ row: r.id, col: c.id, index })}
+                            />
+                          )}
+                          <div className="kt-cellval">
+                            {c.type === 'formula' ? (
+                              <FormulaCell
+                                column={c}
+                                value={r.cells[c.id]}
+                                error={data.errors[`${r.id}|${c.id}`]}
+                              />
+                            ) : (
+                              <CellEditor
+                                column={c}
+                                value={r.cells[c.id]}
+                                label={`${c.name}, строка ${n}`}
+                                onChange={(v) => updateRow(doc, r.id, { [c.id]: v }, TABLE_ORIGIN)}
+                              />
+                            )}
+                          </div>
+                          {on && (
+                            <button
+                              className="kt-img-add"
+                              aria-label="Добавить картинку"
+                              title="Добавить картинку"
+                              onPointerDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                target.current = { row: r.id, col: c.id };
+                                picker.pick();
+                              }}
+                              data-testid="cell-add-image"
+                            >
+                              + 🖼
+                            </button>
+                          )}
+                        </div>
                       </td>
-                      {data.columns.map((c) => {
-                        const imgs = r.images?.[c.id];
-                        const on = active?.row === r.id && active.col === c.id;
-                        return (
-                          <td
-                            key={c.id}
-                            className={`kt-cell kt-${c.type}${on ? ' active' : ''}`}
-                            data-testid="cell"
-                            data-col={c.name}
-                            // После касания (а не до): иначе кнопка «+ 🖼» сдвинет флажок под пальцем.
-                            onClick={() => setActive({ row: r.id, col: c.id })}
-                            onFocus={() => setActive({ row: r.id, col: c.id })}
-                            onPaste={(e) => {
-                              const files = imageFiles(e.clipboardData.files);
-                              if (!files.length) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              void addImages(r.id, c.id, files);
-                            }}
-                            onDragOver={(e) => {
-                              if (e.dataTransfer.types.includes('Files')) e.preventDefault();
-                            }}
-                            onDrop={(e) => {
-                              const files = imageFiles(e.dataTransfer.files);
-                              if (!files.length) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              void addImages(r.id, c.id, files);
-                            }}
-                          >
-                            <div className="kt-cellbox">
-                              {imgs && (
-                                <CellImages
-                                  images={imgs}
-                                  rowHeight={height}
-                                  onOpen={(index) => setViewer({ row: r.id, col: c.id, index })}
-                                />
-                              )}
-                              <div className="kt-cellval">
-                                {c.type === 'formula' ? (
-                                  <FormulaCell
-                                    column={c}
-                                    value={r.cells[c.id]}
-                                    error={data.errors[`${r.id}|${c.id}`]}
-                                  />
-                                ) : (
-                                  <CellEditor
-                                    column={c}
-                                    value={r.cells[c.id]}
-                                    label={`${c.name}, строка ${n}`}
-                                    onChange={(v) =>
-                                      updateRow(doc, r.id, { [c.id]: v }, TABLE_ORIGIN)
-                                    }
-                                  />
-                                )}
-                              </div>
-                              {on && (
-                                <button
-                                  className="kt-img-add"
-                                  aria-label="Добавить картинку"
-                                  title="Добавить картинку"
-                                  onPointerDown={(e) => e.preventDefault()}
-                                  onClick={() => {
-                                    target.current = { row: r.id, col: c.id };
-                                    picker.pick();
-                                  }}
-                                  data-testid="cell-add-image"
-                                >
-                                  + 🖼
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-                {rows.length === 0 && (
-                  <tr>
-                    <td className="kt-empty" colSpan={data.columns.length + 1}>
-                      {query.trim() ? 'Ничего не нашлось.' : 'Строк пока нет — «+ Строка» сверху.'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-              {data.rows.length > 0 && (
-                <tfoot>
-                  <tr>
-                    <td className="kt-num" />
-                    {data.columns.map((c) => (
-                      <td key={c.id} className={`kt-total kt-${c.type}`} data-testid="column-total">
-                        {columnTotal(c, rows)}
-                      </td>
-                    ))}
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
-        </article>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr>
+                <td className="kt-empty" colSpan={data.columns.length + 1}>
+                  {query.trim() ? 'Ничего не нашлось.' : 'Строк пока нет — «+ Строка» сверху.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+          {data.rows.length > 0 && (
+            <tfoot>
+              <tr>
+                <td className="kt-num" />
+                {data.columns.map((c) => (
+                  <td key={c.id} className={`kt-total kt-${c.type}`} data-testid="column-total">
+                    {columnTotal(c, rows)}
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
+        </table>
       </div>
       {picker.input}
       {viewer && viewerImages && (
@@ -731,6 +954,7 @@ export function TableView({
           formulaError={
             Object.entries(data.errors).find(([k]) => k.endsWith(`|${menuCol.id}`))?.[1] ?? null
           }
+          onFitWidth={() => fitColumn(menuCol)}
           onClose={() => setMenu(null)}
         />
       )}

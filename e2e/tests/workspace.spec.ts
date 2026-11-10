@@ -2771,3 +2771,163 @@ test('планшет: картинки в ячейке таблицы — кас
   await client.close();
   await page.context().close();
 });
+
+test('таблица на весь экран: масштаб (кнопки, Ctrl+колёсико, щипок), «Подогнать», ширина колонки, Enter — вниз', async ({
+  browser,
+}) => {
+  const { client, call } = await mcpClient('e2e-table-full');
+  const tb = `tb_full-${Date.now()}`;
+  await call('write_table', {
+    table: tb,
+    name: 'Большая таблица',
+    columns: [
+      { name: 'Название' },
+      { name: 'Цена', type: 'number' },
+      { name: 'Готово', type: 'checkbox' },
+    ],
+    rows: Array.from({ length: 40 }, (_, i) => ({
+      values: {
+        Название: i === 3 ? 'Очень длинное название позиции номер четыре' : `Позиция ${i + 1}`,
+        Цена: i * 10,
+      },
+    })),
+  });
+  // Большой монитор: таблица — на всю ширину окна, а не окошком посередине.
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  await context.addInitScript(
+    ([key, value]) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+    },
+    [SETTINGS_KEY, JSON.stringify({ ...synced, board: tb })] as const,
+  );
+  const page = await context.newPage();
+  await page.goto(WORKSPACE_URL);
+  const scroll = page.getByTestId('table-scroll');
+  await expect(page.getByTestId('table-row')).toHaveCount(40);
+  const box = (await scroll.boundingBox())!;
+  expect(box.width).toBeGreaterThan(1800);
+  expect(box.height).toBeGreaterThan(800);
+  // Шапка стоит на месте при листании.
+  await scroll.evaluate((el) => (el.scrollTop = 600));
+  const head = page.getByTestId('column-head').first();
+  expect(Math.round((await head.boundingBox())!.y)).toBe(Math.round(box.y + 1));
+
+  // Масштаб кнопками и Ctrl+колёсико; запоминается.
+  const zoomed = () =>
+    page.getByTestId('table').evaluate((t) => Number((t as HTMLElement).style.zoom));
+  await page.getByTestId('table-zoom-out').click();
+  await expect(page.getByTestId('table-zoom')).toHaveText('90%');
+  await page.mouse.move(800, 600);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -400);
+  await page.keyboard.up('Control');
+  await expect.poll(zoomed).toBeGreaterThan(1.5);
+  await page.getByTestId('table-zoom').click();
+  await expect.poll(zoomed).toBe(1);
+
+  // Щипок двумя пальцами — крупнее.
+  const cdp = await context.newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', d: number) =>
+    cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints:
+        type === 'touchEnd'
+          ? []
+          : [
+              { x: 900 - d, y: 600, id: 1 },
+              { x: 900 + d, y: 600, id: 2 },
+            ],
+    });
+  await touch('touchStart', 50);
+  for (const d of [70, 90, 110]) await touch('touchMove', d);
+  await touch('touchEnd', 0);
+  await expect.poll(zoomed).toBeGreaterThan(1.8);
+  await page.getByTestId('table-zoom').click();
+
+  // «Подогнать»: колонка «Название» — под самое длинное название.
+  const nameCol = () =>
+    page
+      .getByTestId('column-head')
+      .first()
+      .evaluate((b) => b.closest('th')!.getBoundingClientRect().width);
+  const before = await nameCol();
+  await page.getByTestId('table-fit').click();
+  await expect.poll(nameCol).toBeGreaterThan(before + 80);
+  await expect
+    .poll(async () =>
+      (
+        JSON.parse(await call('read_table', { table: tb, format: 'json' })) as {
+          columns: { width?: number }[];
+        }
+      ).columns.map((c) => !!c.width),
+    )
+    .toEqual([true, true, true]);
+  // Ширину тянут за край заголовка.
+  const grip = (await page.getByTestId('column-resize').nth(1).boundingBox())!;
+  const priceBefore = await page
+    .getByTestId('column-head')
+    .nth(1)
+    .evaluate((b) => b.closest('th')!.getBoundingClientRect().width);
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 120, grip.y + 10, { steps: 5 });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page
+        .getByTestId('column-head')
+        .nth(1)
+        .evaluate((b) => b.closest('th')!.getBoundingClientRect().width),
+    )
+    .toBeGreaterThan(priceBefore + 100);
+
+  // Enter — в ячейку ниже, как в таблицах.
+  await scroll.evaluate((el) => (el.scrollTop = 0));
+  const first = page.getByTestId('table-row').nth(0).locator('[data-col="Название"] input');
+  await first.click();
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByTestId('table-row').nth(1).locator('[data-col="Название"] input'),
+  ).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(
+    page.getByTestId('table-row').nth(2).locator('[data-col="Название"] input'),
+  ).toBeFocused();
+  await page.screenshot({ path: shot('table-full.png') });
+  await client.close();
+  await context.close();
+});
+
+test('планшет: таблица — масштаб и «Подогнать» касаниями, ширина колонки — в меню', async ({
+  browser,
+}) => {
+  const page = await tabletPage(browser, `e2e-table-tablet-${Date.now()}`);
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('create-table').tap();
+  await page.getByTestId('page-title').fill('Планшетная');
+  await page.getByTestId('table-add-row').tap();
+  await page
+    .getByTestId('table-row')
+    .first()
+    .locator('[data-col="Название"] input')
+    .fill('Совсем длинное название строки таблицы');
+  await page.getByTestId('page-title').tap();
+  await page.getByTestId('table-zoom-in').tap();
+  await expect(page.getByTestId('table-zoom')).toHaveText('110%');
+  await page.getByTestId('table-zoom').tap();
+  await expect(page.getByTestId('table-zoom')).toHaveText('100%');
+  const nameCol = () =>
+    page
+      .getByTestId('column-head')
+      .first()
+      .evaluate((b) => b.closest('th')!.getBoundingClientRect().width);
+  const before = await nameCol();
+  await page.getByTestId('column-head').first().tap();
+  await page.getByTestId('column-fit').tap();
+  await expect.poll(nameCol).toBeGreaterThan(before + 40);
+  await page.getByTestId('column-menu').getByRole('button', { name: 'Закрыть' }).tap();
+  await page.getByTestId('table-fit').tap();
+  await expect(page.getByText('Размеры подогнаны под содержимое')).toBeVisible();
+  await page.screenshot({ path: shot('table-tablet.png') });
+  await page.context().close();
+});

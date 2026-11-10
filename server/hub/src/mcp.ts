@@ -149,7 +149,7 @@ export function createMcp(
 ) {
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: 'kayospace', version: '0.9.1' },
+      { name: 'kayospace', version: '0.10.0' },
       { instructions: AGENT_GUIDE },
     );
     // Кто пишет: имя клиента MCP (claude-ai, claude-code, openai-mcp…) — устройство покажет,

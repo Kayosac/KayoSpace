@@ -27,6 +27,7 @@ import {
   removeColumn,
   removeRows,
   setCellImages,
+  setColumnWidth,
   setRowHeight,
   type CellImage,
   tableToMarkdown,
@@ -137,7 +138,8 @@ export function registerTableTools(
         'строки (с id — изменить, без id — добавить; значения по названию колонки), удалить строки. ' +
         `Типы колонок: ${TYPES_HELP}. Дата — YYYY-MM-DD, флажок — true/false, выбор — один из options, ` +
         'формула — в formula (значения считаются сами, писать их в строки не нужно). ' +
-        'У существующей колонки: rename — новое название, position — место слева (0 — первая); ' +
+        'У существующей колонки: rename — новое название, position — место слева (0 — первая), ' +
+        'width — ширина в пикселях (null — по умолчанию); ' +
         'delete_columns — удалить колонки вместе со значениями. ' +
         'Картинки — в любой ячейке рядом со значением: rows[].images — колонка → список целиком ' +
         '({asset} — оставить из read_table, {url}/{data}/{svg} — новая, alt — подпись; [] — убрать все); ' +
@@ -165,6 +167,13 @@ export function registerTableTools(
                   'для type "formula": [Колонка], + − * / ^, ЕСЛИ/IF, ОКРУГЛ/ROUND, СУММ/SUM([Колонка]), ДНИ/DAYS, СЕГОДНЯ/TODAY',
                 ),
               rename: z.string().min(1).max(80).optional().describe('новое название колонки'),
+              width: z
+                .number()
+                .min(0)
+                .max(5000)
+                .nullable()
+                .optional()
+                .describe('ширина колонки в пикселях, 60…1200 (null — по умолчанию)'),
               position: z.number().int().min(0).optional().describe('место колонки слева, с 0'),
             }),
           )
@@ -265,6 +274,7 @@ export function registerTableTools(
                 type: c.type ?? (c.formula ? 'formula' : 'text'),
                 options: c.options,
                 formula: c.formula,
+                ...(c.width ? { width: c.width } : {}),
               })),
             );
           else initTable(doc);
@@ -279,6 +289,7 @@ export function registerTableTools(
                   options: c.options,
                   formula: c.formula,
                 });
+            if (c.width !== undefined) setColumnWidth(doc, id, c.width);
             if (have && (c.type || c.options || c.formula || c.rename))
               updateColumn(doc, have.id, {
                 ...(c.type ? { type: c.type } : {}),
