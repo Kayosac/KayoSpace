@@ -260,6 +260,20 @@ describe('документы (решение 0020)', () => {
       (await call('read_table', { table: 'tb_cols', format: 'json' })).content[0]!.text,
     ) as { columns: { name: string; type: string }[]; rows: { values: Record<string, unknown> }[] };
     expect(json.columns.map((c) => c.name)).toEqual(['Стоимость', 'Что', 'Итого']);
+    // Ширина колонки (решение 0025): задать и вернуть по умолчанию.
+    await call('write_table', { table: 'tb_cols', columns: [{ name: 'Что', width: 333 }] });
+    const w = JSON.parse(
+      (await call('read_table', { table: 'tb_cols', format: 'json' })).content[0]!.text,
+    ) as { columns: { name: string; width?: number }[] };
+    expect(w.columns.find((c) => c.name === 'Что')!.width).toBe(333);
+    await call('write_table', { table: 'tb_cols', columns: [{ name: 'Что', width: null }] });
+    expect(
+      (
+        JSON.parse(
+          (await call('read_table', { table: 'tb_cols', format: 'json' })).content[0]!.text,
+        ) as { columns: { name: string; width?: number }[] }
+      ).columns.find((c) => c.name === 'Что')!.width,
+    ).toBeUndefined();
     expect(json.columns[2]!.type).toBe('formula');
     expect(json.rows[0]!.values).toEqual({ Стоимость: 10, Что: 'Клей', Итого: 30 });
   });

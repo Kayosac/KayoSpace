@@ -37,7 +37,15 @@ export interface Column {
   options?: string[];
   /** Формула (решение 0023): [Колонка], арифметика, функции; значения не хранятся — считаются. */
   formula?: string;
+  /** Ширина колонки в пикселях (решение 0025); нет — по содержимому. */
+  width?: number;
 }
+
+/** Ширина колонки в допустимых пределах (целые пиксели). */
+export const COL_MIN_WIDTH = 60;
+export const COL_MAX_WIDTH = 1200;
+export const clampColWidth = (w: number): number =>
+  Math.round(Math.min(COL_MAX_WIDTH, Math.max(COL_MIN_WIDTH, w)));
 
 export type Cell = string | number | boolean | null;
 
@@ -161,12 +169,14 @@ export function coerceCell(type: ColumnType, v: unknown, options?: readonly stri
 function readColumn(m: Y.Map<unknown>): Column {
   const options = m.get('options') as string[] | undefined;
   const formula = m.get('formula') as string | undefined;
+  const width = m.get('width');
   return {
     id: String(m.get('id')),
     name: String(m.get('name') ?? ''),
     type: (m.get('type') as ColumnType) ?? 'text',
     ...(options?.length ? { options } : {}),
     ...(formula ? { formula } : {}),
+    ...(typeof width === 'number' && Number.isFinite(width) ? { width: clampColWidth(width) } : {}),
   };
 }
 
@@ -225,6 +235,7 @@ export function addColumn(doc: Y.Doc, c: Omit<Column, 'id'>, origin?: unknown): 
     m.set('type', c.type);
     if (c.options?.length) m.set('options', [...c.options]);
     if (c.formula) m.set('formula', c.formula);
+    if (c.width) m.set('width', clampColWidth(c.width));
     arr(doc, 'columns').push([m]);
   }, origin);
   return id;
@@ -316,6 +327,7 @@ export function moveColumn(doc: Y.Doc, id: string, delta: number, origin?: unkno
     m.set('type', c.type);
     if (c.options) m.set('options', c.options);
     if (c.formula) m.set('formula', c.formula);
+    if (c.width) m.set('width', c.width);
     cols.insert(to, [m]);
   }, origin);
 }
@@ -399,6 +411,37 @@ export function addCellImages(
 ): boolean {
   const have = readTable(doc).rows.find((r) => r.id === rowId)?.images?.[colId] ?? [];
   return setCellImages(doc, rowId, colId, [...have, ...images], origin);
+}
+
+/** Ширина колонки; null — снова по содержимому. */
+export function setColumnWidth(
+  doc: Y.Doc,
+  colId: string,
+  width: number | null,
+  origin?: unknown,
+): boolean {
+  const found = columnMap(doc, colId);
+  if (!found) return false;
+  doc.transact(() => {
+    if (width === null) found.m.delete('width');
+    else found.m.set('width', clampColWidth(width));
+  }, origin);
+  return true;
+}
+
+/**
+ * Размеры под содержимое одной правкой (одним шагом отмены): ширины колонок и высоты строк.
+ * null — по содержимому (без заданного размера).
+ */
+export function fitTable(
+  doc: Y.Doc,
+  sizes: { columns: Record<string, number | null>; rows: Record<string, number | null> },
+  origin?: unknown,
+): void {
+  doc.transact(() => {
+    for (const [id, w] of Object.entries(sizes.columns)) setColumnWidth(doc, id, w);
+    for (const [id, h] of Object.entries(sizes.rows)) setRowHeight(doc, id, h);
+  }, origin);
 }
 
 /** Высота строки; null — снова по содержимому. */

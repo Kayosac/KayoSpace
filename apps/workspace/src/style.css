@@ -2709,10 +2709,6 @@ p.bad {
   font-size: 13px;
 }
 
-.table-sheet {
-  max-width: 1200px;
-}
-
 .kt-search {
   flex: 0 1 220px;
   min-width: 120px;
@@ -2725,14 +2721,42 @@ p.bad {
   font: 15px var(--font-ui);
 }
 
+/* Таблица — на весь экран (решение 0025): листается в обе стороны, шапка, номера и итоги стоят. */
+.kt-titlebar {
+  padding: 4px var(--gutter-r) 8px var(--gutter-l);
+}
+
+.kt-titlebar .page-title {
+  margin: 0;
+  font-size: 22px;
+}
+
 .kt-wrap {
-  margin: 12px -8px 0;
-  overflow-x: auto;
+  flex: 1;
+  min-height: 0;
+  margin: 0 var(--gutter-r) calc(var(--gutter-b) + 12px) var(--gutter-l);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* Щипок двумя пальцами — масштаб таблицы, а не страницы. */
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
+}
+
+.kt-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.kt-zoom-value {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
 }
 
 .kt {
-  width: max-content;
-  min-width: 100%;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font: 15px var(--font-ui);
@@ -2754,7 +2778,7 @@ p.bad {
 .kt thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
   background: var(--surface);
   text-align: left;
 }
@@ -2764,7 +2788,7 @@ p.bad {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-width: 140px;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 10px;
   border: none;
@@ -2801,6 +2825,58 @@ p.bad {
   text-align: center;
 }
 
+/* Номера строк стоят слева при листании вбок; итоги — внизу. */
+.kt td.kt-num,
+.kt th.kt-num {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.kt thead th.kt-num {
+  z-index: 3;
+}
+
+.kt tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+.kt tfoot td.kt-num {
+  z-index: 2;
+}
+
+.kt td.kt-cell {
+  overflow: hidden;
+}
+
+.kt-col-grip {
+  /* Внутри своего заголовка: соседний (он выше в стопке) не перехватывает касание. */
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.kt-col-grip:hover,
+.kt-col-grip:active {
+  background: linear-gradient(var(--accent), var(--accent)) right / 2px 100% no-repeat;
+}
+
+@media (pointer: coarse) {
+  .kt-col-grip {
+    width: 24px;
+  }
+}
+
 .kt-num button {
   width: 100%;
   min-height: 40px;
@@ -2829,7 +2905,7 @@ p.bad {
 
 .kt-input {
   width: 100%;
-  min-width: 140px;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 10px;
   border: none;
@@ -3366,7 +3442,6 @@ th .kt-type {
 }
 
 .kt td.kt-num {
-  position: relative;
   /* Тянуть номер строки — менять высоту, а не листать. */
   touch-action: none;
 }

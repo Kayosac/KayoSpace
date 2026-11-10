@@ -505,6 +505,8 @@ function columnWidths(
   rows: ReturnType<typeof readTable>['rows'],
 ): number[] {
   const want = columns.map((c) => {
+    // Заданная в приложении ширина (решение 0025) — в той же мере, что и длина текста (~8 px на знак).
+    if (c.width) return c.width / 8;
     if (c.type === 'checkbox') return 7;
     const longest = Math.max(
       c.name.length + 3,

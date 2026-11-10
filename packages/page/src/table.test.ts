@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  COL_MIN_WIDTH,
   ROW_MIN_HEIGHT,
+  fitTable,
+  setColumnWidth,
   addCellImages,
   cellImageHeight,
   setCellImages,
@@ -140,5 +143,27 @@ describe('картинки в ячейках и высота строки (ре�
     expect(cellImageHeight(undefined)).toBe(28);
     setRowHeight(doc, row, null);
     expect(readTable(doc).rows[0]!.height).toBeUndefined();
+  });
+});
+
+describe('ширина колонок и подгонка (решение 0025)', () => {
+  it('ширина в пределах, переживает перестановку; подгонка — одним шагом отмены', () => {
+    const doc = new Y.Doc();
+    initTable(doc);
+    const [a, b] = readTable(doc).columns;
+    const row = addRow(doc);
+    setColumnWidth(doc, a!.id, 20);
+    expect(readTable(doc).columns[0]!.width).toBe(COL_MIN_WIDTH);
+    setColumnWidth(doc, a!.id, 333.6);
+    moveColumn(doc, a!.id, 1);
+    expect(readTable(doc).columns.map((c) => c.width)).toEqual([undefined, 334]);
+    const undo = new Y.UndoManager(doc.getMap('table'), { trackedOrigins: new Set(['me']) });
+    setRowHeight(doc, row, 300);
+    fitTable(doc, { columns: { [a!.id]: null, [b!.id]: 150 }, rows: { [row]: 80 } }, 'me');
+    expect(readTable(doc).columns.map((c) => c.width)).toEqual([150, undefined]);
+    expect(readTable(doc).rows[0]!.height).toBe(80);
+    undo.undo();
+    expect(readTable(doc).columns.map((c) => c.width)).toEqual([undefined, 334]);
+    expect(readTable(doc).rows[0]!.height).toBe(300);
   });
 });
