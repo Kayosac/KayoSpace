@@ -8,6 +8,7 @@ import { Resvg } from '@resvg/resvg-js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { addElement, getElement, listElements, makeFrame } from '@kayospace/board';
 import type { Actor } from '@kayospace/model';
+import { addRow, initTable, readTable } from '@kayospace/page';
 import { decodeImageData, fetchImage, imageInfo, isPrivateAddress, renderSvgImage } from './images';
 import { startHub, type Hub } from './hub';
 
@@ -344,5 +345,46 @@ describe('картинка-файл из чата ChatGPT (openai/fileParams)', 
     expect(bad.isError).toBe(true);
     expect(bad.content[0]!.text).toContain('403');
     expect(bad.content[0]!.text).not.toContain(base);
+  });
+
+  it('файл из чата — в ячейку таблицы: в существующую строку и новой строкой (решение 0024)', async () => {
+    const t = hub.store.get('tb_cat');
+    const doc = await t;
+    initTable(doc, [
+      { name: 'Кличка', type: 'text' },
+      { name: 'Фото', type: 'text' },
+    ]);
+    const row = addRow(doc, { [readTable(doc).columns[0]!.id]: 'Барсик' });
+    const file = { download_url: `${base}/files/abc?sig=secret`, file_id: 'file-abc' };
+    const call = (args: Record<string, unknown>) =>
+      client.callTool({ name: 'add_image_file', arguments: args }) as Promise<{
+        isError?: boolean;
+        content: { text?: string }[];
+      }>;
+    const r = await call({ board: 'tb_cat', row, column: 'Фото', file, alt: 'Барсик спит' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0]!.text).toContain('в ячейке «Фото»');
+    expect(r.content[0]!.text).not.toContain('secret');
+    // Вторая — к первой; без row — новая строка.
+    await call({ board: 'tb_cat', row, column: 'Фото', file });
+    await call({ board: 'tb_cat', column: 'Кличка', file });
+    const { columns, rows } = readTable(doc);
+    const [name, photo] = columns;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.images![photo!.id]!.map((i) => [i.w, i.h, i.alt])).toEqual([
+      [800, 400, 'Барсик спит'],
+      [800, 400, undefined],
+    ]);
+    expect(rows[1]!.images![name!.id]).toHaveLength(1);
+    // Без колонки, с чужой колонкой или строкой — понятная ошибка, таблица не меняется.
+    expect((await call({ board: 'tb_cat', row, file })).content[0]!.text).toContain('нужна column');
+    expect((await call({ board: 'tb_cat', column: 'Нет', file })).content[0]!.text).toContain(
+      'Колонки «Нет» нет',
+    );
+    expect(
+      (await call({ board: 'tb_cat', row: 'нет', column: 'Фото', file })).content[0]!.text,
+    ).toContain('Строки нет нет');
+    expect(readTable(doc).rows).toHaveLength(2);
+    expect((await call({ board: 'pg_x', column: 'Фото', file })).isError).toBe(true);
   });
 });

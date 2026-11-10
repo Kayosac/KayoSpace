@@ -40,7 +40,7 @@ import { MAX_VOICE_BYTES, OpenAi, OpenAiError, type OpenAiConfig } from './opena
 import { loadImages } from './render';
 import { attachSync, type SyncServer } from './sync-server';
 
-export const HUB_VERSION = '0.15.0';
+export const HUB_VERSION = '0.15.1';
 
 export interface HubOptions {
   dataDir: string;

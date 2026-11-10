@@ -11,6 +11,7 @@ import type { Actor } from '@kayospace/model';
 import { strokeGroups } from './handwriting';
 import { OpenAi, openAiFromEnv } from './openai';
 import { startHub, type Hub } from './hub';
+import { initTable, readTable } from '@kayospace/page';
 
 const png = new Resvg(
   '<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024"><rect width="1536" height="1024" fill="#f60"/></svg>',
@@ -161,6 +162,24 @@ describe('OpenAI: картинки и голос', () => {
     })) as { isError?: boolean; content: { text?: string }[] };
     expect(bad.isError).toBe(true);
     expect(bad.content[0]!.text).toContain('правила безопасности');
+
+    // В ячейку таблицы (решение 0024): новая строка, подпись — из alt.
+    const tdoc = await hub.store.get('tb_art');
+    initTable(tdoc, [{ name: 'Эскиз', type: 'text' }]);
+    const before = calls.length;
+    const noCol = (await client.callTool({
+      name: 'generate_image',
+      arguments: { board: 'tb_art', prompt: 'A cat' },
+    })) as { isError?: boolean; content: { text?: string }[] };
+    expect(noCol.content[0]!.text).toContain('нужна column');
+    expect(calls.length).toBe(before); // без колонки — не генерируем зря
+    const cell = (await client.callTool({
+      name: 'generate_image',
+      arguments: { board: 'tb_art', column: 'Эскиз', prompt: 'A cozy cat', alt: 'Кот' },
+    })) as { isError?: boolean; content: { text?: string }[] };
+    expect(cell.isError).toBeFalsy();
+    const [row] = readTable(tdoc).rows;
+    expect(Object.values(row!.images!)[0]![0]).toMatchObject({ alt: 'Кот', w: 1536 });
     await client.close();
   });
 
