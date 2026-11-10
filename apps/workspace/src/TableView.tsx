@@ -938,6 +938,19 @@ export function TableView({
             setCellImages(doc, viewer.row, viewer.col, next, TABLE_ORIGIN);
             if (!next.length) setViewer(null);
           }}
+          onChange={(i, patch) => {
+            const next = viewerImages.map((img, k) => {
+              if (k !== i) return img;
+              const out = { ...img };
+              if (patch.caption !== undefined) out.caption = patch.caption;
+              if (patch.size !== undefined) {
+                if (patch.size === null) delete out.size;
+                else out.size = patch.size;
+              }
+              return out;
+            });
+            setCellImages(doc, viewer.row, viewer.col, next, TABLE_ORIGIN);
+          }}
           onClose={() => setViewer(null)}
         />
       )}

@@ -75,6 +75,17 @@ const cellTarget = {
     .optional()
     .describe('для таблицы: id строки из read_table (json); нет — новая строка'),
   column: z.string().optional().describe('для таблицы: название (или id) колонки'),
+  caption: z
+    .string()
+    .max(300)
+    .optional()
+    .describe('для таблицы: подпись под картинкой, например «80 монет / Обычный»'),
+  size: z
+    .number()
+    .min(16)
+    .max(512)
+    .optional()
+    .describe('для таблицы: высота картинки в пикселях (нет — в высоту строки)'),
 };
 
 interface Loaded {
@@ -246,6 +257,7 @@ export function registerImageTools(
     column: string | undefined,
     img: { id: string; info: ImageInfo },
     alt: string | undefined,
+    look: { caption?: string; size?: number } = {},
   ) => {
     if (!column) return fail('Для таблицы нужна column — название колонки (и row — id строки).');
     if (!(await store.has(table))) return fail(`Таблицы «${table}» нет. Список — list_boards.`);
@@ -258,7 +270,14 @@ export function registerImageTools(
     doc.transact(() => {
       rowId ??= addRow(doc, {});
       addCellImages(doc, rowId, col.id, [
-        { asset: img.id, w: img.info.width, h: img.info.height, ...(alt ? { alt } : {}) },
+        {
+          asset: img.id,
+          w: img.info.width,
+          h: img.info.height,
+          ...(alt ? { alt } : {}),
+          ...(look.caption ? { caption: look.caption } : {}),
+          ...(look.size ? { size: look.size } : {}),
+        },
       ]);
     }, origin);
     return text(
@@ -300,11 +319,11 @@ export function registerImageTools(
       // ChatGPT (Apps SDK): это поле принимает файл из чата — загруженный или сгенерированный.
       _meta: { 'openai/fileParams': ['file'] },
     },
-    async ({ board, row, column, file, alt, width, at, frame }) => {
+    async ({ board, row, column, caption, size, file, alt, width, at, frame }) => {
       // download_url — временная ссылка-ключ: не пишем её ни в ответ, ни в журнал.
       const r = await load({ url: file.download_url });
       if (typeof r === 'string') return fail(r);
-      if (isTableId(board)) return toCell(board, row, column, r, alt);
+      if (isTableId(board)) return toCell(board, row, column, r, alt, { caption, size });
       return place(board, [{ ...r, alt: alt ?? file.file_name, width }], { at, frame });
     },
   );
@@ -338,7 +357,7 @@ export function registerImageTools(
           frame: z.string().optional().describe('id фрейма, в который положить'),
         }),
       },
-      async ({ board, row, column, prompt, alt, shape, width, at, frame }) => {
+      async ({ board, row, column, caption, size, prompt, alt, shape, width, at, frame }) => {
         // Таблицу и колонку проверяем до генерации — не тратить лимит впустую.
         if (isTableId(board)) {
           if (!column)
@@ -354,7 +373,8 @@ export function registerImageTools(
         }
         const r = await load({ data: bytes.toString('base64') });
         if (typeof r === 'string') return fail(`OpenAI вернул не то: ${r}`);
-        if (isTableId(board)) return toCell(board, row, column, r, alt ?? prompt.slice(0, 200));
+        if (isTableId(board))
+          return toCell(board, row, column, r, alt ?? prompt.slice(0, 200), { caption, size });
         return place(board, [{ ...r, alt: alt ?? prompt.slice(0, 200), width }], { at, frame });
       },
     );
@@ -388,7 +408,11 @@ export function registerImageTools(
           for (const list of Object.values(r.images ?? {}))
             for (const img of list)
               if (!el && img.asset === id)
-                el = { assetId: img.asset, alt: img.alt, where: 'В ячейке таблицы.' };
+                el = {
+                  assetId: img.asset,
+                  alt: img.alt,
+                  where: `В ячейке таблицы${img.caption ? `, подпись «${img.caption}»` : ''}.`,
+                };
         if (!el) return fail(`Картинки ${id} в таблице нет (asset — из read_table, json).`);
       } else {
         const e = getElement(await store.get(board), id);

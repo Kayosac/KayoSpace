@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { cellImageHeight, type CellImage } from '@kayospace/page';
+import { imageDisplayHeight, type CellImage } from '@kayospace/page';
+import { CommitInput } from './CommitInput';
 import { assetUrl, assets, imageFiles } from './assets';
 
 /** Картинка из хранилища по id файла (с устройства или с хаба). */
@@ -15,7 +16,11 @@ function useAssetUrl(assetId: string): string | null {
   return url;
 }
 
-/** Картинки ячейки в ряд — в высоту строки (решение 0024); касание — открыть крупно. */
+/**
+ * Картинки ячейки (решения 0024, 0026): каждая — плитка «картинка + подпись под ней»; своего размера
+ * или в высоту строки. Плитки, которые не влезли в ширину, переносятся целиком; строка растёт сама.
+ * Касание — открыть крупно.
+ */
 export function CellImages({
   images,
   rowHeight,
@@ -25,15 +30,14 @@ export function CellImages({
   rowHeight: number | undefined;
   onOpen: (index: number) => void;
 }) {
-  const h = cellImageHeight(rowHeight);
   return (
     <span className="kt-imgs">
       {images.map((img, i) => (
         <CellThumb
           key={`${img.asset}-${i}`}
           img={img}
-          h={h}
-          label={img.alt || `Картинка ${i + 1}`}
+          h={imageDisplayHeight(img, rowHeight)}
+          label={img.caption || img.alt || `Картинка ${i + 1}`}
           onOpen={() => onOpen(i)}
         />
       ))}
@@ -54,32 +58,69 @@ function CellThumb({
 }) {
   const url = useAssetUrl(img.asset);
   const w = Math.max(8, Math.round((h * img.w) / img.h));
+  const pic = url ? (
+    <img src={url} alt={label} draggable={false} />
+  ) : (
+    <span className="kt-img-wait" />
+  );
+  if (!img.caption)
+    return (
+      <button
+        className="kt-img"
+        style={{ width: w, height: h }}
+        aria-label={label}
+        title={label}
+        onClick={onOpen}
+        data-testid="cell-image"
+      >
+        {pic}
+      </button>
+    );
   return (
     <button
-      className="kt-img"
-      style={{ width: w, height: h }}
+      className="kt-tile"
+      style={{ width: Math.max(w, 56) }}
       aria-label={label}
       title={label}
       onClick={onOpen}
       data-testid="cell-image"
     >
-      {url ? <img src={url} alt={label} draggable={false} /> : <span className="kt-img-wait" />}
+      <span className="kt-img" style={{ width: w, height: h }}>
+        {pic}
+      </span>
+      <span className="kt-caption" data-testid="cell-image-caption-text">
+        {img.caption}
+      </span>
     </button>
   );
 }
 
 /** Картинка крупно: убрать из ячейки, переставить, закрыть — касаниями. */
+/** Размеры картинки на выбор касанием; агенты могут задать любой (16–512). */
+const SIZES: readonly { size: number | null; name: string }[] = [
+  { size: null, name: 'По строке' },
+  { size: 32, name: '32' },
+  { size: 48, name: '48' },
+  { size: 64, name: '64' },
+  { size: 96, name: '96' },
+  { size: 128, name: '128' },
+  { size: 200, name: '200' },
+];
+
 export function CellImageViewer({
   images,
   index,
   onIndex,
   onRemove,
+  onChange,
   onClose,
 }: {
   images: readonly CellImage[];
   index: number;
   onIndex: (i: number) => void;
   onRemove: (i: number) => void;
+  /** Подпись и размер картинки (решение 0026). */
+  onChange: (i: number, patch: { caption?: string; size?: number | null }) => void;
   onClose: () => void;
 }) {
   const img = images[index];
@@ -135,7 +176,38 @@ export function CellImageViewer({
           <span className="muted">Загружаю картинку…</span>
         )}
       </div>
-      {img.alt && <div className="kt-viewer-alt muted">{img.alt}</div>}
+      <div className="kt-viewer-props">
+        <label className="kt-viewer-field">
+          <span className="muted">Подпись</span>
+          <CommitInput
+            key={`${img.asset}-${index}`}
+            className="kt-viewer-caption"
+            value={img.caption ?? ''}
+            placeholder="Например: 80 монет / Обычный"
+            aria-label="Подпись под картинкой"
+            onCommit={(v) => onChange(index, { caption: v })}
+            data-testid="cell-image-caption"
+          />
+        </label>
+        <div className="kt-viewer-field">
+          <span className="muted">Размер в ячейке</span>
+          <div className="row" role="radiogroup" aria-label="Размер в ячейке">
+            {SIZES.map((s) => (
+              <button
+                key={s.name}
+                role="radio"
+                aria-checked={(img.size ?? null) === s.size}
+                className="project-chip"
+                onClick={() => onChange(index, { size: s.size })}
+                data-testid="cell-image-size"
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        {img.alt && <div className="kt-viewer-alt muted">{img.alt}</div>}
+      </div>
     </div>
   );
 }

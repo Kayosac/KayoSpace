@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
   COL_MIN_WIDTH,
+  imageDisplayHeight,
   ROW_MIN_HEIGHT,
   fitTable,
   setColumnWidth,
@@ -165,5 +166,29 @@ describe('ширина колонок и подгонка (решение 0025)'
     undo.undo();
     expect(readTable(doc).columns.map((c) => c.width)).toEqual([undefined, 334]);
     expect(readTable(doc).rows[0]!.height).toBe(300);
+  });
+});
+
+describe('подпись и размер картинки в ячейке (решение 0026)', () => {
+  it('хранятся у картинки; видны агентам в markdown; размер — в пределах', () => {
+    const doc = new Y.Doc();
+    initTable(doc, [{ name: 'Добыча', type: 'text' }]);
+    const [col] = readTable(doc).columns;
+    const row = addRow(doc);
+    const A = 'a'.repeat(64);
+    setCellImages(doc, row, col!.id, [
+      { asset: A, w: 100, h: 100, caption: '  80 монет / Обычный ', size: 48, alt: 'Монеты' },
+      { asset: A, w: 100, h: 50, caption: '', size: 5000 },
+      { asset: A, w: 100, h: 50, size: Number.NaN },
+    ]);
+    const imgs = readTable(doc).rows[0]!.images![col!.id]!;
+    expect(imgs).toEqual([
+      { asset: A, w: 100, h: 100, alt: 'Монеты', caption: '80 монет / Обычный', size: 48 },
+      { asset: A, w: 100, h: 50, size: 512 },
+      { asset: A, w: 100, h: 50 },
+    ]);
+    expect(imageDisplayHeight(imgs[0]!, 200)).toBe(48);
+    expect(imageDisplayHeight(imgs[2]!, 100)).toBe(88);
+    expect(tableToMarkdown(doc)).toContain('| [🖼 80 монет / Обычный] [🖼] [🖼] |');
   });
 });

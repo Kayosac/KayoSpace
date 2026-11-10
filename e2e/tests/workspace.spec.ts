@@ -2642,16 +2642,21 @@ test('картинка с доски — в системный буфер фай
     );
   const clip = () =>
     page.evaluate(async () => {
-      const items = await navigator.clipboard.read();
-      const item = items[0];
-      if (!item) return { types: [] as readonly string[] };
-      if (item.types.includes('image/png')) {
-        const bmp = await createImageBitmap(await item.getType('image/png'));
-        return { image: `${bmp.width}x${bmp.height}`, types: item.types };
+      // Системный буфер общий для параллельных проверок: если его поменяли посреди чтения — читаем снова.
+      try {
+        const items = await navigator.clipboard.read();
+        const item = items[0];
+        if (!item) return { types: [] as readonly string[] };
+        if (item.types.includes('image/png')) {
+          const bmp = await createImageBitmap(await item.getType('image/png'));
+          return { image: `${bmp.width}x${bmp.height}`, types: item.types };
+        }
+        if (item.types.includes('text/plain'))
+          return { text: await (await item.getType('text/plain')).text(), types: item.types };
+        return { types: item.types };
+      } catch {
+        return { types: ['changed'] as readonly string[] };
       }
-      if (item.types.includes('text/plain'))
-        return { text: await (await item.getType('text/plain')).text(), types: item.types };
-      return { types: item.types };
     });
   const imageId = await idOf('image');
 
@@ -2730,15 +2735,25 @@ test('планшет: картинки в ячейке таблицы — кас
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 + 100, { steps: 4 });
   await page.mouse.up();
   await expect.poll(async () => Math.round((await row.boundingBox())!.height)).toBeGreaterThan(130);
-  const rowH = Math.round((await row.boundingBox())!.height);
+  // Картинки «по строке» — в заданную высоту (минус отступы); не влезли по ширине — переносятся,
+  // и строка растёт под них (решение 0026).
+  const tables = JSON.parse(await call('list_boards', {})) as { id: string; name: string }[];
+  const tb = tables.find((t) => t.name === 'Образцы плитки')!.id;
+  const setH = async () =>
+    (
+      JSON.parse(await call('read_table', { table: tb, format: 'json' })) as {
+        rows: { height?: number }[];
+      }
+    ).rows[0]!.height ?? 0;
+  await expect.poll(setH).toBeGreaterThan(130);
+  const h = await setH();
   await expect
     .poll(async () => Math.round((await imgs.first().boundingBox())!.height))
-    .toBeGreaterThan(rowH - 16);
+    .toBe(h - 12);
+  expect(Math.round((await row.boundingBox())!.height)).toBeGreaterThanOrEqual(h);
   await page.screenshot({ path: shot('table-images.png') });
 
   // Агент видит картинки и высоту строки.
-  const tables = JSON.parse(await call('list_boards', {})) as { id: string; name: string }[];
-  const tb = tables.find((t) => t.name === 'Образцы плитки')!.id;
   await expect
     .poll(async () => {
       const j = JSON.parse(await call('read_table', { table: tb, format: 'json' })) as {
@@ -2929,5 +2944,71 @@ test('планшет: таблица — масштаб и «Подогнать�
   await page.getByTestId('table-fit').tap();
   await expect(page.getByText('Размеры подогнаны под содержимое')).toBeVisible();
   await page.screenshot({ path: shot('table-tablet.png') });
+  await page.context().close();
+});
+
+test('планшет: подпись и размер картинки в ячейке; плитки переносятся, строка растёт сама', async ({
+  browser,
+}) => {
+  const page = await tabletPage(browser, `e2e-cell-items-${Date.now()}`);
+  const { client, call } = await mcpClient('e2e-cell-items');
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('create-table').tap();
+  await page.getByTestId('page-title').fill('Добыча');
+  await page.getByTestId('table-add-row').tap();
+  const row = page.getByTestId('table-row').first();
+  const cell = row.locator('[data-col="Название"]');
+  await cell.locator('input').tap();
+  const png = join(import.meta.dirname, '..', 'fixtures', 'gradient.png');
+  const chooser = page.waitForEvent('filechooser');
+  await cell.getByTestId('cell-add-image').tap();
+  await (await chooser).setFiles([png, png, png]);
+  const imgs = cell.getByTestId('cell-image');
+  await expect(imgs).toHaveCount(3);
+
+  // Касание картинки — подпись и размер; сохраняется само.
+  const viewer = page.getByTestId('cell-image-viewer');
+  for (let i = 0; i < 3; i++) {
+    await imgs.nth(i).tap();
+    await viewer.getByTestId('cell-image-caption').fill(`${(i + 1) * 40} монет / Обычный`);
+    await viewer.getByTestId('cell-image-size').filter({ hasText: '64' }).tap();
+    await viewer.getByTestId('cell-image-close').tap();
+  }
+  await expect(cell.getByTestId('cell-image-caption-text')).toHaveText([
+    '40 монет / Обычный',
+    '80 монет / Обычный',
+    '120 монет / Обычный',
+  ]);
+  const pic = cell.locator('.kt-img').first();
+  await expect.poll(async () => Math.round((await pic.boundingBox())!.height)).toBe(64);
+
+  // Узкая колонка — плитки целиком на следующие строки, строка таблицы растёт под всё.
+  const tables = JSON.parse(await call('list_boards', {})) as { id: string; name: string }[];
+  const tb = tables.find((t) => t.name === 'Добыча')!.id;
+  await call('write_table', { table: tb, columns: [{ name: 'Название', width: 150 }] });
+  await expect
+    .poll(async () => {
+      const ys = await imgs.evaluateAll((els) =>
+        els.map((e) => Math.round(e.getBoundingClientRect().top)),
+      );
+      return new Set(ys).size;
+    })
+    .toBe(3);
+  const rowH = (await row.boundingBox())!.height;
+  const last = (await imgs.nth(2).boundingBox())!;
+  expect(last.y + last.height).toBeLessThanOrEqual((await row.boundingBox())!.y + rowH);
+  expect(rowH).toBeGreaterThan(3 * 64);
+  await page.screenshot({ path: shot('table-cell-items.png') });
+
+  // Агент видит подписи и размеры.
+  const j = JSON.parse(await call('read_table', { table: tb, format: 'json' })) as {
+    rows: { images: Record<string, { caption?: string; size?: number }[]> }[];
+  };
+  expect(j.rows[0]!.images['Название']!.map((i) => [i.caption, i.size])).toEqual([
+    ['40 монет / Обычный', 64],
+    ['80 монет / Обычный', 64],
+    ['120 монет / Обычный', 64],
+  ]);
+  await client.close();
   await page.context().close();
 });

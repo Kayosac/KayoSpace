@@ -68,7 +68,20 @@ const cellImage = z.object({
   url: z.string().url().optional(),
   data: z.string().optional().describe('base64 или data:-адрес'),
   svg: z.string().optional().describe('нарисовать самому'),
-  alt: z.string().max(300).optional().describe('подпись'),
+  alt: z.string().max(300).optional().describe('описание (не показывается; для поиска и агентов)'),
+  caption: z
+    .string()
+    .max(300)
+    .nullable()
+    .optional()
+    .describe('подпись под картинкой, например «80 монет / Обычный» (null — убрать)'),
+  size: z
+    .number()
+    .min(1)
+    .max(2000)
+    .nullable()
+    .optional()
+    .describe('высота картинки в пикселях, 16–512 (null — в высоту строки)'),
 });
 
 export function registerTableTools(
@@ -142,8 +155,10 @@ export function registerTableTools(
         'width — ширина в пикселях (null — по умолчанию); ' +
         'delete_columns — удалить колонки вместе со значениями. ' +
         'Картинки — в любой ячейке рядом со значением: rows[].images — колонка → список целиком ' +
-        '({asset} — оставить из read_table, {url}/{data}/{svg} — новая, alt — подпись; [] — убрать все); ' +
-        'картинки вписываются в высоту строки: rows[].height — 40…800 пикселей (null — по тексту). ' +
+        '({asset} — оставить из read_table, {url}/{data}/{svg} — новая; caption — подпись под картинкой, ' +
+        'size — её высота в пикселях, иначе картинка вписывается в высоту строки; [] — убрать все). ' +
+        'Картинки с подписями переносятся целиком, строка растёт сама; rows[].height — минимальная высота ' +
+        'строки, 40…800 (null — по содержимому). ' +
         'Новая таблица: id «tb_…» и name; без columns получит «Название» и «Готово».',
       inputSchema: z.object({
         table: tableId,
@@ -211,6 +226,19 @@ export function registerTableTools(
       }
       // Картинки — заранее (скачать и положить в хранилище), правка таблицы — одной транзакцией.
       const ready = new Map<number, Record<string, CellImage[]>>();
+      // Что уже лежит в ячейках («строка|колонка» по названию и по id) — чтобы {asset} сохранял подпись.
+      const current = new Map<string, CellImage[]>();
+      if (existed && rows?.some((r) => r.images)) {
+        const t = readTable(await store.get(table));
+        for (const row of t.rows)
+          for (const c of t.columns) {
+            const list = row.images?.[c.id];
+            if (!list) continue;
+            current.set(`${row.id}|${c.id}`, list);
+            current.set(`${row.id}|${c.name}`, list);
+            current.set(`${row.id}|${c.name.toLowerCase()}`, list);
+          }
+      }
       const imageErrors: string[] = [];
       for (const [i, r] of (rows ?? []).entries()) {
         if (!r.images) continue;
@@ -219,14 +247,29 @@ export function registerTableTools(
         for (const [col, list] of Object.entries(r.images)) {
           out[col] = [];
           for (const src of list) {
+            // Подпись и размер: заданные — новые, null — убрать, не заданные — как были у этой картинки.
+            const look = (prev: CellImage | undefined): Partial<CellImage> => {
+              const caption =
+                src.caption === undefined ? prev?.caption : (src.caption ?? undefined);
+              const size = src.size === undefined ? prev?.size : (src.size ?? undefined);
+              const alt = src.alt ?? prev?.alt;
+              return {
+                ...(alt ? { alt } : {}),
+                ...(caption ? { caption } : {}),
+                ...(size ? { size } : {}),
+              };
+            };
             if (src.asset) {
-              const bytes = await images.assets.get(src.asset);
-              const info = bytes && imageInfo(bytes);
+              const prev = r.id
+                ? (current.get(`${r.id}|${col}`) ?? []).find((x) => x.asset === src.asset)
+                : undefined;
+              const bytes = prev ? null : await images.assets.get(src.asset);
+              const info = prev ? { width: prev.w, height: prev.h } : bytes && imageInfo(bytes);
               if (!info) {
                 imageErrors.push(`${src.asset.slice(0, 8)}…: такой картинки нет`);
                 continue;
               }
-              out[col]!.push({ asset: src.asset, w: info.width, h: info.height, alt: src.alt });
+              out[col]!.push({ asset: src.asset, w: info.width, h: info.height, ...look(prev) });
               continue;
             }
             const from = src.url
@@ -249,7 +292,7 @@ export function registerTableTools(
                 asset: got.id,
                 w: got.info.width,
                 h: got.info.height,
-                alt: src.alt,
+                ...look(undefined),
               });
           }
         }

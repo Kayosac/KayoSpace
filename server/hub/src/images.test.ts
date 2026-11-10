@@ -361,7 +361,15 @@ describe('картинка-файл из чата ChatGPT (openai/fileParams)', 
         isError?: boolean;
         content: { text?: string }[];
       }>;
-    const r = await call({ board: 'tb_cat', row, column: 'Фото', file, alt: 'Барсик спит' });
+    const r = await call({
+      board: 'tb_cat',
+      row,
+      column: 'Фото',
+      file,
+      alt: 'Барсик спит',
+      caption: 'Барсик / 3 года',
+      size: 64,
+    });
     expect(r.isError).toBeFalsy();
     expect(r.content[0]!.text).toContain('в ячейке «Фото»');
     expect(r.content[0]!.text).not.toContain('secret');
@@ -371,9 +379,9 @@ describe('картинка-файл из чата ChatGPT (openai/fileParams)', 
     const { columns, rows } = readTable(doc);
     const [name, photo] = columns;
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.images![photo!.id]!.map((i) => [i.w, i.h, i.alt])).toEqual([
-      [800, 400, 'Барсик спит'],
-      [800, 400, undefined],
+    expect(rows[0]!.images![photo!.id]!.map((i) => [i.w, i.h, i.alt, i.caption, i.size])).toEqual([
+      [800, 400, 'Барсик спит', 'Барсик / 3 года', 64],
+      [800, 400, undefined, undefined, undefined],
     ]);
     expect(rows[1]!.images![name!.id]).toHaveLength(1);
     // Без колонки, с чужой колонкой или строкой — понятная ошибка, таблица не меняется.
