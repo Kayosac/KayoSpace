@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  ROW_MIN_HEIGHT,
+  addCellImages,
+  cellImageHeight,
+  setCellImages,
+  setRowHeight,
   addColumn,
   addRow,
   coerceCell,
   columnTotal,
   compareCells,
+  computeTable,
   initTable,
   moveColumn,
   readTable,
@@ -79,5 +85,60 @@ describe('таблица в Yjs', () => {
     const doc = new Y.Doc();
     writePage(doc, '# Кухня\n\n- [x] Плитка\n- [ ] **Клей**\n\n[[board:k#f|Схема]]\n\nКонец');
     expect(docExcerpt('pg_x', doc)).toBe('Кухня\n☑ Плитка\n☐ Клей\nКонец');
+  });
+});
+
+describe('картинки в ячейках и высота строки (решение 0024)', () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+  it('в любой ячейке, рядом со значением; формулы и итоги не мешают', () => {
+    const doc = new Y.Doc();
+    initTable(doc, [
+      { name: 'Что', type: 'text' },
+      { name: 'Цена', type: 'number' },
+      { name: 'Вдвое', type: 'formula', formula: '[Цена] * 2' },
+    ]);
+    const [what, price, twice] = readTable(doc).columns;
+    const row = addRow(doc, { [what!.id]: 'Плитка', [price!.id]: 10 });
+    expect(setCellImages(doc, row, what!.id, [{ asset: A, w: 400, h: 200, alt: 'Белая' }])).toBe(
+      true,
+    );
+    expect(addCellImages(doc, row, twice!.id, [{ asset: B, w: 100, h: 100 }])).toBe(true);
+    addCellImages(doc, row, what!.id, [{ asset: B, w: 300, h: 300 }]);
+    // Мусор не проходит.
+    addCellImages(doc, row, what!.id, [{ asset: 'не хэш', w: 1, h: 1 } as never]);
+    const t = computeTable(readTable(doc));
+    expect(t.rows[0]!.images).toEqual({
+      [what!.id]: [
+        { asset: A, w: 400, h: 200, alt: 'Белая' },
+        { asset: B, w: 300, h: 300 },
+      ],
+      [twice!.id]: [{ asset: B, w: 100, h: 100 }],
+    });
+    expect(t.rows[0]!.cells[twice!.id]).toBe(20);
+    expect(tableToMarkdown(doc)).toContain('| Плитка [картинок: 2] | 10 | 20 [картинок: 1] |');
+    // Удалить картинки — пустым списком; удалить колонку — вместе с её картинками.
+    setCellImages(doc, row, twice!.id, []);
+    expect(readTable(doc).rows[0]!.images).toEqual({ [what!.id]: expect.any(Array) });
+    removeColumn(doc, what!.id);
+    expect(readTable(doc).rows[0]!.images).toBeUndefined();
+    expect(setCellImages(doc, 'нет', price!.id, [])).toBe(false);
+  });
+
+  it('высота строки — в пределах; картинка — высота минус отступы', () => {
+    const doc = new Y.Doc();
+    initTable(doc);
+    const row = addRow(doc);
+    expect(readTable(doc).rows[0]!.height).toBeUndefined();
+    setRowHeight(doc, row, 10);
+    expect(readTable(doc).rows[0]!.height).toBe(ROW_MIN_HEIGHT);
+    setRowHeight(doc, row, 5000);
+    expect(readTable(doc).rows[0]!.height).toBe(800);
+    setRowHeight(doc, row, 120.4);
+    expect(readTable(doc).rows[0]!.height).toBe(120);
+    expect(cellImageHeight(120)).toBe(108);
+    expect(cellImageHeight(undefined)).toBe(28);
+    setRowHeight(doc, row, null);
+    expect(readTable(doc).rows[0]!.height).toBeUndefined();
   });
 });

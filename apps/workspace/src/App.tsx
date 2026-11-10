@@ -38,7 +38,7 @@ import { importMarkdown, isMarkdown, markdownFiles, markdownOf } from './md-impo
 import { DocOverlay, DocMenu, useDocCards, type DocSummary } from './DocOverlay';
 import { useHubFeatures } from './voice';
 import { Presentation } from './Presentation';
-import { AssetStore, imageFiles } from './assets';
+import { assets, imageFiles } from './assets';
 import { isPdf, pdfFiles, pdfTitle, renderPdf, MAX_PDF_PAGES } from './pdf-import';
 import { NoteEditor } from './NoteEditor';
 import { finePointer, lowLatencyInk, releaseFieldFocus } from './touch';
@@ -90,9 +90,6 @@ declare global {
     __TAURI_INTERNALS__?: unknown;
   }
 }
-
-/** Картинки — одно хранилище на всё приложение (общее для досок). */
-const assets = new AssetStore();
 
 const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 

@@ -41,10 +41,47 @@ export interface Column {
 
 export type Cell = string | number | boolean | null;
 
+/** Картинка в ячейке (решение 0024): файл в хранилище картинок (как у картинок доски) и его размер. */
+export interface CellImage {
+  asset: string;
+  w: number;
+  h: number;
+  alt?: string;
+}
+
+/** Высота строки: не ниже обычной и не выше разумного (картинки вписываются в неё). */
+export const ROW_MIN_HEIGHT = 40;
+export const ROW_MAX_HEIGHT = 800;
+/** Отступ ячейки сверху и снизу: картинка — высота строки минус два отступа. */
+export const CELL_PAD = 6;
+
 export interface Row {
   id: string;
   cells: Record<string, Cell>;
+  /** Картинки по id колонки — в любой ячейке, рядом со значением. */
+  images?: Record<string, CellImage[]>;
+  /** Высота строки, заданная человеком или агентом; нет — по содержимому. */
+  height?: number;
 }
+
+/** Ключ картинок ячейки в строке (значение ячейки лежит под id колонки). */
+const imgKey = (colId: string): string => `img:${colId}`;
+
+const validImage = (x: unknown): x is CellImage =>
+  !!x &&
+  typeof x === 'object' &&
+  typeof (x as CellImage).asset === 'string' &&
+  /^[0-9a-f]{64}$/.test((x as CellImage).asset) &&
+  (x as CellImage).w > 0 &&
+  (x as CellImage).h > 0;
+
+/** Высота строки в допустимых пределах (целые пиксели). */
+export const clampRowHeight = (h: number): number =>
+  Math.round(Math.min(ROW_MAX_HEIGHT, Math.max(ROW_MIN_HEIGHT, h)));
+
+/** Высота картинки в строке: заданная высота минус отступы (у строки «по содержимому» — обычная). */
+export const cellImageHeight = (rowHeight: number | undefined): number =>
+  (rowHeight ?? ROW_MIN_HEIGHT) - CELL_PAD * 2;
 
 export interface TableData {
   columns: Column[];
@@ -143,11 +180,23 @@ export function readTable(doc: Y.Doc): TableData {
   const columns = peek(doc, 'columns').map(readColumn);
   const rows = peek(doc, 'rows').map((m) => {
     const cells: Record<string, Cell> = {};
+    let images: Record<string, CellImage[]> | undefined;
     for (const c of columns) {
       const v = m.get(c.id);
       if (v !== undefined && v !== null) cells[c.id] = v as Cell;
+      const imgs = m.get(imgKey(c.id));
+      if (Array.isArray(imgs)) {
+        const ok = imgs.filter(validImage);
+        if (ok.length) (images ??= {})[c.id] = ok;
+      }
     }
-    return { id: String(m.get('id')), cells };
+    const h = m.get('height');
+    return {
+      id: String(m.get('id')),
+      cells,
+      ...(images ? { images } : {}),
+      ...(typeof h === 'number' && Number.isFinite(h) ? { height: clampRowHeight(h) } : {}),
+    };
   });
   return { columns, rows };
 }
@@ -244,7 +293,10 @@ export function removeColumn(doc: Y.Doc, id: string, origin?: unknown): void {
   if (!found) return;
   doc.transact(() => {
     arr(doc, 'columns').delete(found.i, 1);
-    for (const r of arr(doc, 'rows').toArray()) r.delete(id);
+    for (const r of arr(doc, 'rows').toArray()) {
+      r.delete(id);
+      r.delete(imgKey(id));
+    }
   }, origin);
 }
 
@@ -310,6 +362,57 @@ export function updateRow(
       if (cell === null) found.m.delete(k);
       else found.m.set(k, cell);
     }
+  }, origin);
+  return true;
+}
+
+/** Картинки ячейки — списком целиком (пустой — убрать все). false — нет такой строки или колонки. */
+export function setCellImages(
+  doc: Y.Doc,
+  rowId: string,
+  colId: string,
+  images: readonly CellImage[],
+  origin?: unknown,
+): boolean {
+  const found = rowMap(doc, rowId);
+  if (!found || !columnMap(doc, colId)) return false;
+  const list = images.filter(validImage).map((i) => ({
+    asset: i.asset,
+    w: Math.round(i.w),
+    h: Math.round(i.h),
+    ...(i.alt ? { alt: i.alt } : {}),
+  }));
+  doc.transact(() => {
+    if (list.length) found.m.set(imgKey(colId), list);
+    else found.m.delete(imgKey(colId));
+  }, origin);
+  return true;
+}
+
+/** Дописать картинки в ячейку (к тем, что уже есть). */
+export function addCellImages(
+  doc: Y.Doc,
+  rowId: string,
+  colId: string,
+  images: readonly CellImage[],
+  origin?: unknown,
+): boolean {
+  const have = readTable(doc).rows.find((r) => r.id === rowId)?.images?.[colId] ?? [];
+  return setCellImages(doc, rowId, colId, [...have, ...images], origin);
+}
+
+/** Высота строки; null — снова по содержимому. */
+export function setRowHeight(
+  doc: Y.Doc,
+  rowId: string,
+  height: number | null,
+  origin?: unknown,
+): boolean {
+  const found = rowMap(doc, rowId);
+  if (!found) return false;
+  doc.transact(() => {
+    if (height === null) found.m.delete('height');
+    else found.m.set('height', clampRowHeight(height));
   }, origin);
   return true;
 }
@@ -384,9 +487,13 @@ export function tableToMarkdown(doc: Y.Doc): string {
   const typeName = (t: ColumnType) => COLUMN_TYPES.find((x) => x.type === t)?.name ?? t;
   const head = `| ${columns.map((c) => esc(c.name)).join(' | ')} |`;
   const sep = `| ${columns.map(() => '---').join(' | ')} |`;
-  const body = rows.map(
-    (r) => `| ${columns.map((c) => esc(cellText(c, r.cells[c.id]))).join(' | ')} |`,
-  );
+  const cell = (r: Row, c: Column): string => {
+    const text = cellText(c, r.cells[c.id]);
+    const n = r.images?.[c.id]?.length ?? 0;
+    const pics = n ? `[картинок: ${n}]` : '';
+    return [text, pics].filter(Boolean).join(' ');
+  };
+  const body = rows.map((r) => `| ${columns.map((c) => esc(cell(r, c))).join(' | ')} |`);
   const types = columns
     .map(
       (c) =>
@@ -488,7 +595,7 @@ export function computeTable(data: TableData, today: string = todayIso()): Compu
         // Ошибка уже записана в errors.
       }
     }
-    return { id: r.id, cells };
+    return { ...r, cells };
   });
   return { columns: data.columns, rows, errors };
 }

@@ -2695,3 +2695,79 @@ test('картинка с доски — в системный буфер фай
   await client.close();
   await page.context().close();
 });
+
+test('планшет: картинки в ячейке таблицы — касаниями; вписываются в высоту строки, её тянут', async ({
+  browser,
+}) => {
+  const page = await tabletPage(browser, `e2e-table-images-${Date.now()}`);
+  const { client, call } = await mcpClient('e2e-table-images');
+  await page.getByTestId('board-title').tap();
+  await page.getByTestId('create-table').tap();
+  const view = page.getByTestId('table-view');
+  await page.getByTestId('page-title').fill('Образцы плитки');
+  await view.getByTestId('table-add-row').tap();
+  const row = view.getByTestId('table-row').first();
+  const cell = row.locator('[data-col="Название"]');
+  // Касание ячейки — рядом кнопка «+ 🖼»; файл — с устройства.
+  await cell.locator('input').tap();
+  await cell.locator('input').fill('Керамика');
+  const png = join(import.meta.dirname, '..', 'fixtures', 'gradient.png');
+  const chooser = page.waitForEvent('filechooser');
+  await cell.getByTestId('cell-add-image').tap();
+  await (await chooser).setFiles([png, png]);
+  const imgs = cell.getByTestId('cell-image');
+  await expect(imgs).toHaveCount(2);
+  await expect(cell.locator('input')).toHaveValue('Керамика');
+  // Строка по тексту — картинки в обычную высоту.
+  await expect.poll(async () => Math.round((await imgs.first().boundingBox())!.height)).toBe(28);
+
+  // Тянем номер строки вниз — строка выше, картинки растут вместе с ней.
+  const num = row.getByTestId('row-number');
+  const b = (await num.boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 + 40, { steps: 4 });
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 + 100, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await row.boundingBox())!.height)).toBeGreaterThan(130);
+  const rowH = Math.round((await row.boundingBox())!.height);
+  await expect
+    .poll(async () => Math.round((await imgs.first().boundingBox())!.height))
+    .toBeGreaterThan(rowH - 16);
+  await page.screenshot({ path: shot('table-images.png') });
+
+  // Агент видит картинки и высоту строки.
+  const tables = JSON.parse(await call('list_boards', {})) as { id: string; name: string }[];
+  const tb = tables.find((t) => t.name === 'Образцы плитки')!.id;
+  await expect
+    .poll(async () => {
+      const j = JSON.parse(await call('read_table', { table: tb, format: 'json' })) as {
+        rows: {
+          values: Record<string, unknown>;
+          images?: Record<string, unknown[]>;
+          height?: number;
+        }[];
+      };
+      return [
+        j.rows[0]!.values['Название'],
+        j.rows[0]!.images?.['Название']?.length,
+        !!j.rows[0]!.height,
+      ];
+    })
+    .toEqual(['Керамика', 2, true]);
+
+  // Касание картинки — крупно; «Убрать из ячейки» — по одной.
+  await imgs.first().tap();
+  const viewer = page.getByTestId('cell-image-viewer');
+  await expect(viewer).toBeVisible();
+  await viewer.getByTestId('cell-image-remove').tap();
+  await expect(imgs).toHaveCount(1);
+  await viewer.getByTestId('cell-image-close').tap();
+  await expect(viewer).toHaveCount(0);
+  // Высота — снова по тексту из меню строки.
+  await num.tap();
+  await row.getByTestId('row-height-reset').tap();
+  await expect.poll(async () => Math.round((await imgs.first().boundingBox())!.height)).toBe(28);
+  await client.close();
+  await page.context().close();
+});

@@ -8,6 +8,7 @@
 import type * as Y from 'yjs';
 import { getBoardName, getElement, listElements } from '@kayospace/board';
 import {
+  cellImageHeight,
   cellText,
   computeTable,
   htmlText,
@@ -18,7 +19,7 @@ import {
 } from '@kayospace/page';
 
 type JSONContent = ReturnType<typeof readPage>;
-import { boardSvg, contentArea, loadImages, renderPng } from './render';
+import { boardSvg, contentArea, loadImages, renderPng, type ImageData } from './render';
 
 /** A4 при 96 dpi. */
 export const PAGE_W = 794;
@@ -515,8 +516,35 @@ function columnWidths(
   return want.map((v) => (v / total) * CONTENT_W);
 }
 
+/** Файлы картинок из ячеек таблицы (решение 0024) — для страниц и миниатюры. */
+export async function tableImages(
+  doc: Y.Doc,
+  assets: Parameters<typeof loadImages>[1],
+): Promise<Map<string, ImageData>> {
+  const out = new Map<string, ImageData>();
+  if (!assets) return out;
+  let total = 0;
+  for (const r of readTable(doc).rows)
+    for (const list of Object.values(r.images ?? {}))
+      for (const img of list) {
+        if (out.has(img.asset)) continue;
+        const head = await assets.head(img.asset);
+        if (!head || !/^image\/(png|jpeg|gif)$/.test(head.type)) continue;
+        const data = await assets.get(img.asset);
+        if (!data || total + data.length > 40 * 1024 * 1024) continue;
+        total += data.length;
+        out.set(img.asset, { mime: head.type, data });
+      }
+  return out;
+}
+
 /** Страницы таблицы (SVG A4): шапка повторяется на каждой странице, внизу — итоги не нужны. */
-export function tablePages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
+export function tablePages(
+  doc: Y.Doc,
+  scale = 1,
+  noTitle = false,
+  images: ReadonlyMap<string, ImageData> = new Map(),
+): string[] {
   const { columns, rows } = computeTable(readTable(doc));
   const title = getBoardName(doc) ?? 'Без названия';
   const top = noTitle ? noHeader : titleHeader(title);
@@ -544,13 +572,32 @@ export function tablePages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
         .join(''),
   };
   const rowItems: Item[] = rows.map((r) => {
+    // Картинки ячейки — слева, в высоту строки (как в приложении); текст — справа от них.
+    const imgH = cellImageHeight(r.height);
+    const strips = columns.map((c, i) => {
+      const list = r.images?.[c.id] ?? [];
+      let w = 0;
+      const placed: { img: (typeof list)[number]; x: number; w: number }[] = [];
+      for (const img of list) {
+        const iw = (imgH * img.w) / img.h;
+        if (w + iw > widths[i]! - pad * 2 && placed.length) break;
+        placed.push({ img, x: w, w: Math.min(iw, widths[i]! - pad * 2) });
+        w += iw + 4;
+      }
+      return { placed, w: placed.length ? w : 0 };
+    });
     const cells = columns.map((c, i) =>
       c.type === 'checkbox'
         ? []
-        : wrapRuns([{ text: cellText(c, r.cells[c.id]) }], widths[i]! - pad * 2, size),
+        : wrapRuns(
+            [{ text: cellText(c, r.cells[c.id]) }],
+            Math.max(24, widths[i]! - pad * 2 - strips[i]!.w),
+            size,
+          ),
     );
     const lines = Math.max(1, ...cells.map((l) => l.length));
-    const h = lines * size * 1.4 + pad * 2;
+    const hasImages = strips.some((s) => s.placed.length);
+    const h = Math.max(lines * size * 1.4 + pad * 2, r.height ?? (hasImages ? imgH + pad * 2 : 0));
     return {
       h,
       gap: 0,
@@ -558,12 +605,24 @@ export function tablePages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
         `<line x1="${MARGIN}" y1="${n(y + h)}" x2="${MARGIN + CONTENT_W}" y2="${n(y + h)}" stroke="${LINE_C}"/>` +
         columns
           .map((c, i) => {
-            const x = xs[i]! + pad;
+            const strip = strips[i]!;
+            const pics = strip.placed
+              .map(({ img, x: ix, w: iw }) => {
+                const file = images.get(img.asset);
+                const px = xs[i]! + pad + ix;
+                const py = y + pad;
+                return file
+                  ? `<image x="${n(px)}" y="${n(py)}" width="${n(iw)}" height="${n(imgH)}" preserveAspectRatio="xMidYMid slice" href="data:${file.mime};base64,${file.data.toString('base64')}"/>`
+                  : `<rect x="${n(px)}" y="${n(py)}" width="${n(iw)}" height="${n(imgH)}" rx="3" fill="#ecebe6"/>`;
+              })
+              .join('');
+            const x = xs[i]! + pad + strip.w;
             if (c.type === 'checkbox') {
               const on = r.cells[c.id] === true;
-              const cx = xs[i]! + widths[i]! / 2;
+              const cx = strip.w ? x + 8 : xs[i]! + widths[i]! / 2;
               const cy = y + pad + (size * 1.4) / 2;
               return (
+                pics +
                 `<rect x="${n(cx - 6)}" y="${n(cy - 6)}" width="12" height="12" rx="2.5" fill="${on ? GREEN : 'none'}" stroke="${on ? GREEN : MUTED}" stroke-width="1.3"/>` +
                 (on
                   ? `<path d="M${n(cx - 3.5)} ${n(cy)} l2.5 2.5 l5 -5" fill="none" stroke="#fff" stroke-width="1.6"/>`
@@ -571,18 +630,21 @@ export function tablePages(doc: Y.Doc, scale = 1, noTitle = false): string[] {
               );
             }
             const right = c.type === 'number';
-            return cells[i]!.map((l, k) =>
-              right
-                ? lineSvg(
-                    l,
-                    xs[i]! + widths[i]! - pad,
-                    y + pad + k * size * 1.4,
-                    size,
-                    INK,
-                    ' text-anchor="end"',
-                  )
-                : lineSvg(l, x, y + pad + k * size * 1.4, size, c.type === 'url' ? ACCENT : INK),
-            ).join('');
+            return (
+              pics +
+              cells[i]!.map((l, k) =>
+                right
+                  ? lineSvg(
+                      l,
+                      xs[i]! + widths[i]! - pad,
+                      y + pad + k * size * 1.4,
+                      size,
+                      INK,
+                      ' text-anchor="end"',
+                    )
+                  : lineSvg(l, x, y + pad + k * size * 1.4, size, c.type === 'url' ? ACCENT : INK),
+              ).join('')
+            );
           })
           .join(''),
     };

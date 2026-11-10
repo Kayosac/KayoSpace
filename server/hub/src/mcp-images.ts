@@ -16,6 +16,7 @@ import {
   type Layout,
 } from '@kayospace/board';
 import type { Actor, FrameElement } from '@kayospace/model';
+import { isTableId, readTable } from '@kayospace/page';
 import { sha256 } from './assets';
 import {
   IMAGE_TYPES,
@@ -64,6 +65,38 @@ interface Loaded {
   width?: number;
 }
 
+/** Скачать или раскодировать картинку и положить файл в хранилище; строка — понятная ошибка. */
+export async function ingestImage(
+  src: { url: string } | { data: string } | { svg: string },
+  assets: ImageAssets,
+  opts: { allowPrivateUrls?: boolean } = {},
+): Promise<{ id: string; info: ImageInfo } | string> {
+  let bytes: Buffer | null;
+  try {
+    if ('svg' in src) {
+      const png = renderSvgImage(src.svg);
+      if (typeof png === 'string') return png;
+      bytes = png;
+    } else {
+      bytes =
+        'url' in src
+          ? await fetchImage(src.url, { allowPrivate: opts.allowPrivateUrls })
+          : decodeImageData(src.data);
+    }
+  } catch (err) {
+    if (err instanceof ImageFetchError) return err.message;
+    throw err;
+  }
+  if (!bytes) return 'data — не base64.';
+  if (bytes.length > MAX_AGENT_IMAGE_BYTES) return 'больше 15 МБ.';
+  const info = imageInfo(bytes);
+  if (!info || !(IMAGE_TYPES as readonly string[]).includes(info.mime))
+    return 'это не картинка PNG, JPEG, GIF или WebP.';
+  const id = sha256(bytes);
+  await assets.put(id, bytes);
+  return { id, info };
+}
+
 export function registerImageTools(
   server: McpServer,
   store: Source,
@@ -72,35 +105,8 @@ export function registerImageTools(
   origin: unknown,
   opts: { allowPrivateUrls?: boolean; openai?: OpenAi | null } = {},
 ): void {
-  /** Скачать или раскодировать картинку и положить файл в хранилище; строка — понятная ошибка. */
-  const load = async (
-    src: { url: string } | { data: string } | { svg: string },
-  ): Promise<{ id: string; info: ImageInfo } | string> => {
-    let bytes: Buffer | null;
-    try {
-      if ('svg' in src) {
-        const png = renderSvgImage(src.svg);
-        if (typeof png === 'string') return png;
-        bytes = png;
-      } else {
-        bytes =
-          'url' in src
-            ? await fetchImage(src.url, { allowPrivate: opts.allowPrivateUrls })
-            : decodeImageData(src.data);
-      }
-    } catch (err) {
-      if (err instanceof ImageFetchError) return err.message;
-      throw err;
-    }
-    if (!bytes) return 'data — не base64.';
-    if (bytes.length > MAX_AGENT_IMAGE_BYTES) return 'больше 15 МБ.';
-    const info = imageInfo(bytes);
-    if (!info || !(IMAGE_TYPES as readonly string[]).includes(info.mime))
-      return 'это не картинка PNG, JPEG, GIF или WebP.';
-    const id = sha256(bytes);
-    await assets.put(id, bytes);
-    return { id, info };
-  };
+  const load = (src: { url: string } | { data: string } | { svg: string }) =>
+    ingestImage(src, assets, opts);
 
   /** Разложить картинки на доске одной транзакцией. */
   const place = async (
@@ -300,19 +306,41 @@ export function registerImageTools(
     {
       description:
         'Посмотреть картинку с доски в полном разрешении (view_board показывает её мелко, вместе ' +
-        'со всем вокруг). Большие уменьшаются до maxSize по длинной стороне.',
+        'со всем вокруг). Большие уменьшаются до maxSize по длинной стороне. ' +
+        'Картинка из ячейки таблицы: board — id таблицы «tb_…», id — asset картинки из read_table (json).',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        board: boardId,
-        id: z.string().describe('id элемента-картинки'),
+        board: z
+          .string()
+          .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+          .refine(
+            (id) => !id.startsWith('pg_') && !id.startsWith('ar_'),
+            'Это документ или артефакт: read_page, read_artifact',
+          ),
+        id: z.string().describe('id элемента-картинки (у таблицы — asset картинки)'),
         maxSize: z.number().int().min(256).max(2048).optional().describe('по умолчанию 1568'),
       }),
     },
     async ({ board, id, maxSize }) => {
       if (!(await store.has(board))) return fail(`Доски «${board}» нет.`);
-      const el = getElement(await store.get(board), id);
-      if (!el || el.type !== 'image') return fail(`Картинки ${id} на доске нет.`);
-      const bytes = await assets.get(el.props.assetId);
+      let el: { alt?: string; where: string; assetId: string } | null = null;
+      if (isTableId(board)) {
+        for (const r of readTable(await store.get(board)).rows)
+          for (const list of Object.values(r.images ?? {}))
+            for (const img of list)
+              if (!el && img.asset === id)
+                el = { assetId: img.asset, alt: img.alt, where: 'В ячейке таблицы.' };
+        if (!el) return fail(`Картинки ${id} в таблице нет (asset — из read_table, json).`);
+      } else {
+        const e = getElement(await store.get(board), id);
+        if (!e || e.type !== 'image') return fail(`Картинки ${id} на доске нет.`);
+        el = {
+          assetId: e.props.assetId,
+          alt: e.props.alt,
+          where: `На доске: (${Math.round(e.x)}, ${Math.round(e.y)}) ${Math.round(e.w)}×${Math.round(e.h)}.`,
+        };
+      }
+      const bytes = await assets.get(el.assetId);
       if (!bytes) return fail('Файл картинки на хабе не найден (ещё не загрузился с устройства?).');
       const info = imageInfo(bytes);
       if (!info) return fail('Файл картинки не читается.');
@@ -321,8 +349,8 @@ export function registerImageTools(
         type: 'text' as const,
         text:
           `Картинка ${info.width}×${info.height}${w !== info.width ? `, показана ${w}×${h}` : ''}` +
-          (el.props.alt ? `. Подпись: ${el.props.alt}` : '') +
-          `. На доске: (${Math.round(el.x)}, ${Math.round(el.y)}) ${Math.round(el.w)}×${Math.round(el.h)}.`,
+          (el.alt ? `. Подпись: ${el.alt}` : '') +
+          `. ${el.where}`,
       });
       const big = Math.max(info.width, info.height) > limit || bytes.length > MAX_SEND_BYTES;
       // WebP resvg не рисует — его отдаём как есть, если не слишком тяжёлый.

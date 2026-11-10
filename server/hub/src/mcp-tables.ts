@@ -26,12 +26,17 @@ import {
   readTable,
   removeColumn,
   removeRows,
+  setCellImages,
+  setRowHeight,
+  type CellImage,
   tableToMarkdown,
   updateColumn,
   updateRow,
   type ColumnType,
 } from '@kayospace/page';
 import type { BoardInfo } from './store';
+import { imageInfo } from './images';
+import { ingestImage, type ImageAssets } from './mcp-images';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const fail = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true });
@@ -52,11 +57,25 @@ const TYPES_HELP = COLUMN_TYPES.map((t) => `${t.type} — ${t.name.toLowerCase()
 
 const cell = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
+/** Картинка ячейки от агента: уже лежащая (asset из read_table) или новая — по ссылке, файлом, svg. */
+const cellImage = z.object({
+  asset: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional()
+    .describe('оставить картинку из read_table'),
+  url: z.string().url().optional(),
+  data: z.string().optional().describe('base64 или data:-адрес'),
+  svg: z.string().optional().describe('нарисовать самому'),
+  alt: z.string().max(300).optional().describe('подпись'),
+});
+
 export function registerTableTools(
   server: McpServer,
   store: Source,
   origin: unknown,
   readOnly = false,
+  images: { assets: ImageAssets; allowPrivateUrls?: boolean } | null = null,
 ): void {
   server.registerTool(
     'read_table',
@@ -64,7 +83,8 @@ export function registerTableTools(
       annotations: { readOnlyHint: true },
       description:
         'Прочитать таблицу Kayospace (в list_boards — kind: "table", id начинается с «tb_»). ' +
-        'markdown — читать; json — колонки с типами и строки с id (для write_table).',
+        'markdown — читать; json — колонки с типами и строки с id (для write_table), картинки ячеек ' +
+        '(images: колонка → [{asset, w, h, alt}], посмотреть — get_image с board = id таблицы) и высоту строк.',
       inputSchema: z.object({ table: tableId, format: z.enum(['markdown', 'json']).optional() }),
     },
     async ({ table, format }) => {
@@ -85,6 +105,16 @@ export function registerTableTools(
                 values: Object.fromEntries(
                   columns.map((c) => [c.name, r.cells[c.id] ?? null] as const),
                 ),
+                ...(r.images
+                  ? {
+                      images: Object.fromEntries(
+                        columns
+                          .filter((c) => r.images?.[c.id])
+                          .map((c) => [c.name, r.images![c.id]] as const),
+                      ),
+                    }
+                  : {}),
+                ...(r.height ? { height: r.height } : {}),
               })),
             },
             null,
@@ -109,6 +139,9 @@ export function registerTableTools(
         'формула — в formula (значения считаются сами, писать их в строки не нужно). ' +
         'У существующей колонки: rename — новое название, position — место слева (0 — первая); ' +
         'delete_columns — удалить колонки вместе со значениями. ' +
+        'Картинки — в любой ячейке рядом со значением: rows[].images — колонка → список целиком ' +
+        '({asset} — оставить из read_table, {url}/{data}/{svg} — новая, alt — подпись; [] — убрать все); ' +
+        'картинки вписываются в высоту строки: rows[].height — 40…800 пикселей (null — по тексту). ' +
         'Новая таблица: id «tb_…» и name; без columns получит «Название» и «Готово».',
       inputSchema: z.object({
         table: tableId,
@@ -138,7 +171,14 @@ export function registerTableTools(
           .max(40)
           .optional(),
         rows: z
-          .array(z.object({ id: z.string().optional(), values: z.record(z.string(), cell) }))
+          .array(
+            z.object({
+              id: z.string().optional(),
+              values: z.record(z.string(), cell).optional(),
+              images: z.record(z.string(), z.array(cellImage).max(20)).optional(),
+              height: z.number().min(0).max(2000).nullable().optional(),
+            }),
+          )
           .max(500)
           .optional(),
         delete_rows: z.array(z.string()).max(500).optional(),
@@ -159,6 +199,52 @@ export function registerTableTools(
           (p) => p.id === project || p.name.toLowerCase() === project.toLowerCase(),
         )?.id;
         if (!pid) return fail(`Проекта «${project}» нет. Список — list_projects.`);
+      }
+      // Картинки — заранее (скачать и положить в хранилище), правка таблицы — одной транзакцией.
+      const ready = new Map<number, Record<string, CellImage[]>>();
+      const imageErrors: string[] = [];
+      for (const [i, r] of (rows ?? []).entries()) {
+        if (!r.images) continue;
+        if (!images) return fail('Картинки в таблицу здесь класть нельзя.');
+        const out: Record<string, CellImage[]> = {};
+        for (const [col, list] of Object.entries(r.images)) {
+          out[col] = [];
+          for (const src of list) {
+            if (src.asset) {
+              const bytes = await images.assets.get(src.asset);
+              const info = bytes && imageInfo(bytes);
+              if (!info) {
+                imageErrors.push(`${src.asset.slice(0, 8)}…: такой картинки нет`);
+                continue;
+              }
+              out[col]!.push({ asset: src.asset, w: info.width, h: info.height, alt: src.alt });
+              continue;
+            }
+            const from = src.url
+              ? { url: src.url }
+              : src.data
+                ? { data: src.data }
+                : src.svg
+                  ? { svg: src.svg }
+                  : null;
+            if (!from) {
+              imageErrors.push('картинка без asset, url, data или svg');
+              continue;
+            }
+            const got = await ingestImage(from, images.assets, {
+              allowPrivateUrls: images.allowPrivateUrls,
+            });
+            if (typeof got === 'string') imageErrors.push(got);
+            else
+              out[col]!.push({
+                asset: got.id,
+                w: got.info.width,
+                h: got.info.height,
+                alt: src.alt,
+              });
+          }
+        }
+        ready.set(i, out);
       }
       const doc = await store.get(table);
       const unknown = new Set<string>();
@@ -223,14 +309,25 @@ export function registerTableTools(
           }
           return out;
         };
-        for (const r of rows ?? []) {
-          if (r.id) {
-            if (updateRow(doc, r.id, byName(r.values))) changed++;
-            else missing++;
+        for (const [i, r] of (rows ?? []).entries()) {
+          let id: string | null = r.id ?? null;
+          if (id) {
+            if (updateRow(doc, id, byName(r.values ?? {}))) changed++;
+            else {
+              missing++;
+              id = null;
+            }
           } else {
-            addRow(doc, byName(r.values));
+            id = addRow(doc, byName(r.values ?? {}));
             added++;
           }
+          if (!id) continue;
+          for (const [col, list] of Object.entries(ready.get(i) ?? {})) {
+            const c = findColumn(cols, col);
+            if (c) setCellImages(doc, id, c.id, list);
+            else unknown.add(col);
+          }
+          if (r.height !== undefined) setRowHeight(doc, id, r.height);
         }
         if (delete_rows?.length) removed = removeRows(doc, delete_rows);
       }, origin);
@@ -244,6 +341,7 @@ export function registerTableTools(
         missingCols.length ? `колонок для удаления нет: ${missingCols.join(', ')}` : '',
         missing ? `строк с такими id нет: ${missing}` : '',
         unknown.size ? `колонок нет: ${[...unknown].join(', ')} (добавь их в columns)` : '',
+        imageErrors.length ? `картинки не добавлены: ${imageErrors.join('; ')}` : '',
       ].filter(Boolean);
       return text(`${parts.join('; ')}. ${table}, ссылка kayospace://board/${table}`);
     },

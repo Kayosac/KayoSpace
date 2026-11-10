@@ -264,6 +264,78 @@ describe('документы (решение 0020)', () => {
     expect(json.rows[0]!.values).toEqual({ Стоимость: 10, Что: 'Клей', Итого: 30 });
   });
 
+  it('картинки в ячейках таблицы и высота строки (решение 0024)', async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="#e5484d"/></svg>';
+    const made = await call('write_table', {
+      table: 'tb_pics',
+      name: 'Плитка',
+      columns: [{ name: 'Что' }, { name: 'Цена', type: 'number' }],
+      rows: [
+        {
+          values: { Что: 'Керамика', Цена: 1200 },
+          images: { Что: [{ svg, alt: 'Образец' }], Цена: [{ svg }] },
+          height: 120,
+        },
+      ],
+    });
+    expect(made.isError).toBeFalsy();
+    const read = async () =>
+      JSON.parse(
+        (await call('read_table', { table: 'tb_pics', format: 'json' })).content[0]!.text,
+      ) as {
+        rows: {
+          id: string;
+          values: Record<string, unknown>;
+          images?: Record<string, { asset: string; w: number; h: number; alt?: string }[]>;
+          height?: number;
+        }[];
+      };
+    let t = await read();
+    const row = t.rows[0]!;
+    expect(row.values).toEqual({ Что: 'Керамика', Цена: 1200 });
+    expect(row.height).toBe(120);
+    expect(row.images!.Что).toEqual([
+      { asset: expect.stringMatching(/^[0-9a-f]{64}$/), w: 512, h: 256, alt: 'Образец' },
+    ]);
+    expect((await call('read_table', { table: 'tb_pics' })).content[0]!.text).toContain(
+      '| Керамика [картинок: 1] | 1\u00a0200 [картинок: 1] |',
+    );
+    // Посмотреть картинку из ячейки.
+    const asset = row.images!.Что![0]!.asset;
+    const img = await call('get_image', { board: 'tb_pics', id: asset });
+    expect(img.isError).toBeFalsy();
+    expect(img.content[1]!.text).toContain('Картинка 512×256');
+    expect(img.content[1]!.text).toContain('Подпись: Образец');
+    // Оставить первую, добавить ещё; у второй ячейки убрать; высота — по тексту.
+    await call('write_table', {
+      table: 'tb_pics',
+      rows: [
+        {
+          id: row.id,
+          images: { Что: [{ asset }, { svg, alt: 'Ещё' }], Цена: [] },
+          height: null,
+        },
+      ],
+    });
+    t = await read();
+    expect(t.rows[0]!.images!.Что!.map((i) => i.alt)).toEqual([undefined, 'Ещё']);
+    expect(t.rows[0]!.images!.Цена).toBeUndefined();
+    expect(t.rows[0]!.height).toBeUndefined();
+    const bad = await call('write_table', {
+      table: 'tb_pics',
+      rows: [{ id: row.id, images: { Что: [{ asset: 'f'.repeat(64) }] } }],
+    });
+    expect(bad.content[0]!.text).toContain('картинки не добавлены');
+    // Миниатюра и PDF рисуются с картинками.
+    const docs = (await (
+      await fetch(`http://127.0.0.1:${hub.port}/api/docs?ids=tb_pics`)
+    ).json()) as { docs: { thumb: string | null }[] };
+    expect(docs.docs[0]!.thumb).toMatch(/^[0-9a-f]{64}$/);
+    const pdf = await fetch(`http://127.0.0.1:${hub.port}/api/export/tb_pics.pdf`);
+    expect(pdf.status).toBe(200);
+  });
+
   it('артефакт из чата: на доску, обновить, забрать, миниатюра и исходник', async () => {
     expect(
       (await call('save_artifact', { artifact: 'ar_calc', kind: 'html', source: '<p>x</p>' }))
