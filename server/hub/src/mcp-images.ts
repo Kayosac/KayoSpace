@@ -16,7 +16,7 @@ import {
   type Layout,
 } from '@kayospace/board';
 import type { Actor, FrameElement } from '@kayospace/model';
-import { isTableId, readTable } from '@kayospace/page';
+import { addCellImages, addRow, findColumn, isTableId, readTable } from '@kayospace/page';
 import { sha256 } from './assets';
 import {
   IMAGE_TYPES,
@@ -55,8 +55,27 @@ const boardId = z
   .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
   .refine(
     (id) => !id.startsWith('pg_') && !id.startsWith('tb_') && !id.startsWith('ar_'),
-    'Это документ, таблица или артефакт, а не доска: read_page, read_table, read_artifact',
+    'Это документ, таблица или артефакт, а не доска. Картинка в ячейку таблицы — add_image_file или ' +
+      'write_table (rows[].images); документ — read_page, артефакт — read_artifact',
   );
+
+/** Доска или таблица (картинка — в ячейку таблицы, решение 0024). */
+const boardOrTable = z
+  .string()
+  .regex(/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/)
+  .refine(
+    (id) => !id.startsWith('pg_') && !id.startsWith('ar_'),
+    'Это документ или артефакт, а не доска: write_page, save_artifact',
+  )
+  .describe('id доски — или id таблицы «tb_…», чтобы положить картинку в ячейку (row и column)');
+
+const cellTarget = {
+  row: z
+    .string()
+    .optional()
+    .describe('для таблицы: id строки из read_table (json); нет — новая строка'),
+  column: z.string().optional().describe('для таблицы: название (или id) колонки'),
+};
 
 interface Loaded {
   id: string;
@@ -220,15 +239,45 @@ export function registerImageTools(
     },
   );
 
+  /** Картинку — в ячейку таблицы: к тем, что там уже есть (нет строки — новая строка). */
+  const toCell = async (
+    table: string,
+    row: string | undefined,
+    column: string | undefined,
+    img: { id: string; info: ImageInfo },
+    alt: string | undefined,
+  ) => {
+    if (!column) return fail('Для таблицы нужна column — название колонки (и row — id строки).');
+    if (!(await store.has(table))) return fail(`Таблицы «${table}» нет. Список — list_boards.`);
+    const doc = await store.get(table);
+    const col = findColumn(readTable(doc).columns, column);
+    if (!col) return fail(`Колонки «${column}» нет. Колонки — read_table.`);
+    if (row && !readTable(doc).rows.some((r) => r.id === row))
+      return fail(`Строки ${row} нет. id строк — read_table (json).`);
+    let rowId = row;
+    doc.transact(() => {
+      rowId ??= addRow(doc, {});
+      addCellImages(doc, rowId, col.id, [
+        { asset: img.id, w: img.info.width, h: img.info.height, ...(alt ? { alt } : {}) },
+      ]);
+    }, origin);
+    return text(
+      `Картинка ${img.info.width}×${img.info.height} — в ячейке «${col.name}»` +
+        `${row ? '' : ' новой строки'} (строка ${rowId}). Таблица: kayospace://board/${table}`,
+    );
+  };
+
   server.registerTool(
     'add_image_file',
     {
       description:
-        'Положить на доску картинку-файл из чата: ту, что человек прислал, или ту, что ты ' +
-        'нарисовал (сгенерировал). Файл передаётся в поле file — ChatGPT подставляет его сам. ' +
-        'Картинка по ссылке из интернета — add_images с url.',
+        'Положить картинку-файл из чата: ту, что человек прислал, или ту, что ты ' +
+        'нарисовал (сгенерировал), — на доску или в ячейку таблицы (board — id таблицы, column, row). ' +
+        'Файл передаётся в поле file — ChatGPT подставляет его сам. ' +
+        'Картинка по ссылке из интернета — add_images с url (в таблицу — write_table, rows[].images).',
       inputSchema: z.object({
-        board: boardId,
+        board: boardOrTable,
+        ...cellTarget,
         file: z
           .object({
             download_url: z.string(),
@@ -251,10 +300,11 @@ export function registerImageTools(
       // ChatGPT (Apps SDK): это поле принимает файл из чата — загруженный или сгенерированный.
       _meta: { 'openai/fileParams': ['file'] },
     },
-    async ({ board, file, alt, width, at, frame }) => {
+    async ({ board, row, column, file, alt, width, at, frame }) => {
       // download_url — временная ссылка-ключ: не пишем её ни в ответ, ни в журнал.
       const r = await load({ url: file.download_url });
       if (typeof r === 'string') return fail(r);
+      if (isTableId(board)) return toCell(board, row, column, r, alt);
       return place(board, [{ ...r, alt: alt ?? file.file_name, width }], { at, frame });
     },
   );
@@ -267,9 +317,11 @@ export function registerImageTools(
         description:
           'Нарисовать картинку генератором изображений (OpenAI) и положить на доску — для «нарисуй …», ' +
           '«сгенерируй …». prompt — подробное описание по-английски: что изображено, стиль, цвета, ' +
-          'надписи (в кавычках, на нужном языке). Не для фото из интернета — их ищи и клади по url.',
+          'надписи (в кавычках, на нужном языке). Не для фото из интернета — их ищи и клади по url. ' +
+          'В ячейку таблицы: board — id таблицы, column (и row).',
         inputSchema: z.object({
-          board: boardId,
+          board: boardOrTable,
+          ...cellTarget,
           prompt: z.string().min(3).max(4000),
           alt: z.string().max(500).optional().describe('подпись по-русски: что на картинке'),
           shape: z
@@ -286,7 +338,13 @@ export function registerImageTools(
           frame: z.string().optional().describe('id фрейма, в который положить'),
         }),
       },
-      async ({ board, prompt, alt, shape, width, at, frame }) => {
+      async ({ board, row, column, prompt, alt, shape, width, at, frame }) => {
+        // Таблицу и колонку проверяем до генерации — не тратить лимит впустую.
+        if (isTableId(board)) {
+          if (!column)
+            return fail('Для таблицы нужна column — название колонки (и row — id строки).');
+          if (!(await store.has(board))) return fail(`Таблицы «${board}» нет.`);
+        }
         let bytes: Buffer;
         try {
           bytes = await openai.generateImage(prompt, shape ?? 'square');
@@ -296,6 +354,7 @@ export function registerImageTools(
         }
         const r = await load({ data: bytes.toString('base64') });
         if (typeof r === 'string') return fail(`OpenAI вернул не то: ${r}`);
+        if (isTableId(board)) return toCell(board, row, column, r, alt ?? prompt.slice(0, 200));
         return place(board, [{ ...r, alt: alt ?? prompt.slice(0, 200), width }], { at, frame });
       },
     );

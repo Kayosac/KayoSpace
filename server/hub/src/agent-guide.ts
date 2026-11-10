@@ -31,6 +31,7 @@ export const AGENT_GUIDE = `Kayospace — личный бесконечный х
   строки: с id — изменить, без id — добавить; delete_rows;
   формула — [Колонка], + − * / ^, ЕСЛИ, ОКРУГЛ, СУММ([Колонка]), ДНИ, СЕГОДНЯ — значения считаются сами;
   картинки — в любой ячейке: rows[].images (по ссылке, файлом, svg), вписываются в высоту строки rows[].height;
+  картинка из чата или сгенерированная — в ячейку: add_image_file / generate_image с board = id таблицы, column и row;
   посмотреть картинку из ячейки — get_image с board = id таблицы).
 - Артефакты (kind: "artifact", id «ar_…») — то, что ты сделал в чате артефактом: html (живая страница), svg, mermaid,
   code. save_artifact — сохранить или обновить (тот же id — новая версия на том же месте), read_artifact — забрать
@@ -38,7 +39,7 @@ export const AGENT_GUIDE = `Kayospace — личный бесконечный х
 - Документ, таблицу или артефакт можно положить на доску карточкой: place_doc (save_artifact — сразу с board);
   человек открывает её касанием. read_board с region сразу показывает содержимое карточек в области.
 - Из чата: «на доску» — сохрани результат (текст — write_page, таблица — write_table, артефакт — save_artifact,
-  картинка — add_image_file) и положи карточку на доску, о которой речь (не сказано — «Входящие», id inbox);
+  картинка — add_image_file, в ячейку таблицы — с board = id таблицы) и положи карточку на доску, о которой речь (не сказано — «Входящие», id inbox);
   «обнови на доске» — то же место, тот же id; «возьми с доски» — read_page / read_table / read_artifact и работай дальше.
 - Фигуры: add_shape — rect, roundRect, ellipse, triangle, diamond, hexagon, star, blockArrow, bubble; fill — заливка.
 - Удалённое лежит в корзине 7 дней: list_trash и restore_elements; доски — list_deleted_boards и restore_board.
