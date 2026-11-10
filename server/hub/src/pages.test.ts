@@ -194,6 +194,76 @@ describe('документы (решение 0020)', () => {
     );
   });
 
+  it('точечная правка документа и подчёркнутое', async () => {
+    await call('write_page', {
+      page: 'pg_edit',
+      name: 'Заметки',
+      markdown: '## План\n\nКупить **плитку** и клей.\n\n## Итог\n\nКупить потом.',
+    });
+    const r = await call('write_page', {
+      page: 'pg_edit',
+      mode: 'edit',
+      find: 'Купить **плитку**',
+      markdown: 'Купить <u>белую</u> **плитку**',
+    });
+    expect(r.content[0]!.text).toContain('Кусок заменён');
+    const md = (await call('read_page', { page: 'pg_edit' })).content[0]!.text;
+    expect(md).toContain('Купить <u>белую</u> **плитку** и клей.');
+    expect(md).toContain('## Итог\n\nКупить потом.');
+    // Неоднозначный и отсутствующий кусок — ошибка с подсказкой, документ не меняется.
+    const twice = await call('write_page', {
+      page: 'pg_edit',
+      mode: 'edit',
+      find: 'Купить',
+      markdown: 'x',
+    });
+    expect(twice.isError).toBe(true);
+    expect(twice.content[0]!.text).toContain('несколько раз');
+    const none = await call('write_page', {
+      page: 'pg_edit',
+      mode: 'edit',
+      find: 'нет такого',
+      markdown: 'x',
+    });
+    expect(none.isError).toBe(true);
+    expect((await call('read_page', { page: 'pg_edit' })).content[0]!.text).toBe(md);
+    // Удалить кусок — пустой markdown.
+    await call('write_page', { page: 'pg_edit', mode: 'edit', find: ' и клей', markdown: '' });
+    expect((await call('read_page', { page: 'pg_edit' })).content[0]!.text).toContain(
+      'Купить <u>белую</u> **плитку**.',
+    );
+  });
+
+  it('колонки таблицы: переименовать, переставить, удалить', async () => {
+    await call('write_table', {
+      table: 'tb_cols',
+      name: 'Покупки',
+      columns: [
+        { name: 'Что' },
+        { name: 'Цена', type: 'number' },
+        { name: 'Где' },
+        { name: 'Итого', formula: '[Цена] * 2' },
+      ],
+      rows: [{ values: { Что: 'Клей', Цена: 10, Где: 'Леруа' } }],
+    });
+    const r = await call('write_table', {
+      table: 'tb_cols',
+      columns: [
+        { name: 'Цена', rename: 'Стоимость', position: 0 },
+        { name: 'Итого', formula: '[Стоимость] * 3' },
+      ],
+      delete_columns: ['Где', 'Нет такой'],
+    });
+    expect(r.content[0]!.text).toContain('колонок удалено: 1');
+    expect(r.content[0]!.text).toContain('колонок для удаления нет: Нет такой');
+    const json = JSON.parse(
+      (await call('read_table', { table: 'tb_cols', format: 'json' })).content[0]!.text,
+    ) as { columns: { name: string; type: string }[]; rows: { values: Record<string, unknown> }[] };
+    expect(json.columns.map((c) => c.name)).toEqual(['Стоимость', 'Что', 'Итого']);
+    expect(json.columns[2]!.type).toBe('formula');
+    expect(json.rows[0]!.values).toEqual({ Стоимость: 10, Что: 'Клей', Итого: 30 });
+  });
+
   it('артефакт из чата: на доску, обновить, забрать, миниатюра и исходник', async () => {
     expect(
       (await call('save_artifact', { artifact: 'ar_calc', kind: 'html', source: '<p>x</p>' }))

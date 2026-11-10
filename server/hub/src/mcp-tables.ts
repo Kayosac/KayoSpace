@@ -22,7 +22,9 @@ import {
   findColumn,
   hasTable,
   initTable,
+  moveColumn,
   readTable,
+  removeColumn,
   removeRows,
   tableToMarkdown,
   updateColumn,
@@ -105,6 +107,8 @@ export function registerTableTools(
         'строки (с id — изменить, без id — добавить; значения по названию колонки), удалить строки. ' +
         `Типы колонок: ${TYPES_HELP}. Дата — YYYY-MM-DD, флажок — true/false, выбор — один из options, ` +
         'формула — в formula (значения считаются сами, писать их в строки не нужно). ' +
+        'У существующей колонки: rename — новое название, position — место слева (0 — первая); ' +
+        'delete_columns — удалить колонки вместе со значениями. ' +
         'Новая таблица: id «tb_…» и name; без columns получит «Название» и «Готово».',
       inputSchema: z.object({
         table: tableId,
@@ -113,7 +117,11 @@ export function registerTableTools(
         columns: z
           .array(
             z.object({
-              name: z.string().min(1).max(80),
+              name: z
+                .string()
+                .min(1)
+                .max(80)
+                .describe('название (или id) колонки; новой — её название'),
               type: z.enum(types).optional(),
               options: z.array(z.string().max(60)).max(50).optional(),
               formula: z
@@ -123,6 +131,8 @@ export function registerTableTools(
                 .describe(
                   'для type "formula": [Колонка], + − * / ^, ЕСЛИ/IF, ОКРУГЛ/ROUND, СУММ/SUM([Колонка]), ДНИ/DAYS, СЕГОДНЯ/TODAY',
                 ),
+              rename: z.string().min(1).max(80).optional().describe('новое название колонки'),
+              position: z.number().int().min(0).optional().describe('место колонки слева, с 0'),
             }),
           )
           .max(40)
@@ -132,9 +142,14 @@ export function registerTableTools(
           .max(500)
           .optional(),
         delete_rows: z.array(z.string()).max(500).optional(),
+        delete_columns: z
+          .array(z.string())
+          .max(40)
+          .optional()
+          .describe('названия (или id) колонок, которые удалить со значениями'),
       }),
     },
-    async ({ table, name, project, columns, rows, delete_rows }) => {
+    async ({ table, name, project, columns, rows, delete_rows, delete_columns }) => {
       const existed = await store.has(table);
       if (!existed && !name) return fail('Новой таблице нужно название (name).');
       let pid: string | undefined;
@@ -151,6 +166,8 @@ export function registerTableTools(
       let changed = 0;
       let missing = 0;
       let removed = 0;
+      let removedCols = 0;
+      const missingCols: string[] = [];
       doc.transact(() => {
         if (name) setBoardName(doc, name);
         if (!hasTable(doc)) {
@@ -158,8 +175,8 @@ export function registerTableTools(
             initTable(
               doc,
               columns.map((c) => ({
-                name: c.name,
-                type: c.type ?? 'text',
+                name: c.rename ?? c.name,
+                type: c.type ?? (c.formula ? 'formula' : 'text'),
                 options: c.options,
                 formula: c.formula,
               })),
@@ -168,20 +185,33 @@ export function registerTableTools(
         } else {
           for (const c of columns ?? []) {
             const have = findColumn(readTable(doc).columns, c.name);
-            if (!have)
-              addColumn(doc, {
-                name: c.name,
-                type: c.type ?? (c.formula ? 'formula' : 'text'),
-                options: c.options,
-                formula: c.formula,
-              });
-            else if (c.type || c.options || c.formula)
+            const id = have
+              ? have.id
+              : addColumn(doc, {
+                  name: c.rename ?? c.name,
+                  type: c.type ?? (c.formula ? 'formula' : 'text'),
+                  options: c.options,
+                  formula: c.formula,
+                });
+            if (have && (c.type || c.options || c.formula || c.rename))
               updateColumn(doc, have.id, {
                 ...(c.type ? { type: c.type } : {}),
                 ...(c.options ? { options: c.options } : {}),
                 ...(c.formula ? { formula: c.formula } : {}),
+                ...(c.rename ? { name: c.rename } : {}),
               });
+            if (c.position !== undefined) {
+              const at = readTable(doc).columns.findIndex((x) => x.id === id);
+              if (at >= 0) moveColumn(doc, id, c.position - at);
+            }
           }
+        }
+        for (const ref of delete_columns ?? []) {
+          const col = findColumn(readTable(doc).columns, ref);
+          if (col) {
+            removeColumn(doc, col.id);
+            removedCols++;
+          } else missingCols.push(ref);
         }
         const cols = readTable(doc).columns;
         const byName = (values: Record<string, unknown>): Record<string, unknown> => {
@@ -210,6 +240,8 @@ export function registerTableTools(
         added ? `строк добавлено: ${added}` : '',
         changed ? `изменено: ${changed}` : '',
         removed ? `удалено: ${removed}` : '',
+        removedCols ? `колонок удалено: ${removedCols}` : '',
+        missingCols.length ? `колонок для удаления нет: ${missingCols.join(', ')}` : '',
         missing ? `строк с такими id нет: ${missing}` : '',
         unknown.size ? `колонок нет: ${[...unknown].join(', ')} (добавь их в columns)` : '',
       ].filter(Boolean);

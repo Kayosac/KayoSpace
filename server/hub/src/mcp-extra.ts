@@ -322,7 +322,8 @@ export function registerExtraTools(
   server.registerTool(
     'move_board',
     {
-      description: 'Положить доску в проект (или убрать из проекта — project: null).',
+      description:
+        'Положить доску, документ, таблицу или артефакт в проект (или убрать из проекта — project: null).',
       inputSchema: z.object({ board: boardId, project: projectRef }),
     },
     async ({ board, project }) => {
@@ -339,7 +340,8 @@ export function registerExtraTools(
     'delete_board',
     {
       description:
-        'Удалить доску — только по явной просьбе человека. Доска пропадёт из списков на всех ' +
+        'Удалить доску, документ, таблицу или артефакт — только по явной просьбе человека. ' +
+        'Пропадёт из списков на всех ' +
         'устройствах; 7 дней её можно вернуть (restore_board), потом она стирается насовсем.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({ board: boardId }),
@@ -371,7 +373,8 @@ export function registerExtraTools(
   server.registerTool(
     'restore_board',
     {
-      description: 'Вернуть удалённую доску (id из list_deleted_boards).',
+      description:
+        'Вернуть удалённую доску, документ, таблицу или артефакт (id из list_deleted_boards).',
       inputSchema: z.object({ board: boardId }),
     },
     async ({ board }) =>
